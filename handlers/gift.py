@@ -20,16 +20,20 @@ async def process_get_gift(callback: CallbackQuery):
     """Обработчик получения подарка"""
     tg_id = callback.from_user.id
 
+    # Проверка anti-spam: не более одной попытки в 2 секунды
+    can_request, error_msg = await db.can_request_gift(tg_id)
+    if not can_request:
+        await callback.answer(error_msg, show_alert=True)
+        return
+
+    # Обновляем время последней попытки
+    await db.update_last_gift_attempt(tg_id)
+
     if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)
         return
 
     try:
-        # Проверяем получал ли пользователь уже подарок
-        if await db.is_gift_received(tg_id):
-            await callback.answer("Ты уже получал подарок", show_alert=True)
-            return
-
         # Проверяем подписку на канал новостей
         try:
             member = await callback.bot.get_chat_member(f"@{NEWS_CHANNEL_USERNAME}", tg_id)
@@ -48,6 +52,12 @@ async def process_get_gift(callback: CallbackQuery):
                 f"Ты не подписан на новостной канал @{NEWS_CHANNEL_USERNAME}",
                 show_alert=True
             )
+            return
+
+        # Атомарно проверяем и отмечаем подарок
+        gift_marked = await db.mark_gift_received_atomic(tg_id)
+        if not gift_marked:
+            await callback.answer("Ты уже получал подарок", show_alert=True)
             return
 
         # Выдаём подарок (3 дня подписки)
@@ -73,7 +83,6 @@ async def process_get_gift(callback: CallbackQuery):
         # Обновляем данные пользователя в БД
         new_until = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
-        await db.mark_gift_received(tg_id)
 
         # Отправляем сообщение пользователю
         text = (
@@ -89,6 +98,6 @@ async def process_get_gift(callback: CallbackQuery):
     except Exception as e:
         logging.error(f"Get gift error: {e}")
         await callback.answer("Ошибка при получении подарка", show_alert=True)
-    
+
     finally:
         await db.release_user_lock(tg_id)

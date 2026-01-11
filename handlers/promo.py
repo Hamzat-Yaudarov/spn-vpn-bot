@@ -31,16 +31,37 @@ async def process_promo_input(message: Message, state: FSMContext):
     code = message.text.strip().upper()
     tg_id = message.from_user.id
 
+    # Проверка anti-spam: не более одной попытки в 1.5 секунды
+    can_request, error_msg = await db.can_request_promo(tg_id)
+    if not can_request:
+        await message.answer(error_msg)
+        await state.clear()
+        await show_main_menu(message)
+        return
+
+    # Обновляем время последней попытки
+    await db.update_last_promo_attempt(tg_id)
+
     if not await db.acquire_user_lock(tg_id):
         await message.answer("Подожди пару секунд ⏳")
+        await state.clear()
+        await show_main_menu(message)
         return
 
     try:
-        # Проверяем промокод в БД
-        promo = await db.get_promo_code(code)
+        # Атомарно проверяем и увеличиваем счётчик использования промокода
+        success, error_msg = await db.increment_promo_usage_atomic(code)
 
-        if not promo or not promo[3] or promo[2] >= promo[1]:  # active и used_count < max_uses
-            await message.answer("❌ Неверный или исчерпанный промокод")
+        if not success:
+            await message.answer(f"❌ {error_msg}")
+            await state.clear()
+            await show_main_menu(message)
+            return
+
+        # Получаем информацию о промокоде (дни)
+        promo = await db.get_promo_code(code)
+        if not promo:
+            await message.answer("❌ Ошибка при получении информации о промокоде")
             await state.clear()
             await show_main_menu(message)
             return
@@ -62,7 +83,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
             # Добавляем в сквад
             await remnawave_add_to_squad(session, uuid)
-            
+
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
 
@@ -71,9 +92,6 @@ async def process_promo_input(message: Message, state: FSMContext):
                 await state.clear()
                 await show_main_menu(message)
                 return
-
-        # Обновляем промокод (увеличиваем счётчик использования)
-        await db.increment_promo_usage(code)
 
         # Обновляем подписку пользователя в БД
         new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
@@ -85,13 +103,13 @@ async def process_promo_input(message: Message, state: FSMContext):
             f"Добавлено {days} дней подписки\n\n"
             f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
         )
-        
+
         logging.info(f"Promo code {code} applied by user {tg_id}")
 
     except Exception as e:
         logging.error(f"Promo error: {e}")
         await message.answer("❌ Ошибка при применении промокода")
-    
+
     finally:
         await db.release_user_lock(tg_id)
 

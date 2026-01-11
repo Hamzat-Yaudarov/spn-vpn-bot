@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS users (
     referral_count INTEGER DEFAULT 0,
     active_referrals INTEGER DEFAULT 0,
     first_payment BOOLEAN DEFAULT FALSE,
+    last_gift_attempt TIMESTAMP,
+    last_promo_attempt TIMESTAMP,
+    last_payment_check TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

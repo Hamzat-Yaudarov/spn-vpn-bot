@@ -311,6 +311,59 @@ async def mark_gift_received(tg_id: int):
     )
 
 
+async def mark_gift_received_atomic(tg_id: int) -> bool:
+    """
+    Атомарно проверить и отметить что пользователь получил подарок.
+    Возвращает True если удалось отметить (подарок не был получен), False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Атомарно получить статус и обновить
+            result = await conn.fetchval(
+                """
+                UPDATE users
+                SET gift_received = TRUE
+                WHERE tg_id = $1 AND gift_received = FALSE
+                RETURNING 1
+                """,
+                tg_id
+            )
+            return result is not None
+
+
+async def can_request_gift(tg_id: int) -> tuple[bool, str]:
+    """
+    Проверить может ли пользователь получить подарок.
+    Возвращает (True/False, сообщение об ошибке если есть)
+    """
+    user = await get_user(tg_id)
+
+    if not user:
+        return False, "Пользователь не найден"
+
+    if user['gift_received']:
+        return False, "Ты уже получал подарок"
+
+    # Проверяем anti-spam: не более одной попытки в 2 секунды
+    if user['last_gift_attempt']:
+        from datetime import datetime, timezone, timedelta
+        time_since_attempt = datetime.now(timezone.utc) - user['last_gift_attempt'].replace(tzinfo=timezone.utc)
+        if time_since_attempt < timedelta(seconds=2):
+            return False, "Подожди пару секунд ⏳"
+
+    return True, ""
+
+
+async def update_last_gift_attempt(tg_id: int):
+    """Обновить время последней попытки получить подарок"""
+    from datetime import datetime
+    await db_execute(
+        "UPDATE users SET last_gift_attempt = $1 WHERE tg_id = $2",
+        (datetime.utcnow().isoformat(), tg_id)
+    )
+
+
 # ────────────────────────────────────────────────
 #              PROMO CODE MANAGEMENT
 # ────────────────────────────────────────────────
@@ -338,4 +391,94 @@ async def increment_promo_usage(code: str):
     await db_execute(
         "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1",
         (code,)
+    )
+
+
+async def increment_promo_usage_atomic(code: str) -> tuple[bool, str]:
+    """
+    Атомарно проверить и увеличить счётчик использования промокода.
+    Возвращает (True, "") если удалось, (False, ошибка) иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Проверяем валидность промокода
+            promo = await conn.fetchrow(
+                "SELECT days, max_uses, used_count, active FROM promo_codes WHERE code = $1 FOR UPDATE",
+                code
+            )
+
+            if not promo:
+                return False, "Неверный промокод"
+
+            if not promo['active']:
+                return False, "Промокод неактивен"
+
+            if promo['used_count'] >= promo['max_uses']:
+                return False, "Промокод исчерпан"
+
+            # Увеличиваем счётчик использования
+            await conn.execute(
+                "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1",
+                code
+            )
+
+            return True, ""
+
+
+async def can_request_promo(tg_id: int) -> tuple[bool, str]:
+    """
+    Проверить может ли пользователь активировать промокод сейчас.
+    Возвращает (True/False, сообщение об ошибке если есть)
+    """
+    user = await get_user(tg_id)
+
+    if not user:
+        return False, "Пользователь не найден"
+
+    # Проверяем anti-spam: не более одной попытки в 1.5 секунды
+    if user['last_promo_attempt']:
+        from datetime import datetime, timezone, timedelta
+        time_since_attempt = datetime.now(timezone.utc) - user['last_promo_attempt'].replace(tzinfo=timezone.utc)
+        if time_since_attempt < timedelta(seconds=1.5):
+            return False, "Подожди пару секунд ⏳"
+
+    return True, ""
+
+
+async def update_last_promo_attempt(tg_id: int):
+    """Обновить время последней попытки активировать промокод"""
+    from datetime import datetime
+    await db_execute(
+        "UPDATE users SET last_promo_attempt = $1 WHERE tg_id = $2",
+        (datetime.utcnow().isoformat(), tg_id)
+    )
+
+
+async def can_check_payment(tg_id: int) -> tuple[bool, str]:
+    """
+    Проверить может ли пользователь проверить платёж сейчас.
+    Возвращает (True/False, сообщение об ошибке если есть)
+    """
+    user = await get_user(tg_id)
+
+    if not user:
+        return False, "Пользователь не найден"
+
+    # Проверяем anti-spam: не более одной проверки в 1 секунду
+    if user['last_payment_check']:
+        from datetime import datetime, timezone, timedelta
+        time_since_check = datetime.now(timezone.utc) - user['last_payment_check'].replace(tzinfo=timezone.utc)
+        if time_since_check < timedelta(seconds=1):
+            return False, "Подожди пару секунд ⏳"
+
+    return True, ""
+
+
+async def update_last_payment_check(tg_id: int):
+    """Обновить время последней проверки платежа"""
+    from datetime import datetime
+    await db_execute(
+        "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
+        (datetime.utcnow().isoformat(), tg_id)
     )

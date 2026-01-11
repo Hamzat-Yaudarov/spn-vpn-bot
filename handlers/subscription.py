@@ -135,6 +135,16 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 async def process_check_payment(callback: CallbackQuery):
     """Проверить статус платежа"""
     tg_id = callback.from_user.id
+
+    # Проверка anti-spam: не более одной проверки в 1 секунду
+    can_check, error_msg = await db.can_check_payment(tg_id)
+    if not can_check:
+        await callback.answer(error_msg, show_alert=True)
+        return
+
+    # Обновляем время последней проверки
+    await db.update_last_payment_check(tg_id)
+
     pending = await db.get_last_pending_payment(tg_id)
 
     if not pending:
@@ -154,7 +164,7 @@ async def process_check_payment(callback: CallbackQuery):
         if invoice and invoice.get("status") == "paid":
             # Обрабатываем оплату
             success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
-            
+
             if success:
                 await callback.message.edit_text(
                     "✅ <b>Оплата подтверждена!</b>\n\n"
@@ -169,7 +179,7 @@ async def process_check_payment(callback: CallbackQuery):
     except Exception as e:
         logging.error(f"Check payment error: {e}")
         await callback.answer("Ошибка при проверке платежа", show_alert=True)
-    
+
     finally:
         await db.release_user_lock(tg_id)
 
