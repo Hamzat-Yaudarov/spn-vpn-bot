@@ -1,0 +1,22 @@
+[Unit]
+Description=SPN VPN Bot - Telegram Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/home/bot/spn-vpn-bot
+Environment="PATH=/home/bot/spn-vpn-bot/venv/bin"
+ExecStart=/home/bot/spn-vpn-bot/venv/bin/python3 /home/bot/spn-vpn-bot/main.py
+
+# Автоматически перезапускать при падении
+Restart=always
+RestartSec=10
+
+# Логирование
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spn-vpn-bot
+
+[Install]
+WantedBy=multi-user.target
