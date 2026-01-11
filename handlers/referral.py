@@ -10,13 +10,13 @@ router = Router()
 async def process_referral(callback: CallbackQuery):
     """Показать информацию о реферальной программе"""
     tg_id = callback.from_user.id
-    
+
     # Получаем реферальную ссылку
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{tg_id}"
 
     # Получаем статистику рефералов
-    stats = db.get_referral_stats(tg_id)
+    stats = await db.get_referral_stats(tg_id)
     ref_count = stats[0] if stats else 0
     active_count = stats[1] if stats else 0
 

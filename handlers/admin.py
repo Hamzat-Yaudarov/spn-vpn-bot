@@ -54,7 +54,7 @@ async def admin_new_code(message: Message):
 
     try:
         # Создаём промокод
-        db.create_promo_code(code.upper(), days, limit)
+        await db.create_promo_code(code.upper(), days, limit)
 
         await message.answer(
             f"✅ <b>Промокод создан успешно</b>\n\n"
@@ -103,14 +103,14 @@ async def admin_give_sub(message: Message):
         logger.error(f"Admin {admin_id} /give_sub parsing error: {e}")
         return
 
-    if not db.acquire_user_lock(tg_id):
+    if not await db.acquire_user_lock(tg_id):
         await message.answer(f"❌ Пользователь {tg_id} занят, попробуй позже")
         return
 
     try:
         # Убедимся что пользователь существует в БД
-        if not db.user_exists(tg_id):
-            db.create_user(tg_id, f"user_{tg_id}")
+        if not await db.user_exists(tg_id):
+            await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database")
 
         connector = aiohttp.TCPConnector(ssl=False)
@@ -132,7 +132,7 @@ async def admin_give_sub(message: Message):
 
             # Обновляем подписку в БД
             new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-            db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         await message.answer(
             f"✅ <b>Подписка выдана успешно</b>\n\n"
@@ -160,7 +160,7 @@ async def admin_give_sub(message: Message):
         await message.answer(f"❌ Ошибка при выдаче подписки: {str(e)}")
 
     finally:
-        db.release_user_lock(tg_id)
+        await db.release_user_lock(tg_id)
 
 
 @router.message(Command("stats"))

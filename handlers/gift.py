@@ -20,13 +20,13 @@ async def process_get_gift(callback: CallbackQuery):
     """Обработчик получения подарка"""
     tg_id = callback.from_user.id
 
-    if not db.acquire_user_lock(tg_id):
+    if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)
         return
 
     try:
         # Проверяем получал ли пользователь уже подарок
-        if db.is_gift_received(tg_id):
+        if await db.is_gift_received(tg_id):
             await callback.answer("Ты уже получал подарок", show_alert=True)
             return
 
@@ -72,8 +72,8 @@ async def process_get_gift(callback: CallbackQuery):
 
         # Обновляем данные пользователя в БД
         new_until = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
-        db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
-        db.mark_gift_received(tg_id)
+        await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+        await db.mark_gift_received(tg_id)
 
         # Отправляем сообщение пользователю
         text = (
@@ -91,4 +91,4 @@ async def process_get_gift(callback: CallbackQuery):
         await callback.answer("Ошибка при получении подарка", show_alert=True)
     
     finally:
-        db.release_user_lock(tg_id)
+        await db.release_user_lock(tg_id)

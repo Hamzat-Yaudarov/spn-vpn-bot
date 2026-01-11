@@ -1,96 +1,77 @@
-import sqlite3
+import asyncpg
 import logging
-from config import DB_FILE
+from config import DATABASE_URL
 
 
-def init_db():
-    """Инициализация базы данных с необходимыми таблицами"""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+# Глобальный пул подключений
+_pool = None
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            tg_id INTEGER PRIMARY KEY,
-            username TEXT,
-            accepted_terms BOOLEAN DEFAULT FALSE,
-            remnawave_uuid TEXT,
-            remnawave_username TEXT,
-            subscription_until TEXT,
-            squad_uuid TEXT,
-            referrer_id INTEGER,
-            gift_received BOOLEAN DEFAULT FALSE,
-            referral_count INTEGER DEFAULT 0,
-            active_referrals INTEGER DEFAULT 0,
-            first_payment BOOLEAN DEFAULT FALSE,
-            action_lock INTEGER DEFAULT 0
+
+async def init_db():
+    """Инициализировать пул подключений и создать таблицы если нужно"""
+    global _pool
+    
+    try:
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=5,
+            max_size=20,
+            command_timeout=60
         )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tg_id INTEGER,
-            tariff_code TEXT,
-            amount REAL,
-            status TEXT DEFAULT 'pending',
-            created_at TEXT,
-            provider TEXT,
-            invoice_id TEXT,
-            payload TEXT
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS promo_codes (
-            code TEXT PRIMARY KEY,
-            days INTEGER,
-            max_uses INTEGER,
-            used_count INTEGER DEFAULT 0,
-            active BOOLEAN DEFAULT TRUE
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
-    logging.info("Database initialized successfully")
+        logging.info("Database pool initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize database pool: {e}")
+        raise
 
 
-def db_execute(query, params=(), fetchone=False, fetchall=False, commit=False):
+async def close_db():
+    """Закрыть пул подключений"""
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+        logging.info("Database pool closed")
+
+
+async def get_pool():
+    """Получить пул подключений"""
+    global _pool
+    if _pool is None:
+        raise RuntimeError("Database pool not initialized. Call init_db() first.")
+    return _pool
+
+
+async def db_execute(query, params=(), fetch_one=False, fetch_all=False):
     """
-    Выполнить SQL запрос к базе данных
+    Выполнить SQL запрос
     
     Args:
         query: SQL запрос
-        params: Параметры для запроса (кортеж)
-        fetchone: Получить одну строку результата
-        fetchall: Получить все строки результата
-        commit: Коммитить изменения в БД
+        params: Параметры для запроса (кортеж или список)
+        fetch_one: Получить одну строку результата
+        fetch_all: Получить все строки результата
         
     Returns:
         Результат запроса или None
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    
-    if fetchone:
-        result = cursor.fetchone()
-    elif fetchall:
-        result = cursor.fetchall()
-    else:
-        result = None
-    
-    if commit:
-        conn.commit()
-    
-    conn.close()
-    return result
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            if fetch_one:
+                return await conn.fetchrow(query, *params)
+            elif fetch_all:
+                return await conn.fetch(query, *params)
+            else:
+                await conn.execute(query, *params)
+                return None
+        except Exception as e:
+            logging.error(f"Database error: {e}")
+            raise
 
 
-def acquire_user_lock(tg_id: int) -> bool:
+async def acquire_user_lock(tg_id: int) -> bool:
     """
-    Атомарно блокирует пользователя.
-    Возвращает True если блок получен, False если уже занят.
+    Получить блокировку пользователя используя PostgreSQL advisory lock
     
     Args:
         tg_id: ID пользователя Telegram
@@ -98,223 +79,263 @@ def acquire_user_lock(tg_id: int) -> bool:
     Returns:
         True если удалось получить блокировку, False иначе
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        UPDATE users
-        SET action_lock = 1
-        WHERE tg_id = ? AND action_lock = 0
-    """, (tg_id,))
-
-    changed = cursor.rowcount
-    conn.commit()
-    conn.close()
-
-    return changed == 1
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Используем advisory lock с ID пользователя
+            result = await conn.fetchval(
+                "SELECT pg_try_advisory_lock($1);",
+                tg_id
+            )
+            return result is True
+        except Exception as e:
+            logging.error(f"Lock error: {e}")
+            return False
 
 
-def release_user_lock(tg_id: int):
+async def release_user_lock(tg_id: int):
     """
-    Освобождает блокировку пользователя
+    Освободить блокировку пользователя
     
     Args:
         tg_id: ID пользователя Telegram
     """
-    db_execute(
-        "UPDATE users SET action_lock = 0 WHERE tg_id = ?",
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "SELECT pg_advisory_unlock($1);",
+                tg_id
+            )
+        except Exception as e:
+            logging.error(f"Unlock error: {e}")
+
+
+# ────────────────────────────────────────────────
+#                USER MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_user(tg_id: int):
+    """Получить информацию о пользователе"""
+    return await db_execute(
+        "SELECT * FROM users WHERE tg_id = $1",
         (tg_id,),
-        commit=True
+        fetch_one=True
     )
 
 
-# User management
-def get_user(tg_id: int):
-    """Получить информацию о пользователе"""
-    return db_execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,), fetchone=True)
-
-
-def user_exists(tg_id: int) -> bool:
+async def user_exists(tg_id: int) -> bool:
     """Проверить существует ли пользователь"""
-    result = db_execute("SELECT 1 FROM users WHERE tg_id = ?", (tg_id,), fetchone=True)
+    result = await db_execute(
+        "SELECT 1 FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
     return result is not None
 
 
-def create_user(tg_id: int, username: str, referrer_id=None):
-    """Создать или игнорировать пользователя"""
-    db_execute(
-        "INSERT OR IGNORE INTO users (tg_id, username, referrer_id) VALUES (?, ?, ?)",
-        (tg_id, username, referrer_id),
-        commit=True
+async def create_user(tg_id: int, username: str, referrer_id=None):
+    """Создать или обновить пользователя"""
+    await db_execute(
+        """
+        INSERT INTO users (tg_id, username, referrer_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (tg_id) DO NOTHING
+        """,
+        (tg_id, username, referrer_id)
     )
 
 
-# Terms and conditions
-def accept_terms(tg_id: int):
+# ────────────────────────────────────────────────
+#           TERMS AND CONDITIONS
+# ────────────────────────────────────────────────
+
+async def accept_terms(tg_id: int):
     """Пользователь принял условия использования"""
-    db_execute(
-        "UPDATE users SET accepted_terms = TRUE WHERE tg_id = ?",
-        (tg_id,),
-        commit=True
+    await db_execute(
+        "UPDATE users SET accepted_terms = TRUE WHERE tg_id = $1",
+        (tg_id,)
     )
 
 
-def has_accepted_terms(tg_id: int) -> bool:
+async def has_accepted_terms(tg_id: int) -> bool:
     """Проверить принял ли пользователь условия"""
-    user = get_user(tg_id)
-    return user and user[2]  # accepted_terms column
+    user = await get_user(tg_id)
+    return user and user['accepted_terms']
 
 
-# Subscription management
-def update_subscription(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
+# ────────────────────────────────────────────────
+#             SUBSCRIPTION MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
     """Обновить подписку пользователя"""
-    db_execute(
-        "UPDATE users SET remnawave_uuid = ?, remnawave_username = ?, subscription_until = ?, squad_uuid = ? WHERE tg_id = ?",
-        (uuid, username, subscription_until, squad_uuid, tg_id),
-        commit=True
+    await db_execute(
+        """
+        UPDATE users 
+        SET remnawave_uuid = $1, 
+            remnawave_username = $2, 
+            subscription_until = $3, 
+            squad_uuid = $4 
+        WHERE tg_id = $5
+        """,
+        (uuid, username, subscription_until, squad_uuid, tg_id)
     )
 
 
-def has_subscription(tg_id: int) -> bool:
+async def has_subscription(tg_id: int) -> bool:
     """Проверить есть ли активная подписка"""
-    user = get_user(tg_id)
-    return user and user[3] is not None  # remnawave_uuid column
+    user = await get_user(tg_id)
+    return user and user['remnawave_uuid'] is not None
 
 
-# Payment management
-def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
+# ────────────────────────────────────────────────
+#               PAYMENT MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
     """Создать запись о платеже"""
     from datetime import datetime
-    db_execute(
+    await db_execute(
         """
         INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow().isoformat(), provider, str(invoice_id)),
-        commit=True
+        (tg_id, tariff_code, amount, datetime.utcnow().isoformat(), provider, str(invoice_id))
     )
 
 
-def get_pending_payments():
+async def get_pending_payments():
     """Получить все ожидающие платежи"""
-    return db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = 'cryptobot'",
-        fetchall=True
+    return await db_execute(
+        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
+        fetch_all=True
     )
 
 
-def get_last_pending_payment(tg_id: int):
+async def get_last_pending_payment(tg_id: int):
     """Получить последний ожидающий платеж пользователя"""
-    return db_execute(
-        "SELECT invoice_id, tariff_code FROM payments WHERE tg_id = ? AND status = 'pending' AND provider = 'cryptobot' ORDER BY id DESC LIMIT 1",
+    result = await db_execute(
+        """
+        SELECT invoice_id, tariff_code 
+        FROM payments 
+        WHERE tg_id = $1 AND status = 'pending' AND provider = 'cryptobot' 
+        ORDER BY id DESC 
+        LIMIT 1
+        """,
         (tg_id,),
-        fetchone=True
+        fetch_one=True
     )
+    return (result['invoice_id'], result['tariff_code']) if result else None
 
 
-def update_payment_status(payment_id: int, status: str):
+async def update_payment_status(payment_id: int, status: str):
     """Обновить статус платежа"""
-    db_execute(
-        "UPDATE payments SET status = ? WHERE id = ?",
-        (status, payment_id),
-        commit=True
+    await db_execute(
+        "UPDATE payments SET status = $1 WHERE id = $2",
+        (status, payment_id)
     )
 
 
-def update_payment_status_by_invoice(invoice_id: str, status: str):
+async def update_payment_status_by_invoice(invoice_id: str, status: str):
     """Обновить статус платежа по invoice_id"""
-    db_execute(
-        "UPDATE payments SET status = ? WHERE invoice_id = ?",
-        (status, invoice_id),
-        commit=True
+    await db_execute(
+        "UPDATE payments SET status = $1 WHERE invoice_id = $2",
+        (status, invoice_id)
     )
 
 
-# Referral management
-def update_referral_count(tg_id: int):
+# ────────────────────────────────────────────────
+#               REFERRAL MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def update_referral_count(tg_id: int):
     """Увеличить счётчик рефералов"""
-    db_execute(
-        "UPDATE users SET referral_count = referral_count + 1 WHERE tg_id = ?",
-        (tg_id,),
-        commit=True
+    await db_execute(
+        "UPDATE users SET referral_count = referral_count + 1 WHERE tg_id = $1",
+        (tg_id,)
     )
 
 
-def increment_active_referrals(tg_id: int):
+async def increment_active_referrals(tg_id: int):
     """Увеличить счётчик активных рефералов"""
-    db_execute(
-        "UPDATE users SET active_referrals = active_referrals + 1 WHERE tg_id = ?",
-        (tg_id,),
-        commit=True
+    await db_execute(
+        "UPDATE users SET active_referrals = active_referrals + 1 WHERE tg_id = $1",
+        (tg_id,)
     )
 
 
-def get_referral_stats(tg_id: int):
+async def get_referral_stats(tg_id: int):
     """Получить статистику рефералов пользователя"""
-    return db_execute(
-        "SELECT referral_count, active_referrals FROM users WHERE tg_id = ?",
+    result = await db_execute(
+        "SELECT referral_count, active_referrals FROM users WHERE tg_id = $1",
         (tg_id,),
-        fetchone=True
+        fetch_one=True
     )
+    return (result['referral_count'], result['active_referrals']) if result else (0, 0)
 
 
-def get_referrer(tg_id: int):
+async def get_referrer(tg_id: int):
     """Получить информацию о рефералите"""
-    return db_execute(
-        "SELECT referrer_id, first_payment FROM users WHERE tg_id = ?",
+    result = await db_execute(
+        "SELECT referrer_id, first_payment FROM users WHERE tg_id = $1",
         (tg_id,),
-        fetchone=True
+        fetch_one=True
     )
+    return (result['referrer_id'], result['first_payment']) if result else (None, False)
 
 
-def mark_first_payment(tg_id: int):
+async def mark_first_payment(tg_id: int):
     """Отметить что пользователь сделал первый платёж"""
-    db_execute(
-        "UPDATE users SET first_payment = TRUE WHERE tg_id = ?",
-        (tg_id,),
-        commit=True
+    await db_execute(
+        "UPDATE users SET first_payment = TRUE WHERE tg_id = $1",
+        (tg_id,)
     )
 
 
-# Gift management
-def is_gift_received(tg_id: int) -> bool:
+# ────────────────────────────────────────────────
+#                GIFT MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def is_gift_received(tg_id: int) -> bool:
     """Проверить получил ли пользователь подарок"""
-    user = get_user(tg_id)
-    return user and user[8]  # gift_received column
+    user = await get_user(tg_id)
+    return user and user['gift_received']
 
 
-def mark_gift_received(tg_id: int):
+async def mark_gift_received(tg_id: int):
     """Отметить что пользователь получил подарок"""
-    db_execute(
-        "UPDATE users SET gift_received = TRUE WHERE tg_id = ?",
-        (tg_id,),
-        commit=True
+    await db_execute(
+        "UPDATE users SET gift_received = TRUE WHERE tg_id = $1",
+        (tg_id,)
     )
 
 
-# Promo code management
-def get_promo_code(code: str):
+# ────────────────────────────────────────────────
+#              PROMO CODE MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_promo_code(code: str):
     """Получить информацию о промокоде"""
-    return db_execute(
-        "SELECT days, max_uses, used_count, active FROM promo_codes WHERE code = ?",
+    result = await db_execute(
+        "SELECT days, max_uses, used_count, active FROM promo_codes WHERE code = $1",
         (code,),
-        fetchone=True
+        fetch_one=True
     )
+    return (result['days'], result['max_uses'], result['used_count'], result['active']) if result else None
 
 
-def create_promo_code(code: str, days: int, max_uses: int):
+async def create_promo_code(code: str, days: int, max_uses: int):
     """Создать новый промокод"""
-    db_execute(
-        "INSERT OR REPLACE INTO promo_codes (code, days, max_uses, active) VALUES (?, ?, ?, TRUE)",
-        (code.upper(), days, max_uses),
-        commit=True
+    await db_execute(
+        "INSERT INTO promo_codes (code, days, max_uses, active) VALUES ($1, $2, $3, TRUE) ON CONFLICT (code) DO UPDATE SET days = $2, max_uses = $3, active = TRUE",
+        (code.upper(), days, max_uses)
     )
 
 
-def increment_promo_usage(code: str):
+async def increment_promo_usage(code: str):
     """Увеличить счётчик использования промокода"""
-    db_execute(
-        "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?",
-        (code,),
-        commit=True
+    await db_execute(
+        "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1",
+        (code,)
     )

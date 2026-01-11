@@ -127,22 +127,22 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             sub_url = await remnawave_get_subscription_url(session, uuid)
 
             # Обрабатываем реферальную программу
-            referrer = db.get_referrer(tg_id)
+            referrer = await db.get_referrer(tg_id)
             if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                referrer_uuid_row = db.get_user(referrer[0])
-                if referrer_uuid_row and referrer_uuid_row[3]:  # remnawave_uuid существует
-                    await remnawave_extend_subscription(session, referrer_uuid_row[3], 7)
-                    db.increment_active_referrals(referrer[0])
+                referrer_uuid_row = await db.get_user(referrer[0])
+                if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
+                    await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
+                    await db.increment_active_referrals(referrer[0])
                     logging.info(f"Referral bonus given to {referrer[0]}")
                 
-                db.mark_first_payment(tg_id)
+                await db.mark_first_payment(tg_id)
 
             # Обновляем платеж в БД
-            db.update_payment_status_by_invoice(invoice_id, 'paid')
+            await db.update_payment_status_by_invoice(invoice_id, 'paid')
             
             # Обновляем подписку пользователя
             new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-            db.update_subscription(tg_id, uuid, username, new_until, None)
+            await db.update_subscription(tg_id, uuid, username, new_until, None)
 
             # Отправляем сообщение пользователю
             text = (
@@ -169,13 +169,18 @@ async def check_cryptobot_invoices(bot):
     while True:
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
-        pending = db.get_pending_payments()
+        pending = await db.get_pending_payments()
 
         if not pending:
             continue
 
-        for payment_id, tg_id, invoice_id, tariff_code in pending:
-            if not db.acquire_user_lock(tg_id):
+        for payment_record in pending:
+            payment_id = payment_record['id']
+            tg_id = payment_record['tg_id']
+            invoice_id = payment_record['invoice_id']
+            tariff_code = payment_record['tariff_code']
+            
+            if not await db.acquire_user_lock(tg_id):
                 continue
 
             try:
@@ -190,4 +195,4 @@ async def check_cryptobot_invoices(bot):
                 logging.error(f"Check invoice error for {tg_id}: {e}")
             
             finally:
-                db.release_user_lock(tg_id)
+                await db.release_user_lock(tg_id)

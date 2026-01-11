@@ -15,7 +15,7 @@ router = Router()
 async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
     """Обработчик принятия условий использования"""
     tg_id = callback.from_user.id
-    db.accept_terms(tg_id)
+    await db.accept_terms(tg_id)
 
     await callback.message.delete()
     await state.clear()

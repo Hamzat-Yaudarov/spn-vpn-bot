@@ -35,10 +35,12 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "")
 
 # ────────────────────────────────────────────────
-#                DATABASE CONFIG
+#                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 
-DB_FILE = os.getenv("DB_FILE", "spn_vpn_bot.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 # ────────────────────────────────────────────────
 #                LOGGING CONFIG

@@ -1,5 +1,4 @@
 import logging
-import logging
 import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
@@ -76,7 +75,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     pay_url = invoice["bot_invoice_url"]
 
     # Записываем платеж в БД
-    db.create_payment(
+    await db.create_payment(
         callback.from_user.id,
         tariff_code,
         amount,
@@ -136,13 +135,13 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 async def process_check_payment(callback: CallbackQuery):
     """Проверить статус платежа"""
     tg_id = callback.from_user.id
-    pending = db.get_last_pending_payment(tg_id)
+    pending = await db.get_last_pending_payment(tg_id)
 
     if not pending:
         await callback.answer("Нет ожидающих оплаты счетов", show_alert=True)
         return
 
-    if not db.acquire_user_lock(tg_id):
+    if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)
         return
 
@@ -172,16 +171,16 @@ async def process_check_payment(callback: CallbackQuery):
         await callback.answer("Ошибка при проверке платежа", show_alert=True)
     
     finally:
-        db.release_user_lock(tg_id)
+        await db.release_user_lock(tg_id)
 
 
 @router.callback_query(F.data == "my_subscription")
 async def process_my_subscription(callback: CallbackQuery):
     """Показать информацию о подписке пользователя"""
     tg_id = callback.from_user.id
-    user = db.get_user(tg_id)
+    user = await db.get_user(tg_id)
 
-    if not user or not user[3]:  # remnawave_uuid
+    if not user or not user['remnawave_uuid']:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Оформить подписку", callback_data="buy_subscription")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
@@ -200,10 +199,10 @@ async def process_my_subscription(callback: CallbackQuery):
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             # Получаем ссылку подписки
-            sub_url = await remnawave_get_subscription_url(session, user[3])
+            sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
 
             # Получаем информацию о пользователе (включая expireAt)
-            user_info = await remnawave_get_user_info(session, user[3])
+            user_info = await remnawave_get_user_info(session, user['remnawave_uuid'])
 
             if user_info and "expireAt" in user_info:
                 expire_at = user_info["expireAt"]

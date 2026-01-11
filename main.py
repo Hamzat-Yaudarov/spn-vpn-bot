@@ -61,19 +61,24 @@ def setup_handlers():
 async def main():
     """Главная функция запуска бота"""
     # Инициализируем БД
-    db.init_db()
+    await db.init_db()
     logger.info("Database initialized")
-    
+
     # Регистрируем обработчики
     setup_handlers()
-    
+
     # Запускаем фоновую задачу проверки платежей
     asyncio.create_task(check_cryptobot_invoices(bot))
     logger.info("Payment checker task started")
-    
-    # Выполняем polling
-    logger.info("Bot started polling...")
-    await dp.start_polling(bot)
+
+    try:
+        # Выполняем polling
+        logger.info("Bot started polling...")
+        await dp.start_polling(bot)
+    finally:
+        # Закрываем БД при выходе
+        await db.close_db()
+        logger.info("Database pool closed")
 
 
 if __name__ == "__main__":
