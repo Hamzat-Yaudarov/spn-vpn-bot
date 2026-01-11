@@ -7,10 +7,43 @@ from config import DATABASE_URL
 _pool = None
 
 
+async def run_migrations():
+    """Запустить автоматические миграции при старте бота"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Проверяем и добавляем недостающие столбцы для anti-spam защиты
+            logging.info("Running migrations...")
+
+            # Миграция 1: Добавить столбцы для отслеживания времени попыток
+            migration_queries = [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+            ]
+
+            for query in migration_queries:
+                try:
+                    await conn.execute(query)
+                    logging.info(f"Migration executed: {query.strip()}")
+                except Exception as e:
+                    # Если столбец уже существует, будет ошибка - это нормально
+                    if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                        logging.debug(f"Column already exists, skipping: {query.strip()}")
+                    else:
+                        logging.warning(f"Migration warning: {e}")
+
+            logging.info("All migrations completed successfully ✅")
+
+        except Exception as e:
+            logging.error(f"Migration error: {e}")
+            raise
+
+
 async def init_db():
     """Инициализировать пул подключений и создать таблицы если нужно"""
     global _pool
-    
+
     try:
         _pool = await asyncpg.create_pool(
             DATABASE_URL,
@@ -19,6 +52,10 @@ async def init_db():
             command_timeout=60
         )
         logging.info("Database pool initialized successfully")
+
+        # Запускаем миграции при инициализации БД
+        await run_migrations()
+
     except Exception as e:
         logging.error(f"Failed to initialize database pool: {e}")
         raise
@@ -337,18 +374,20 @@ async def can_request_gift(tg_id: int) -> tuple[bool, str]:
     Проверить может ли пользователь получить подарок.
     Возвращает (True/False, сообщение об ошибке если есть)
     """
+    from datetime import datetime, timezone, timedelta
+
     user = await get_user(tg_id)
 
     if not user:
         return False, "Пользователь не найден"
 
-    if user['gift_received']:
+    if user.get('gift_received', False):
         return False, "Ты уже получал подарок"
 
     # Проверяем anti-spam: не более одной попытки в 2 секунды
-    if user['last_gift_attempt']:
-        from datetime import datetime, timezone, timedelta
-        time_since_attempt = datetime.now(timezone.utc) - user['last_gift_attempt'].replace(tzinfo=timezone.utc)
+    last_gift_attempt = user.get('last_gift_attempt')
+    if last_gift_attempt:
+        time_since_attempt = datetime.now(timezone.utc) - last_gift_attempt.replace(tzinfo=timezone.utc)
         if time_since_attempt < timedelta(seconds=2):
             return False, "Подожди пару секунд ⏳"
 
@@ -431,15 +470,17 @@ async def can_request_promo(tg_id: int) -> tuple[bool, str]:
     Проверить может ли пользователь активировать промокод сейчас.
     Возвращает (True/False, сообщение об ошибке если есть)
     """
+    from datetime import datetime, timezone, timedelta
+
     user = await get_user(tg_id)
 
     if not user:
         return False, "Пользователь не найден"
 
     # Проверяем anti-spam: не более одной попытки в 1.5 секунды
-    if user['last_promo_attempt']:
-        from datetime import datetime, timezone, timedelta
-        time_since_attempt = datetime.now(timezone.utc) - user['last_promo_attempt'].replace(tzinfo=timezone.utc)
+    last_promo_attempt = user.get('last_promo_attempt')
+    if last_promo_attempt:
+        time_since_attempt = datetime.now(timezone.utc) - last_promo_attempt.replace(tzinfo=timezone.utc)
         if time_since_attempt < timedelta(seconds=1.5):
             return False, "Подожди пару секунд ⏳"
 
@@ -460,15 +501,17 @@ async def can_check_payment(tg_id: int) -> tuple[bool, str]:
     Проверить может ли пользователь проверить платёж сейчас.
     Возвращает (True/False, сообщение об ошибке если есть)
     """
+    from datetime import datetime, timezone, timedelta
+
     user = await get_user(tg_id)
 
     if not user:
         return False, "Пользователь не найден"
 
     # Проверяем anti-spam: не более одной проверки в 1 секунду
-    if user['last_payment_check']:
-        from datetime import datetime, timezone, timedelta
-        time_since_check = datetime.now(timezone.utc) - user['last_payment_check'].replace(tzinfo=timezone.utc)
+    last_payment_check = user.get('last_payment_check')
+    if last_payment_check:
+        time_since_check = datetime.now(timezone.utc) - last_payment_check.replace(tzinfo=timezone.utc)
         if time_since_check < timedelta(seconds=1):
             return False, "Подожди пару секунд ⏳"
 

@@ -132,21 +132,44 @@ finally:
 
 ## Требования к обновлению БД
 
-Чтобы активировать защиту, нужно выполнить SQL скрипт из `schema.sql`:
+✨ **ХОРОШИЕ НОВОСТИ!** Вам больше ничего не нужно делать вручную!
 
+При следующем запуске бота:
 ```bash
-# На VPS:
-sudo systemctl stop spn-bot
-
-# В Supabase Dashboard или через psql:
-# Выполнить SQL из schema.sql
-
-sudo systemctl start spn-bot
+sudo systemctl restart spn-bot
 ```
+
+Бот **автоматически**:
+1. ✅ Подключится к Supabase
+2. ✅ Проверит наличие нужных столбцов
+3. ✅ Добавит недостающие столбцы
+4. ✅ Будет готов к работе
 
 Три новых столбца автоматически инициализируются как `NULL` для существующих пользователей, что эквивалентно "нет предыдущих попыток".
 
+**Подробнее:** смотри файл `MIGRATIONS.md` для информации об автоматических миграциях.
+
 ## Мониторинг
+
+### Проверка что защита работает
+
+При первом запуске бота после обновления смотри логи:
+```bash
+sudo journalctl -u spn-bot -f
+```
+
+Должны видеть:
+```
+Database pool initialized successfully
+Running migrations...
+Migration executed: ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;
+Migration executed: ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;
+Migration executed: ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;
+All migrations completed successfully ✅
+Bot started polling...
+```
+
+### При попытке spam'а
 
 При обнаружении spam'а в логах будут видны:
 ```
