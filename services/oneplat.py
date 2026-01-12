@@ -100,6 +100,10 @@ async def create_oneplat_payment(
     try:
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                response_text = await resp.text()
+                logging.info(f"1Plat API response status: {resp.status}")
+                logging.info(f"1Plat API response body: {response_text}")
+
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("success"):
@@ -109,9 +113,9 @@ async def create_oneplat_payment(
                         logging.error(f"1Plat error: {data}")
                         return None
                 else:
-                    logging.error(f"1Plat API error: {resp.status}")
+                    logging.error(f"1Plat API error: {resp.status} - {response_text}")
                     return None
-                    
+
     except Exception as e:
         logging.error(f"1Plat request error: {e}")
         return None
