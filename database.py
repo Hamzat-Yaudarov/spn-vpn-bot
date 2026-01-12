@@ -20,6 +20,8 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                # Миграция 2: Поддержка 1Plat платежей (добавляем поле guid для 1Plat)
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS guid VARCHAR(255);",
             ]
 
             for query in migration_queries:
@@ -230,15 +232,15 @@ async def has_subscription(tg_id: int) -> bool:
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
+async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str, guid: str = None):
     """Создать запись о платеже"""
     from datetime import datetime
     await db_execute(
         """
-        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id, guid)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id))
+        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id), guid)
     )
 
 
