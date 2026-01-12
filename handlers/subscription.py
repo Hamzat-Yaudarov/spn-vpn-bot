@@ -9,7 +9,6 @@ from states import UserStates
 import database as db
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
-from services.oneplat import create_oneplat_payment
 
 
 router = Router()
@@ -104,35 +103,9 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_yookassa")
 async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
-    """Показать выбор метода оплаты для 1Plat"""
+    """Заглушка для оплаты через Yookassa"""
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-
-    if not tariff_code:
-        await callback.message.edit_text("Ошибка: тариф не выбран")
-        await state.clear()
-        return
-
-    tariff = TARIFFS[tariff_code]
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_1plat_card")],
-        [InlineKeyboardButton(text="📱 СБП (телефон)", callback_data="pay_1plat_sbp")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-    ])
-
-    text = f"<b>💳 Выбери способ оплаты</b>\n\nТариф: {tariff_code}\nСумма: {tariff['price']} ₽"
-
-    await callback.message.edit_text(text, reply_markup=kb)
-    await state.set_state(UserStates.choosing_1plat_method)
-
-
-@router.callback_query(F.data.startswith("pay_1plat_"))
-async def process_pay_1plat(callback: CallbackQuery, state: FSMContext):
-    """Создать платеж через 1Plat"""
-    data = await state.get_data()
-    tariff_code = data.get("tariff_code")
-    method = callback.data.split("_")[2]  # "card" или "sbp"
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
@@ -142,144 +115,20 @@ async def process_pay_1plat(callback: CallbackQuery, state: FSMContext):
     tariff = TARIFFS[tariff_code]
     amount = tariff["price"]
 
-    # Создаём платеж в 1Plat
-    payment_data = await create_oneplat_payment(
-        amount=amount,
-        tariff_code=tariff_code,
-        tg_id=callback.from_user.id,
-        method=method
-    )
-
-    if not payment_data:
-        await callback.message.edit_text("❌ Ошибка создания платежа. Попробуй позже.")
-        await state.clear()
-        return
-
-    guid = payment_data["guid"]
-    payment_info = payment_data["payment"]
-    pay_url = payment_data["url"]
-    merchant_order_id = payment_data["merchant_order_id"]
-
-    # Сохраняем платеж в БД
-    await db.create_oneplat_payment(
-        callback.from_user.id,
-        tariff_code,
-        amount,
-        guid,
-        method,
-        merchant_order_id
-    )
-
-    # Формируем текст с реквизитами в зависимости от метода оплаты
-    note = payment_info.get("note", {})
-
-    if method == "card":
-        payment_text = (
-            f"<b>💳 Реквизиты для оплаты по карте</b>\n\n"
-            f"<blockquote>"
-            f"📱 Номер карты: <code>{note.get('pan', 'N/A')}</code>\n"
-            f"👤 ФИО: {note.get('fio', 'N/A')}\n"
-            f"🏦 Банк: {note.get('bank', 'N/A')}\n"
-            f"</blockquote>\n"
-        )
-    else:  # sbp
-        payment_text = (
-            f"<b>📱 Оплата по СБП (номер телефона)</b>\n\n"
-            f"<blockquote>"
-            f"📱 Номер карты: <code>{note.get('pan', 'N/A')}</code>\n"
-            f"👤 ФИО: {note.get('fio', 'N/A')}\n"
-            f"🏦 Банк: {note.get('bank', 'N/A')}\n"
-            f"</blockquote>\n"
-        )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить онлайн", url=pay_url)],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_oneplat_payment")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
     text = (
-        f"<b>Счёт на оплату</b>\n\n"
+        f"<b>💳 Yookassa</b>\n\n"
         f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n"
-        f"Способ: {'Банковская карта' if method == 'card' else 'СБП (телефон)'}\n\n"
-        f"{payment_text}"
-        f"<b>Способы оплаты:</b>\n"
-        f"1️⃣ Нажми кнопку «Оплатить онлайн» для оплаты через веб-форму\n"
-        f"2️⃣ Или перепроведи платёж вручную по реквизитам выше\n\n"
-        f"После оплаты нажми «Проверить оплату» для активации подписки."
+        f"Сумма: {amount} ₽\n\n"
+        "⚠️ Способ оплаты Yookassa ещё находится в разработке.\n\n"
+        "Используй CryptoBot для оплаты или обратись в поддержку."
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
     await state.clear()
-
-
-@router.callback_query(F.data == "check_oneplat_payment")
-async def process_check_oneplat_payment(callback: CallbackQuery):
-    """Проверить статус платежа 1Plat"""
-    tg_id = callback.from_user.id
-
-    # Проверка anti-spam: не более одной проверки в 1 секунду
-    can_check, error_msg = await db.can_check_payment(tg_id)
-    if not can_check:
-        await callback.answer(error_msg, show_alert=True)
-        return
-
-    # Обновляем время последней проверки
-    await db.update_last_payment_check(tg_id)
-
-    if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
-        return
-
-    try:
-        # Получаем ожидающие платежи 1Plat пользователя
-        pending_payments = await db.db_execute(
-            "SELECT id, payment_guid, tariff_code FROM payments WHERE tg_id = $1 AND status = 'pending' AND provider = '1plat' ORDER BY id DESC LIMIT 1",
-            (tg_id,),
-            fetch_one=True
-        )
-
-        if not pending_payments:
-            await callback.answer("Нет ожидающих оплаты счетов", show_alert=True)
-            return
-
-        payment_guid = pending_payments['payment_guid']
-        tariff_code = pending_payments['tariff_code']
-
-        # Проверяем статус платежа в 1Plat
-        from services.oneplat import get_payment_info
-        payment_info = await get_payment_info(payment_guid)
-
-        if not payment_info:
-            await callback.answer("Не удалось получить информацию о платеже", show_alert=True)
-            return
-
-        payment_status = payment_info.get("status")
-
-        # Статус 1 - оплачен, статус 2 - подтвержден
-        if payment_status == 1 or payment_status == 2:
-            # Активируем подписку
-            from services.cryptobot import process_paid_invoice
-            success = await process_paid_invoice(callback.bot, tg_id, payment_guid, tariff_code)
-
-            if success:
-                await callback.message.edit_text(
-                    "✅ <b>Оплата подтверждена!</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    "Ссылка подписки отправлена в сообщении выше."
-                )
-            else:
-                await callback.answer("Ошибка при активации подписки", show_alert=True)
-        else:
-            await callback.answer(f"Оплата ещё не прошла. Статус: {payment_info.get('status', 'неизвестен')}", show_alert=True)
-
-    except Exception as e:
-        logging.error(f"Check 1Plat payment error: {e}")
-        await callback.answer("Ошибка при проверке платежа", show_alert=True)
-
-    finally:
-        await db.release_user_lock(tg_id)
 
 
 @router.callback_query(F.data == "check_payment")

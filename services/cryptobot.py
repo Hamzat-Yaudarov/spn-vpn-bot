@@ -96,35 +96,33 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
 async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:
     """
     Обработать оплаченный счёт и активировать подписку
-
-    Работает с обоими провайдерами: CryptoBot и 1Plat
-
+    
     Args:
         bot: Экземпляр Bot
         tg_id: ID пользователя Telegram
-        invoice_id: ID счёта в CryptoBot или GUID платежа 1Plat
+        invoice_id: ID счёта в CryptoBot
         tariff_code: Код тарифа
-
+        
     Returns:
         True если успешно, False иначе
     """
     try:
         days = TARIFFS[tariff_code]["days"]
-
+        
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             # Создаём или получаем пользователя в Remnawave
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days, extend_if_exists=True
             )
-
+            
             if not uuid:
                 logging.error(f"Failed to create/get Remnawave user for {tg_id}")
                 return False
 
             # Добавляем в сквад
             await remnawave_add_to_squad(session, uuid)
-
+            
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
 
@@ -136,13 +134,12 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
                     await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
                     await db.increment_active_referrals(referrer[0])
                     logging.info(f"Referral bonus given to {referrer[0]}")
-
+                
                 await db.mark_first_payment(tg_id)
 
             # Обновляем платеж в БД
-            # invoice_id может быть как invoice_id из CryptoBot, так и payment_guid из 1Plat
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
-
+            
             # Обновляем подписку пользователя
             new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
             await db.update_subscription(tg_id, uuid, username, new_until, None)
@@ -154,7 +151,7 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
                 f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
             )
             await bot.send_message(tg_id, text)
-
+            
             return True
 
     except Exception as e:

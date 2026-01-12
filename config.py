@@ -35,15 +35,6 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "")
 
 # ────────────────────────────────────────────────
-#            1PLAT PAYMENT CONFIG
-# ────────────────────────────────────────────────
-
-ONEPLAT_SHOP_ID = int(os.getenv("ONEPLAT_SHOP_ID", "0"))
-ONEPLAT_SHOP_SECRET = os.getenv("ONEPLAT_SHOP_SECRET", "")
-ONEPLAT_BASE_URL = os.getenv("ONEPLAT_BASE_URL", "https://1plat.cash")
-ONEPLAT_CALLBACK_URL = os.getenv("ONEPLAT_CALLBACK_URL", "")
-
-# ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 
