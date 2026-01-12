@@ -1,5 +1,6 @@
 import logging
 import aiohttp
+import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -9,6 +10,7 @@ from states import UserStates
 import database as db
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
+from services.oneplat import create_oneplat_payment
 
 
 router = Router()
@@ -39,7 +41,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
-        [InlineKeyboardButton(text="💳 Yookassa", callback_data="pay_yookassa")],
+        [InlineKeyboardButton(text="💳 1Plat (Карта/СБП)", callback_data="pay_1plat")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
@@ -101,11 +103,12 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data == "pay_yookassa")
-async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
-    """Заглушка для оплаты через Yookassa"""
+@router.callback_query(F.data == "pay_1plat")
+async def process_pay_1plat(callback: CallbackQuery, state: FSMContext):
+    """Создать счёт в 1Plat"""
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
+    tg_id = callback.from_user.id
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
@@ -115,16 +118,53 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     tariff = TARIFFS[tariff_code]
     amount = tariff["price"]
 
+    # Генерируем уникальный ID платежа
+    merchant_order_id = f"spn_{tg_id}_{int(datetime.now(timezone.utc).timestamp())}"
+
+    # Создаём платёж через 1Plat API
+    payment_data = await create_oneplat_payment(
+        merchant_order_id=merchant_order_id,
+        tg_id=tg_id,
+        amount=int(amount),
+        tariff_code=tariff_code,
+        method="card"
+    )
+
+    if not payment_data or not payment_data.get("success"):
+        await callback.message.edit_text(
+            "❌ Ошибка создания счёта в 1Plat. Попробуй позже."
+        )
+        logging.error(f"Failed to create 1Plat payment: {payment_data}")
+        await state.clear()
+        return
+
+    guid = payment_data.get("guid")
+    pay_url = payment_data.get("url")
+    payment_info = payment_data.get("payment", {})
+
+    # Сохраняем платёж в БД
+    await db.create_oneplat_payment(
+        tg_id=tg_id,
+        tariff_code=tariff_code,
+        amount=amount,
+        guid=guid,
+        merchant_order_id=merchant_order_id
+    )
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить картой/СБП", url=pay_url)],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
     text = (
-        f"<b>💳 Yookassa</b>\n\n"
+        f"<b>💳 Оплата через 1Plat</b>\n\n"
         f"Тариф: {tariff_code}\n"
         f"Сумма: {amount} ₽\n\n"
-        "⚠️ Способ оплаты Yookassa ещё находится в разработке.\n\n"
-        "Используй CryptoBot для оплаты или обратись в поддержку."
+        f"Доступные методы:\n"
+        f"• Банковская карта\n"
+        f"• СБП (система быстрых платежей)\n\n"
+        f"Нажми кнопку ниже для оплаты. "
+        f"Подписка активируется автоматически после успешной оплаты."
     )
 
     await callback.message.edit_text(text, reply_markup=kb)

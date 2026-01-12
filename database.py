@@ -12,15 +12,21 @@ async def run_migrations():
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
-            # Проверяем и добавляем недостающие столбцы для anti-spam защиты
+            # Проверяем и добавляем недостающие столбцы
             logging.info("Running migrations...")
 
-            # Миграция 1: Добавить столбцы для отслеживания времени попыток
+            # Миграция 1: Добавить столбцы для отслеживания времени попыток (anti-spam)
             migration_queries = [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
             ]
+
+            # Миграция 2: Добавить столбцы для 1Plat платежей
+            migration_queries.extend([
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS guid TEXT UNIQUE;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'pending';",
+            ])
 
             for query in migration_queries:
                 try:
@@ -279,6 +285,35 @@ async def update_payment_status_by_invoice(invoice_id: str, status: str):
     await db_execute(
         "UPDATE payments SET status = $1 WHERE invoice_id = $2",
         (status, invoice_id)
+    )
+
+
+async def create_oneplat_payment(tg_id: int, tariff_code: str, amount: float, guid: str, merchant_order_id: str):
+    """Создать запись о платеже 1Plat"""
+    from datetime import datetime
+    await db_execute(
+        """
+        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id, guid, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        (tg_id, tariff_code, amount, datetime.utcnow(), "1plat", merchant_order_id, guid, "pending")
+    )
+
+
+async def get_payment_by_guid(guid: str):
+    """Получить платёж по guid"""
+    return await db_execute(
+        "SELECT * FROM payments WHERE guid = $1",
+        (guid,),
+        fetch_one=True
+    )
+
+
+async def update_payment_status_by_guid(guid: str, status: str):
+    """Обновить статус платежа по guid"""
+    await db_execute(
+        "UPDATE payments SET status = $1 WHERE guid = $2",
+        (status, guid)
     )
 
 

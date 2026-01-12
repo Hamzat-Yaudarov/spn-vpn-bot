@@ -11,6 +11,7 @@ import database as db
 # Импортируем все роутеры обработчиков
 from handlers import start, callbacks, subscription, gift, referral, promo, admin
 from services.cryptobot import check_cryptobot_invoices
+from webhook_server import start_webhook_server, stop_webhook_server
 
 
 # ────────────────────────────────────────────────
@@ -67,15 +68,23 @@ async def main():
     # Регистрируем обработчики
     setup_handlers()
 
-    # Запускаем фоновую задачу проверки платежей
+    # Запускаем фоновую задачу проверки платежей CryptoBot
     asyncio.create_task(check_cryptobot_invoices(bot))
     logger.info("Payment checker task started")
+
+    # Запускаем вебхук-сервер для приёма коллбеков от 1Plat
+    webhook_runner = await start_webhook_server(host="0.0.0.0", port=8080)
+    logger.info("Webhook server started for 1Plat callbacks")
 
     try:
         # Выполняем polling
         logger.info("Bot started polling...")
         await dp.start_polling(bot)
     finally:
+        # Останавливаем вебхук-сервер
+        await stop_webhook_server(webhook_runner)
+        logger.info("Webhook server stopped")
+
         # Закрываем БД при выходе
         await db.close_db()
         logger.info("Database pool closed")
