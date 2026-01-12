@@ -97,6 +97,7 @@ async def create_oneplat_payment(
         url = f"{ONEPLAT_BASE_URL}/api/merchant/order/create/by-api"
         
         payload = {
+            "shop_id": ONEPLAT_SHOP_ID,
             "merchant_order_id": merchant_order_id,
             "user_id": str(tg_id),
             "amount": int(amount),
