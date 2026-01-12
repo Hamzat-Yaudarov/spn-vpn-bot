@@ -1,5 +1,6 @@
 import asyncpg
 import logging
+from pathlib import Path
 from config import DATABASE_URL
 
 
@@ -7,8 +8,50 @@ from config import DATABASE_URL
 _pool = None
 
 
+async def run_schema():
+    """Создать таблицы из schema.sql при первом запуске"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            logging.info("Creating database schema...")
+
+            # Читаем schema.sql
+            schema_path = Path(__file__).parent / "schema.sql"
+            if not schema_path.exists():
+                logging.warning(f"schema.sql not found at {schema_path}")
+                return
+
+            schema_sql = schema_path.read_text()
+
+            # Выполняем все SQL команды из schema.sql
+            # Разбиваем по ; чтобы выполнить каждую команду отдельно
+            statements = [stmt.strip() for stmt in schema_sql.split(';') if stmt.strip()]
+
+            for i, statement in enumerate(statements, 1):
+                try:
+                    # Пропускаем комментарии
+                    if statement.startswith('--'):
+                        continue
+
+                    await conn.execute(statement)
+                    logging.debug(f"Schema statement {i} executed")
+                except Exception as e:
+                    # Если таблица уже существует, это нормально
+                    if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                        logging.debug(f"Table already exists: {statement[:50]}...")
+                    else:
+                        logging.error(f"Schema execution error on statement {i}: {e}")
+                        # Не прерываем, продолжаем создавать остальные таблицы
+
+            logging.info("Database schema created successfully ✅")
+
+        except Exception as e:
+            logging.error(f"Schema creation error: {e}")
+            raise
+
+
 async def run_migrations():
-    """Запустить автоматические миграции при старте бота"""
+    """Запустить дополнительные миграции при старте бота"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
@@ -20,6 +63,9 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                # Миграция 2: Добавить столбцы для 1Plat платежей
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_guid TEXT;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT;",
             ]
 
             for query in migration_queries:
@@ -53,7 +99,10 @@ async def init_db():
         )
         logging.info("Database pool initialized successfully")
 
-        # Запускаем миграции при инициализации БД
+        # Сначала создаём схему (таблицы)
+        await run_schema()
+
+        # Затем выполняем миграции (добавляем колонки)
         await run_migrations()
 
     except Exception as e:
@@ -275,9 +324,9 @@ async def update_payment_status(payment_id: int, status: str):
 
 
 async def update_payment_status_by_invoice(invoice_id: str, status: str):
-    """Обновить статус платежа по invoice_id"""
+    """Обновить статус платежа по invoice_id (CryptoBot) или payment_guid (1Plat)"""
     await db_execute(
-        "UPDATE payments SET status = $1 WHERE invoice_id = $2",
+        "UPDATE payments SET status = $1 WHERE invoice_id = $2 OR payment_guid = $2",
         (status, invoice_id)
     )
 
@@ -524,4 +573,52 @@ async def update_last_payment_check(tg_id: int):
     await db_execute(
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
         (datetime.utcnow(), tg_id)
+    )
+
+
+# ────────────────────────────────────────────────
+#            1PLAT PAYMENT MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def create_oneplat_payment(
+    tg_id: int,
+    tariff_code: str,
+    amount: float,
+    payment_guid: str,
+    payment_method: str,
+    merchant_order_id: str
+):
+    """Создать запись о платеже 1Plat"""
+    from datetime import datetime
+    await db_execute(
+        """
+        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id, payment_guid, payment_method)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        (tg_id, tariff_code, amount, datetime.utcnow(), "1plat", merchant_order_id, payment_guid, payment_method)
+    )
+
+
+async def get_payment_by_guid(payment_guid: str):
+    """Получить платёж по GUID от 1Plat"""
+    return await db_execute(
+        "SELECT id, tg_id, tariff_code FROM payments WHERE payment_guid = $1",
+        (payment_guid,),
+        fetch_one=True
+    )
+
+
+async def get_pending_oneplat_payments():
+    """Получить все ожидающие платежи 1Plat"""
+    return await db_execute(
+        "SELECT id, tg_id, payment_guid, tariff_code FROM payments WHERE status = 'pending' AND provider = '1plat' ORDER BY id",
+        fetch_all=True
+    )
+
+
+async def update_payment_status_by_guid(payment_guid: str, status: str):
+    """Обновить статус платежа по GUID"""
+    await db_execute(
+        "UPDATE payments SET status = $1 WHERE payment_guid = $2",
+        (status, payment_guid)
     )
