@@ -112,7 +112,7 @@ apt install -y git python3 python3-pip python3-venv curl wget nano
 cd /root
 
 # Клонируешь репозиторий
-git clone https://github.com/YOUR_USERNAME/spn-vpn-bot.git
+git clone https://github.com/Hamzat-Yaudarov/spn-vpn-bot.git
 
 # Переходишь в папку проекта
 cd /root/spn-vpn-bot
