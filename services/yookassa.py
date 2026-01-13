@@ -38,7 +38,7 @@ async def create_yookassa_payment(
     credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
     headers = {
         "Authorization": f"Basic {credentials}",
-        "Idempotency-Key": str(uuid.uuid4()),
+        "Idempotence-Key": str(uuid.uuid4()),
         "Content-Type": "application/json"
     }
     
