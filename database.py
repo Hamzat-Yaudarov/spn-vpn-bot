@@ -259,6 +259,72 @@ async def get_pending_payments_by_provider(provider: str):
     )
 
 
+async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, provider: str):
+    """
+    Получить существующий неоплаченный счёт пользователя для конкретного тарифа и провайдера
+
+    Args:
+        tg_id: ID пользователя Telegram
+        tariff_code: Код тарифа
+        provider: Провайдер платежа (cryptobot, yookassa)
+
+    Returns:
+        Кортеж (invoice_id, pay_url) или None если нет активного счёта
+    """
+    from datetime import datetime, timedelta, timezone
+
+    result = await db_execute(
+        """
+        SELECT id, invoice_id, created_at FROM payments
+        WHERE tg_id = $1 AND tariff_code = $2 AND status = 'pending' AND provider = $3
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (tg_id, tariff_code, provider),
+        fetch_one=True
+    )
+
+    if not result:
+        return None
+
+    # Проверяем, не истёк ли счёт (старше 10 минут)
+    created_at = result['created_at']
+    age = datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)
+
+    if age.total_seconds() > 600:  # 10 минут = 600 секунд
+        # Счёт истёк, удаляем его
+        await delete_payment(result['id'])
+        return None
+
+    # Счёт ещё активен
+    return result['invoice_id']
+
+
+async def delete_payment(payment_id: int):
+    """Удалить платёж из БД"""
+    await db_execute(
+        "DELETE FROM payments WHERE id = $1",
+        (payment_id,)
+    )
+
+
+async def delete_expired_payments(minutes: int = 10):
+    """
+    Удалить все неоплаченные счёты старше N минут
+
+    Args:
+        minutes: Время в минутах (по умолчанию 10)
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    await db_execute(
+        "DELETE FROM payments WHERE status = 'pending' AND created_at < $1",
+        (cutoff_time,)
+    )
+
+
 async def get_last_pending_payment(tg_id: int):
     """Получить последний ожидающий платеж пользователя"""
     result = await db_execute(

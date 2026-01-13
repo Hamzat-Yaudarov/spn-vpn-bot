@@ -52,7 +52,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
-    """Создать счёт в CryptoBot"""
+    """Создать или вернуть существующий счёт в CryptoBot"""
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
 
@@ -63,9 +63,41 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
     tariff = TARIFFS[tariff_code]
     amount = tariff["price"]
+    tg_id = callback.from_user.id
 
-    # Создаём счёт в CryptoBot
-    invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, callback.from_user.id)
+    # Проверяем, есть ли уже активный счёт для этого пользователя и тарифа
+    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot")
+
+    if existing_invoice_id:
+        # Счёт уже есть - получаем его статус
+        invoice = await get_invoice_status(existing_invoice_id)
+
+        if invoice and invoice.get("status") == "active":
+            pay_url = invoice.get("bot_invoice_url", "")
+
+            if pay_url:
+                # Возвращаем существующий счёт
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
+                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+                ])
+
+                text = (
+                    f"<b>Счёт на оплату (существующий)</b>\n\n"
+                    f"Тариф: {tariff_code}\n"
+                    f"Сумма: {amount} ₽\n\n"
+                    "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
+                    "Если не активировалось — нажми «Проверить оплату»"
+                )
+
+                await callback.message.edit_text(text, reply_markup=kb)
+                await state.clear()
+                logging.info(f"Returned existing CryptoBot invoice {existing_invoice_id} for user {tg_id}")
+                return
+
+    # Счёта нет или он истёк - создаём новый
+    invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
 
     if not invoice:
         await callback.message.edit_text("Ошибка создания счёта в CryptoBot. Попробуй позже.")
@@ -77,7 +109,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
     # Записываем платеж в БД
     await db.create_payment(
-        callback.from_user.id,
+        tg_id,
         tariff_code,
         amount,
         "cryptobot",
@@ -104,7 +136,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_yookassa")
 async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
-    """Создать платёж через Yookassa"""
+    """Создать или вернуть существующий платёж через Yookassa"""
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
 
@@ -115,9 +147,42 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 
     tariff = TARIFFS[tariff_code]
     amount = tariff["price"]
+    tg_id = callback.from_user.id
 
-    # Создаём платёж в Yookassa
-    payment = await create_yookassa_payment(callback.bot, amount, tariff_code, callback.from_user.id)
+    # Проверяем, есть ли уже активный платёж для этого пользователя и тарифа
+    existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa")
+
+    if existing_payment_id:
+        # Платёж уже есть - получаем его статус
+        payment = await get_payment_status(existing_payment_id)
+
+        if payment and payment.get("status") == "pending":
+            confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+            if confirmation_url:
+                # Возвращаем существующий платёж
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
+                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+                ])
+
+                text = (
+                    f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
+                    f"Тариф: {tariff_code}\n"
+                    f"Сумма: {amount} ₽\n\n"
+                    "Оплати картой, СБП или другим способом через Yookassa.\n"
+                    "После оплаты бот автоматически активирует подписку.\n"
+                    "Если не активировалось — нажми «Проверить оплату»"
+                )
+
+                await callback.message.edit_text(text, reply_markup=kb)
+                await state.clear()
+                logging.info(f"Returned existing Yookassa payment {existing_payment_id} for user {tg_id}")
+                return
+
+    # Платежа нет или он истёк - создаём новый
+    payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
 
     if not payment:
         await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
@@ -134,7 +199,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 
     # Записываем платеж в БД
     await db.create_payment(
-        callback.from_user.id,
+        tg_id,
         tariff_code,
         amount,
         "yookassa",

@@ -181,7 +181,7 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
 async def check_yookassa_payments(bot):
     """
     Фоновая задача для проверки статусов платежей в Yookassa
-    
+
     Args:
         bot: Экземпляр Bot
     """
@@ -198,13 +198,13 @@ async def check_yookassa_payments(bot):
             tg_id = payment_record['tg_id']
             invoice_id = payment_record['invoice_id']
             tariff_code = payment_record['tariff_code']
-            
+
             if not await db.acquire_user_lock(tg_id):
                 continue
 
             try:
                 payment = await get_payment_status(invoice_id)
-                
+
                 if payment and payment.get("status") == "succeeded":
                     success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code)
                     if success:
@@ -212,6 +212,20 @@ async def check_yookassa_payments(bot):
 
             except Exception as e:
                 logging.error(f"Check Yookassa payment error for {tg_id}: {e}")
-            
+
             finally:
                 await db.release_user_lock(tg_id)
+
+
+async def cleanup_expired_payments():
+    """
+    Фоновая задача для удаления истёкших неоплаченных счётов (старше 10 минут)
+    """
+    while True:
+        await asyncio.sleep(300)  # Проверяем каждые 5 минут
+
+        try:
+            await db.delete_expired_payments(minutes=10)
+            logging.info("Expired payments cleaned up")
+        except Exception as e:
+            logging.error(f"Cleanup expired payments error: {e}")
