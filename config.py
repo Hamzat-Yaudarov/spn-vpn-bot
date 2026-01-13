@@ -35,15 +35,6 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "")
 
 # ────────────────────────────────────────────────
-#             1PLAT PAYMENT CONFIG
-# ────────────────────────────────────────────────
-
-ONEPLAT_SHOP_ID = os.getenv("ONEPLAT_SHOP_ID", "")
-ONEPLAT_SHOP_SECRET = os.getenv("ONEPLAT_SHOP_SECRET", "")
-ONEPLAT_BASE_URL = "https://1plat.cash"
-ONEPLAT_WEBHOOK_URL = os.getenv("ONEPLAT_WEBHOOK_URL", "https://spn.bot.idlebat.online/1plat-webhook")
-
-# ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 
