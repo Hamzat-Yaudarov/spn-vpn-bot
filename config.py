@@ -35,6 +35,14 @@ CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
 CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "")
 
 # ────────────────────────────────────────────────
+#            YOOKASSA PAYMENT CONFIG
+# ────────────────────────────────────────────────
+
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
+YOOKASSA_API_URL = "https://api.yookassa.ru/v3"
+
+# ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 

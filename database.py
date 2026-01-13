@@ -250,6 +250,15 @@ async def get_pending_payments():
     )
 
 
+async def get_pending_payments_by_provider(provider: str):
+    """Получить все ожидающие платежи по конкретному провайдеру"""
+    return await db_execute(
+        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
+        (provider,),
+        fetch_all=True
+    )
+
+
 async def get_last_pending_payment(tg_id: int):
     """Получить последний ожидающий платеж пользователя"""
     result = await db_execute(

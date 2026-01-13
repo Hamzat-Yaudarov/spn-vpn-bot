@@ -9,6 +9,7 @@ from states import UserStates
 import database as db
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
+from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 
 
 router = Router()
@@ -103,7 +104,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay_yookassa")
 async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
-    """Заглушка для оплаты через Yookassa"""
+    """Создать платёж через Yookassa"""
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
 
@@ -115,7 +116,34 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     tariff = TARIFFS[tariff_code]
     amount = tariff["price"]
 
+    # Создаём платёж в Yookassa
+    payment = await create_yookassa_payment(callback.bot, amount, tariff_code, callback.from_user.id)
+
+    if not payment:
+        await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
+        await state.clear()
+        return
+
+    payment_id = payment["id"]
+    confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+    if not confirmation_url:
+        await callback.message.edit_text("Ошибка: не получена ссылка для оплаты")
+        await state.clear()
+        return
+
+    # Записываем платеж в БД
+    await db.create_payment(
+        callback.from_user.id,
+        tariff_code,
+        amount,
+        "yookassa",
+        payment_id
+    )
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
@@ -123,8 +151,9 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         f"<b>💳 Yookassa</b>\n\n"
         f"Тариф: {tariff_code}\n"
         f"Сумма: {amount} ₽\n\n"
-        "⚠️ Способ оплаты Yookassa ещё находится в разработке.\n\n"
-        "Используй CryptoBot для оплаты или обратись в поддержку."
+        "Оплати картой, СБП или другим способом через Yookassa.\n"
+        "После оплаты бот автоматически активирует подписку.\n"
+        "Если не активировалось — нажми «Проверить оплату»"
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
@@ -145,36 +174,67 @@ async def process_check_payment(callback: CallbackQuery):
     # Обновляем время последней проверки
     await db.update_last_payment_check(tg_id)
 
-    pending = await db.get_last_pending_payment(tg_id)
+    # Получаем последний ожидающий платеж с информацией о провайдере
+    result = await db.db_execute(
+        """
+        SELECT invoice_id, tariff_code, provider
+        FROM payments
+        WHERE tg_id = $1 AND status = 'pending'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (tg_id,),
+        fetch_one=True
+    )
 
-    if not pending:
+    if not result:
         await callback.answer("Нет ожидающих оплаты счетов", show_alert=True)
         return
+
+    invoice_id = result['invoice_id']
+    tariff_code = result['tariff_code']
+    provider = result['provider']
 
     if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)
         return
 
     try:
-        invoice_id, tariff_code = pending
+        if provider == "yookassa":
+            # Проверяем платёж в Yookassa
+            payment = await get_payment_status(invoice_id)
 
-        # Проверяем статус счёта
-        invoice = await get_invoice_status(invoice_id)
+            if payment and payment.get("status") == "succeeded":
+                success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
 
-        if invoice and invoice.get("status") == "paid":
-            # Обрабатываем оплату
-            success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
-
-            if success:
-                await callback.message.edit_text(
-                    "✅ <b>Оплата подтверждена!</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    "Ссылка подписки отправлена в сообщении выше."
-                )
+                if success:
+                    await callback.message.edit_text(
+                        "✅ <b>Оплата подтверждена!</b>\n\n"
+                        f"Тариф: {tariff_code}\n"
+                        "Ссылка подписки отправлена в сообщении выше."
+                    )
+                else:
+                    await callback.answer("Ошибка при активации подписки", show_alert=True)
             else:
-                await callback.answer("Ошибка при активации подписки", show_alert=True)
-        else:
-            await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
+                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
+
+        elif provider == "cryptobot":
+            # Проверяем платёж в CryptoBot
+            invoice = await get_invoice_status(invoice_id)
+
+            if invoice and invoice.get("status") == "paid":
+                success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
+
+                if success:
+                    await callback.message.edit_text(
+                        "✅ <b>Оплата подтверждена!</b>\n\n"
+                        f"Тариф: {tariff_code}\n"
+                        "Ссылка подписки отправлена в сообщении выше."
+                    )
+                else:
+                    await callback.answer("Ошибка при активации подписки", show_alert=True)
+            else:
+                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
 
     except Exception as e:
         logging.error(f"Check payment error: {e}")

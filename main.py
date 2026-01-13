@@ -11,6 +11,7 @@ import database as db
 # Импортируем все роутеры обработчиков
 from handlers import start, callbacks, subscription, gift, referral, promo, admin
 from services.cryptobot import check_cryptobot_invoices
+from services.yookassa import check_yookassa_payments
 
 
 # ────────────────────────────────────────────────
@@ -67,9 +68,10 @@ async def main():
     # Регистрируем обработчики
     setup_handlers()
 
-    # Запускаем фоновую задачу проверки платежей
+    # Запускаем фоновые задачи проверки платежей
     asyncio.create_task(check_cryptobot_invoices(bot))
-    logger.info("Payment checker task started")
+    asyncio.create_task(check_yookassa_payments(bot))
+    logger.info("Payment checker tasks started")
 
     try:
         # Выполняем polling
