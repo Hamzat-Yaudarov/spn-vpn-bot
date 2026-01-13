@@ -15,14 +15,27 @@ router = Router()
 async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
     """Обработчик принятия условий использования"""
     tg_id = callback.from_user.id
+
+    # ⚠️ Проверяем что пользователь ещё не принял условия
+    # (защита от повторного нажатия на кнопку)
+    if await db.has_accepted_terms(tg_id):
+        await callback.answer("Ты уже принял условия ✅", show_alert=True)
+        await state.clear()
+        return
+
     await db.accept_terms(tg_id)
 
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        # Сообщение могло быть удалено раньше
+        logging.debug(f"Failed to delete message: {e}")
+
     await state.clear()
 
     await callback.bot.send_message(
         callback.message.chat.id,
-        "Соглашение принято! Добро пожаловать!"
+        "Соглашение принято! Добро пожаловать! 🎉"
     )
 
     await show_main_menu(callback.message)

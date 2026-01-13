@@ -168,18 +168,18 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
                 ])
 
                 text = (
-                    f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    f"Сумма: {amount} ₽\n\n"
-                    "Оплати картой, СБП или другим способом через Yookassa.\n"
-                    "После оплаты бот автоматически активирует подписку.\n"
-                    "Если не активировалось — нажми «Проверить оплату»"
-                )
+        f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
+        f"Тариф: {tariff_code}\n"
+        f"Сумма: {amount} ₽\n\n"
+        "Оплати картой, СБП или другим способом через Yookassa.\n"
+        "После оплаты бот автоматически активирует подписку.\n"
+        "Если не активировалось — нажми «Проверить оплату»"
+    )
 
-                await callback.message.edit_text(text, reply_markup=kb)
-                await state.clear()
-                logging.info(f"Returned existing Yookassa payment {existing_payment_id} for user {tg_id}")
-                return
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.clear()
+    logging.info(f"Returned existing Yookassa payment {existing_payment_id} for user {tg_id}")
+    return
 
     # Платежа нет или он истёк - создаём новый
     payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
@@ -331,8 +331,10 @@ async def process_my_subscription(callback: CallbackQuery):
     sub_url = "ошибка получения ссылки"
 
     try:
+        # ⚠️ Добавляем таймаут для сессии (максимум 15 сек)
+        timeout = aiohttp.ClientTimeout(total=15, connect=10)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
 
@@ -352,6 +354,9 @@ async def process_my_subscription(callback: CallbackQuery):
                     minutes = (remaining.seconds % 3600) // 60
                     remaining_str = f"{days}д {hours}ч {minutes}м"
 
+    except asyncio.TimeoutError:
+        logging.error(f"Timeout fetching subscription info for user {tg_id}")
+        remaining_str = "ошибка загрузки"
     except Exception as e:
         logging.error(f"Error fetching subscription info from Remnawave: {e}")
         remaining_str = "ошибка загрузки"
