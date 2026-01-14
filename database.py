@@ -390,7 +390,7 @@ async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, p
 
     # Проверяем, не истёк ли счёт (старше 10 минут)
     created_at = result['created_at']
-    age = datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)
+    age = datetime.utcnow() - created_at
 
     if age.total_seconds() > 600:  # 10 минут = 600 секунд
         # Счёт истёк, удаляем его
@@ -418,7 +418,7 @@ async def delete_expired_payments(minutes: int = 10):
     """
     from datetime import datetime, timedelta, timezone
 
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
 
     await db_execute(
         "DELETE FROM payments WHERE status = 'pending' AND created_at < $1",
@@ -563,7 +563,7 @@ async def can_request_gift(tg_id: int) -> tuple[bool, str]:
     # Проверяем anti-spam: не более одной попытки в 2 секунды
     last_gift_attempt = user.get('last_gift_attempt')
     if last_gift_attempt:
-        time_since_attempt = datetime.now(timezone.utc) - last_gift_attempt.replace(tzinfo=timezone.utc)
+        time_since_attempt = datetime.utcnow() - last_gift_attempt
         if time_since_attempt < timedelta(seconds=2):
             return False, "Подожди пару секунд ⏳"
 
@@ -656,7 +656,7 @@ async def can_request_promo(tg_id: int) -> tuple[bool, str]:
     # Проверяем anti-spam: не более одной попытки в 1.5 секунды
     last_promo_attempt = user.get('last_promo_attempt')
     if last_promo_attempt:
-        time_since_attempt = datetime.now(timezone.utc) - last_promo_attempt.replace(tzinfo=timezone.utc)
+        time_since_attempt = datetime.utcnow() - last_promo_attempt
         if time_since_attempt < timedelta(seconds=1.5):
             return False, "Подожди пару секунд ⏳"
 
@@ -687,7 +687,7 @@ async def can_check_payment(tg_id: int) -> tuple[bool, str]:
     # Проверяем anti-spam: не более одной проверки в 1 секунду
     last_payment_check = user.get('last_payment_check')
     if last_payment_check:
-        time_since_check = datetime.now(timezone.utc) - last_payment_check.replace(tzinfo=timezone.utc)
+        time_since_check = datetime.utcnow() - last_payment_check
         if time_since_check < timedelta(seconds=1):
             return False, "Подожди пару секунд ⏳"
 

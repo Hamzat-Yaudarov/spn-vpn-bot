@@ -160,7 +160,7 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             await db.update_payment_status_by_invoice(payment_id, 'paid')
             
             # Обновляем подписку пользователя
-            new_until = datetime.now(timezone.utc) + timedelta(days=days)
+            new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
 
             # Отправляем сообщение пользователю

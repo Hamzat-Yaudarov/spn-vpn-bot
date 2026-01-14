@@ -52,7 +52,7 @@ async def remnawave_get_or_create_user(
         ''.join(secrets.choice(alphabet) for _ in range(21))
     )
 
-    expire_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    expire_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
 
     payload = {
         "username": remna_username,
