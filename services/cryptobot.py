@@ -30,40 +30,35 @@ async def create_cryptobot_invoice(
     Returns:
         Словарь с информацией о счёте или None
     """
-    from main import get_global_session
+    url = f"{CRYPTOBOT_API_URL}/createInvoice"
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
     
-    try:
-        url = f"{CRYPTOBOT_API_URL}/createInvoice"
-        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
-        
-        bot_username = (await bot.get_me()).username
-        
-        payload = {
-            "currency_type": "fiat",
-            "fiat": "RUB",
-            "amount": str(amount),
-            "description": f"Подписка SPN VPN — {tariff_code}",
-            "payload": f"spn_{tg_id}_{tariff_code}",
-            "paid_btn_name": "openBot",
-            "paid_btn_url": f"https://t.me/{bot_username}",
-            "accepted_assets": "USDT,TON,BTC"
-        }
+    bot_username = (await bot.get_me()).username
+    
+    payload = {
+        "currency_type": "fiat",
+        "fiat": "RUB",
+        "amount": str(amount),
+        "description": f"Подписка SPN VPN — {tariff_code}",
+        "payload": f"spn_{tg_id}_{tariff_code}",
+        "paid_btn_name": "openBot",
+        "paid_btn_url": f"https://t.me/{bot_username}",
+        "accepted_assets": "USDT,TON,BTC"
+    }
 
-        session = get_global_session()
-        
-        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("ok"):
-                    logging.info(f"[USER:{tg_id}] Created CryptoBot invoice: {data.get('result', {}).get('invoice_id')}")
-                    return data["result"]
-            
-            error_text = await resp.text()
-            logging.error(f"CryptoBot error {resp.status}: {error_text}")
-    except asyncio.TimeoutError:
-        logging.error(f"[USER:{tg_id}] CryptoBot timeout")
+    connector = aiohttp.TCPConnector(ssl=False)
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        logging.info(f"Created CryptoBot invoice for user {tg_id}")
+                        return data["result"]
+                else:
+                    logging.error(f"CryptoBot error {resp.status}: {await resp.text()}")
     except Exception as e:
-        logging.error(f"[USER:{tg_id}] CryptoBot invoice exception: {e}")
+        logging.error(f"CryptoBot invoice exception: {e}")
     
     return None
 
@@ -78,28 +73,22 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
     Returns:
         Словарь с информацией о счёте или None
     """
-    from main import get_global_session
-    
-    try:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
         url = f"{CRYPTOBOT_API_URL}/getInvoices"
         params = {"invoice_ids": invoice_id}
 
-        session = get_global_session()
-        
-        async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("ok"):
-                    invoices = data["result"]["items"]
-                    if invoices:
-                        return invoices[0]
-            else:
-                logging.error(f"Get invoice status error {resp.status}")
-    except asyncio.TimeoutError:
-        logging.error(f"CryptoBot status check timeout for {invoice_id}")
-    except Exception as e:
-        logging.error(f"Get invoice status exception: {e}")
+        try:
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        invoices = data["result"]["items"]
+                        if invoices:
+                            return invoices[0]
+        except Exception as e:
+            logging.error(f"Get invoice status exception: {e}")
 
     return None
 
@@ -117,80 +106,56 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
     Returns:
         True если успешно, False иначе
     """
-    from main import get_global_session
-    
     try:
-        if tariff_code not in TARIFFS:
-            logging.error(f"[USER:{tg_id}] Invalid tariff code: {tariff_code}")
-            return False
-        
         days = TARIFFS[tariff_code]["days"]
         
-        session = get_global_session()
-        
-        # Создаём или получаем пользователя в Remnawave
-        uuid, username = await remnawave_get_or_create_user(
-            session, tg_id, days, extend_if_exists=True
-        )
-        
-        if not uuid:
-            logging.error(f"[USER:{tg_id}] Failed to create/get Remnawave user")
-            return False
-
-        # Добавляем в сквад
-        if not await remnawave_add_to_squad(session, uuid):
-            logging.warning(f"[USER:{tg_id}] Failed to add to squad, continuing")
-        
-        # Получаем ссылку подписки
-        sub_url = await remnawave_get_subscription_url(session, uuid)
-
-        # Обрабатываем реферальную программу
-        referrer_info = await db.get_referrer(tg_id)
-        if referrer_info and referrer_info[0]:
-            referrer_id = referrer_info[0]
-            is_first_payment = not referrer_info[1]  # first_payment = False → первый платеж
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            # Создаём или получаем пользователя в Remnawave
+            uuid, username = await remnawave_get_or_create_user(
+                session, tg_id, days, extend_if_exists=True
+            )
             
-            if is_first_payment:
-                referrer_user = await db.get_user(referrer_id)
+            if not uuid:
+                logging.error(f"Failed to create/get Remnawave user for {tg_id}")
+                return False
+
+            # Добавляем в сквад
+            await remnawave_add_to_squad(session, uuid)
+            
+            # Получаем ссылку подписки
+            sub_url = await remnawave_get_subscription_url(session, uuid)
+
+            # Обрабатываем реферальную программу
+            referrer = await db.get_referrer(tg_id)
+            if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
+                referrer_uuid_row = await db.get_user(referrer[0])
+                if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
+                    await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
+                    await db.increment_active_referrals(referrer[0])
+                    logging.info(f"Referral bonus given to {referrer[0]}")
                 
-                if referrer_user and referrer_user['remnawave_uuid']:
-                    # Проверяем что у рефер есть активная подписка
-                    expire_date = referrer_user.get('subscription_until')
-                    if expire_date:
-                        expire_dt = datetime.fromisoformat(expire_date.replace('Z', '+00:00'))
-                        
-                        if expire_dt > datetime.now(timezone.utc):
-                            # Подписка активна - даём бонус
-                            success = await remnawave_extend_subscription(session, referrer_user['remnawave_uuid'], 7)
-                            if success:
-                                await db.increment_active_referrals(referrer_id)
-                                logging.info(f"[USER:{tg_id}] Referral bonus given to {referrer_id}: +7 days")
-                        else:
-                            logging.warning(f"[USER:{tg_id}] Referrer {referrer_id} subscription expired")
-                
-                # Отмечаем первый платеж
                 await db.mark_first_payment(tg_id)
 
-        # Обновляем платеж в БД
-        await db.update_payment_status_by_invoice(invoice_id, 'paid')
-        
-        # Обновляем подписку пользователя
-        new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-        await db.update_subscription(tg_id, uuid, username, new_until, None)
+            # Обновляем платеж в БД
+            await db.update_payment_status_by_invoice(invoice_id, 'paid')
+            
+            # Обновляем подписку пользователя
+            new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            await db.update_subscription(tg_id, uuid, username, new_until, None)
 
-        # Отправляем сообщение пользователю
-        text = (
-            "✅ <b>Оплата прошла успешно!</b>\n\n"
-            f"Тариф: {tariff_code} ({days} дней)\n"
-            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
-        )
-        await bot.send_message(tg_id, text)
-        
-        logging.info(f"[USER:{tg_id}] Payment processed successfully: {tariff_code} (+{days} days)")
-        return True
+            # Отправляем сообщение пользователю
+            text = (
+                "✅ <b>Оплата прошла успешно!</b>\n\n"
+                f"Тариф: {tariff_code} ({days} дней)\n"
+                f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+            )
+            await bot.send_message(tg_id, text)
+            
+            return True
 
     except Exception as e:
-        logging.error(f"[USER:{tg_id}] Process paid invoice exception: {e}", exc_info=True)
+        logging.error(f"Process paid invoice exception: {e}")
         return False
 
 
@@ -201,46 +166,33 @@ async def check_cryptobot_invoices(bot):
     Args:
         bot: Экземпляр Bot
     """
-    logger = logging.getLogger(__name__)
-    logger.info("CryptoBot payment checker started")
-    
     while True:
-        try:
-            await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
+        await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
-            pending = await db.get_pending_payments_by_provider('cryptobot')
+        pending = await db.get_pending_payments()
 
-            if not pending:
+        if not pending:
+            continue
+
+        for payment_record in pending:
+            payment_id = payment_record['id']
+            tg_id = payment_record['tg_id']
+            invoice_id = payment_record['invoice_id']
+            tariff_code = payment_record['tariff_code']
+            
+            if not await db.acquire_user_lock(tg_id):
                 continue
 
-            logger.debug(f"Checking {len(pending)} pending CryptoBot payments")
-
-            for payment_record in pending:
-                payment_id = payment_record['id']
-                tg_id = payment_record['tg_id']
-                invoice_id = payment_record['invoice_id']
-                tariff_code = payment_record['tariff_code']
+            try:
+                invoice = await get_invoice_status(invoice_id)
                 
-                async with db.UserLockContext(tg_id) as acquired:
-                    if not acquired:
-                        continue
+                if invoice and invoice.get("status") == "paid":
+                    success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
+                    if success:
+                        logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")
 
-                    try:
-                        invoice = await get_invoice_status(invoice_id)
-                        
-                        if invoice and invoice.get("status") == "paid":
-                            # Проверяем идемпотентность
-                            if not await db.mark_payment_processed(invoice_id):
-                                logger.debug(f"[USER:{tg_id}] Invoice {invoice_id} already processed")
-                                continue
-                            
-                            success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
-                            if success:
-                                logger.info(f"[USER:{tg_id}] Processed CryptoBot payment: {invoice_id}")
-
-                    except Exception as e:
-                        logger.error(f"[USER:{tg_id}] Check CryptoBot invoice error: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"CryptoBot checker exception: {e}", exc_info=True)
-            await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
+            except Exception as e:
+                logging.error(f"Check invoice error for {tg_id}: {e}")
+            
+            finally:
+                await db.release_user_lock(tg_id)
