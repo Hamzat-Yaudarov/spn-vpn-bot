@@ -1,5 +1,4 @@
 import logging
-import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -36,7 +35,12 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     tariff_code = callback.data.split("_")[1]
     await state.update_data(tariff_code=tariff_code)
 
-    tariff = TARIFFS[tariff_code]
+    tariff = TARIFFS.get(tariff_code)
+    
+    if not tariff:
+        await callback.message.edit_text("❌ Неверный тариф")
+        await state.clear()
+        return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
@@ -56,8 +60,8 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
 
-    if not tariff_code:
-        await callback.message.edit_text("Ошибка: тариф не выбран")
+    if not tariff_code or tariff_code not in TARIFFS:
+        await callback.message.edit_text("❌ Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -65,73 +69,85 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     amount = tariff["price"]
     tg_id = callback.from_user.id
 
-    # Проверяем, есть ли уже активный счёт для этого пользователя и тарифа
-    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot")
+    try:
+        # Проверяем, есть ли уже активный счёт для этого пользователя и тарифа
+        existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot")
 
-    if existing_invoice_id:
-        # Счёт уже есть - получаем его статус
-        invoice = await get_invoice_status(existing_invoice_id)
+        if existing_invoice_id:
+            # Счёт уже есть - получаем его статус
+            invoice = await get_invoice_status(existing_invoice_id)
 
-        if invoice and invoice.get("status") == "active":
-            pay_url = invoice.get("bot_invoice_url", "")
+            if invoice and invoice.get("status") == "active":
+                pay_url = invoice.get("bot_invoice_url", "")
 
-            if pay_url:
-                # Возвращаем существующий счёт
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-                ])
+                if pay_url:
+                    # Возвращаем существующий счёт
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
+                        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+                    ])
 
-                text = (
-                    f"<b>Счёт на оплату (существующий)</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    f"Сумма: {amount} ₽\n\n"
-                    "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
-                    "Если не активировалось — нажми «Проверить оплату»"
-                )
+                    text = (
+                        f"<b>Счёт на оплату (существующий)</b>\n\n"
+                        f"Тариф: {tariff_code}\n"
+                        f"Сумма: {amount} ₽\n\n"
+                        "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
+                        "Если не активировалось — нажми «Проверить оплату»"
+                    )
 
-                await callback.message.edit_text(text, reply_markup=kb)
-                await state.clear()
-                logging.info(f"Returned existing CryptoBot invoice {existing_invoice_id} for user {tg_id}")
-                return
+                    await callback.message.edit_text(text, reply_markup=kb)
+                    await state.clear()
+                    logging.info(f"[USER:{tg_id}] Returned existing CryptoBot invoice {existing_invoice_id}")
+                    return
 
-    # Счёта нет или он истёк - создаём новый
-    invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
+        # Счёта нет или он истёк - создаём новый
+        invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
 
-    if not invoice:
-        await callback.message.edit_text("Ошибка создания счёта в CryptoBot. Попробуй позже.")
+        if not invoice:
+            await callback.message.edit_text("❌ Ошибка создания счёта в CryptoBot. Попробуй позже.")
+            await state.clear()
+            return
+
+        invoice_id = invoice["invoice_id"]
+        pay_url = invoice.get("bot_invoice_url", "")
+
+        if not pay_url:
+            await callback.message.edit_text("❌ Ошибка: не получена ссылка для оплаты")
+            await state.clear()
+            return
+
+        # Записываем платеж в БД
+        await db.create_payment(
+            tg_id,
+            tariff_code,
+            amount,
+            "cryptobot",
+            invoice_id
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
+            [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+        ])
+
+        text = (
+            f"<b>Счёт на оплату</b>\n\n"
+            f"Тариф: {tariff_code}\n"
+            f"Сумма: {amount} ₽\n\n"
+            "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
+            "Если не активировалось — нажми «Проверить оплату»"
+        )
+
+        await callback.message.edit_text(text, reply_markup=kb)
         await state.clear()
-        return
+        logging.info(f"[USER:{tg_id}] Created new CryptoBot invoice {invoice_id} for {tariff_code}")
 
-    invoice_id = invoice["invoice_id"]
-    pay_url = invoice["bot_invoice_url"]
-
-    # Записываем платеж в БД
-    await db.create_payment(
-        tg_id,
-        tariff_code,
-        amount,
-        "cryptobot",
-        invoice_id
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-    ])
-
-    text = (
-        f"<b>Счёт на оплату</b>\n\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n\n"
-        "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
-        "Если не активировалось — нажми «Проверить оплату»"
-    )
-
-    await callback.message.edit_text(text, reply_markup=kb)
-    await state.clear()
+    except Exception as e:
+        logging.error(f"[USER:{tg_id}] CryptoBot payment error: {e}", exc_info=True)
+        await callback.message.edit_text("❌ Ошибка при создании счёта. Попробуй позже.")
+        await state.clear()
 
 
 @router.callback_query(F.data == "pay_yookassa")
@@ -140,8 +156,8 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
 
-    if not tariff_code:
-        await callback.message.edit_text("Ошибка: тариф не выбран")
+    if not tariff_code or tariff_code not in TARIFFS:
+        await callback.message.edit_text("❌ Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -149,80 +165,87 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     amount = tariff["price"]
     tg_id = callback.from_user.id
 
-    # Проверяем, есть ли уже активный платёж для этого пользователя и тарифа
-    existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa")
+    try:
+        # Проверяем, есть ли уже активный платёж для этого пользователя и тарифа
+        existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa")
 
-    if existing_payment_id:
-        # Платёж уже есть - получаем его статус
-        payment = await get_payment_status(existing_payment_id)
+        if existing_payment_id:
+            # Платёж уже есть - получаем его статус
+            payment = await get_payment_status(existing_payment_id)
 
-        if payment and payment.get("status") == "pending":
-            confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
+            if payment and payment.get("status") == "pending":
+                confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
 
-            if confirmation_url:
-                # Возвращаем существующий платёж
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-                ])
+                if confirmation_url:
+                    # Возвращаем существующий платёж
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
+                        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+                    ])
 
-                text = (
-                    f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    f"Сумма: {amount} ₽\n\n"
-                    "Оплати картой, СБП или другим способом через Yookassa.\n"
-                    "После оплаты бот автоматически активирует подписку.\n"
-                    "Если не активировалось — нажми «Проверить оплату»"
-                )
+                    text = (
+                        f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
+                        f"Тариф: {tariff_code}\n"
+                        f"Сумма: {amount} ₽\n\n"
+                        "Оплати картой, СБП или другим способом через Yookassa.\n"
+                        "После оплаты бот автоматически активирует подписку.\n"
+                        "Если не активировалось — нажми «Проверить оплату»"
+                    )
 
-                await callback.message.edit_text(text, reply_markup=kb)
-                await state.clear()
-                logging.info(f"Returned existing Yookassa payment {existing_payment_id} for user {tg_id}")
-                return
+                    await callback.message.edit_text(text, reply_markup=kb)
+                    await state.clear()
+                    logging.info(f"[USER:{tg_id}] Returned existing Yookassa payment {existing_payment_id}")
+                    return
 
-    # Платежа нет или он истёк - создаём новый
-    payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
+        # Платежа нет или он истёк - создаём новый
+        payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
 
-    if not payment:
-        await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
+        if not payment:
+            await callback.message.edit_text("❌ Ошибка создания платежа в Yookassa. Попробуй позже.")
+            await state.clear()
+            return
+
+        payment_id = payment["id"]
+        confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+        if not confirmation_url:
+            await callback.message.edit_text("❌ Ошибка: не получена ссылка для оплаты")
+            await state.clear()
+            return
+
+        # Записываем платеж в БД
+        await db.create_payment(
+            tg_id,
+            tariff_code,
+            amount,
+            "yookassa",
+            payment_id
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
+            [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+        ])
+
+        text = (
+            f"<b>💳 Yookassa</b>\n\n"
+            f"Тариф: {tariff_code}\n"
+            f"Сумма: {amount} ₽\n\n"
+            "Оплати картой, СБП или другим способом через Yookassa.\n"
+            "После оплаты бот автоматически активирует подписку.\n"
+            "Если не активировалось — нажми «Проверить оплату»"
+        )
+
+        await callback.message.edit_text(text, reply_markup=kb)
         await state.clear()
-        return
+        logging.info(f"[USER:{tg_id}] Created new Yookassa payment {payment_id} for {tariff_code}")
 
-    payment_id = payment["id"]
-    confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
-
-    if not confirmation_url:
-        await callback.message.edit_text("Ошибка: не получена ссылка для оплаты")
+    except Exception as e:
+        logging.error(f"[USER:{tg_id}] Yookassa payment error: {e}", exc_info=True)
+        await callback.message.edit_text("❌ Ошибка при создании платежа. Попробуй позже.")
         await state.clear()
-        return
-
-    # Записываем платеж в БД
-    await db.create_payment(
-        tg_id,
-        tariff_code,
-        amount,
-        "yookassa",
-        payment_id
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-    ])
-
-    text = (
-        f"<b>💳 Yookassa</b>\n\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n\n"
-        "Оплати картой, СБП или другим способом через Yookassa.\n"
-        "После оплаты бот автоматически активирует подписку.\n"
-        "Если не активировалось — нажми «Проверить оплату»"
-    )
-
-    await callback.message.edit_text(text, reply_markup=kb)
-    await state.clear()
 
 
 @router.callback_query(F.data == "check_payment")
@@ -260,53 +283,65 @@ async def process_check_payment(callback: CallbackQuery):
     tariff_code = result['tariff_code']
     provider = result['provider']
 
-    if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
-        return
+    async with db.UserLockContext(tg_id) as acquired:
+        if not acquired:
+            await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+            return
 
-    try:
-        if provider == "yookassa":
-            # Проверяем платёж в Yookassa
-            payment = await get_payment_status(invoice_id)
+        try:
+            if provider == "yookassa":
+                # Проверяем платёж в Yookassa
+                payment = await get_payment_status(invoice_id)
 
-            if payment and payment.get("status") == "succeeded":
-                success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
+                if payment and payment.get("status") == "succeeded":
+                    # Проверяем идемпотентность: не обработан ли платеж уже
+                    if not await db.mark_payment_processed(invoice_id):
+                        await callback.answer("Платеж уже обработан", show_alert=True)
+                        return
+                    
+                    success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
 
-                if success:
-                    await callback.message.edit_text(
-                        "✅ <b>Оплата подтверждена!</b>\n\n"
-                        f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
-                    )
+                    if success:
+                        await callback.message.edit_text(
+                            "✅ <b>Оплата подтверждена!</b>\n\n"
+                            f"Тариф: {tariff_code}\n"
+                            "Ссылка подписки отправлена в сообщении выше."
+                        )
+                        logging.info(f"[USER:{tg_id}] Yookassa payment confirmed: {invoice_id}")
+                    else:
+                        await callback.answer("Ошибка при активации подписки", show_alert=True)
+                        logging.error(f"[USER:{tg_id}] Failed to process Yookassa payment {invoice_id}")
                 else:
-                    await callback.answer("Ошибка при активации подписки", show_alert=True)
-            else:
-                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
+                    await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
 
-        elif provider == "cryptobot":
-            # Проверяем платёж в CryptoBot
-            invoice = await get_invoice_status(invoice_id)
+            elif provider == "cryptobot":
+                # Проверяем платёж в CryptoBot
+                invoice = await get_invoice_status(invoice_id)
 
-            if invoice and invoice.get("status") == "paid":
-                success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
+                if invoice and invoice.get("status") == "paid":
+                    # Проверяем идемпотентность: не обработан ли платеж уже
+                    if not await db.mark_payment_processed(invoice_id):
+                        await callback.answer("Платеж уже обработан", show_alert=True)
+                        return
+                    
+                    success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
 
-                if success:
-                    await callback.message.edit_text(
-                        "✅ <b>Оплата подтверждена!</b>\n\n"
-                        f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
-                    )
+                    if success:
+                        await callback.message.edit_text(
+                            "✅ <b>Оплата подтверждена!</b>\n\n"
+                            f"Тариф: {tariff_code}\n"
+                            "Ссылка подписки отправлена в сообщении выше."
+                        )
+                        logging.info(f"[USER:{tg_id}] CryptoBot payment confirmed: {invoice_id}")
+                    else:
+                        await callback.answer("Ошибка при активации подписки", show_alert=True)
+                        logging.error(f"[USER:{tg_id}] Failed to process CryptoBot payment {invoice_id}")
                 else:
-                    await callback.answer("Ошибка при активации подписки", show_alert=True)
-            else:
-                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
+                    await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
 
-    except Exception as e:
-        logging.error(f"Check payment error: {e}")
-        await callback.answer("Ошибка при проверке платежа", show_alert=True)
-
-    finally:
-        await db.release_user_lock(tg_id)
+        except Exception as e:
+            logging.error(f"[USER:{tg_id}] Check payment error: {e}", exc_info=True)
+            await callback.answer("Ошибка при проверке платежа", show_alert=True)
 
 
 @router.callback_query(F.data == "my_subscription")
@@ -331,29 +366,31 @@ async def process_my_subscription(callback: CallbackQuery):
     sub_url = "ошибка получения ссылки"
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            # Получаем ссылку подписки
-            sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
+        from main import get_global_session
+        
+        session = get_global_session()
+        
+        # Получаем ссылку подписки
+        sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
 
-            # Получаем информацию о пользователе (включая expireAt)
-            user_info = await remnawave_get_user_info(session, user['remnawave_uuid'])
+        # Получаем информацию о пользователе (включая expireAt)
+        user_info = await remnawave_get_user_info(session, user['remnawave_uuid'])
 
-            if user_info and "expireAt" in user_info:
-                expire_at = user_info["expireAt"]
-                exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
-                remaining = exp_date - datetime.now(timezone.utc)
+        if user_info and "expireAt" in user_info:
+            expire_at = user_info["expireAt"]
+            exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
+            remaining = exp_date - datetime.now(timezone.utc)
 
-                if remaining.total_seconds() <= 0:
-                    remaining_str = "истекла"
-                else:
-                    days = remaining.days
-                    hours = remaining.seconds // 3600
-                    minutes = (remaining.seconds % 3600) // 60
-                    remaining_str = f"{days}д {hours}ч {minutes}м"
+            if remaining.total_seconds() <= 0:
+                remaining_str = "истекла"
+            else:
+                days = remaining.days
+                hours = remaining.seconds // 3600
+                minutes = (remaining.seconds % 3600) // 60
+                remaining_str = f"{days}д {hours}ч {minutes}м"
 
     except Exception as e:
-        logging.error(f"Error fetching subscription info from Remnawave: {e}")
+        logging.error(f"[USER:{tg_id}] Error fetching subscription info: {e}", exc_info=True)
         remaining_str = "ошибка загрузки"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[

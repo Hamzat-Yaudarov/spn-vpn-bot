@@ -1,5 +1,4 @@
 import logging
-import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -42,76 +41,81 @@ async def process_promo_input(message: Message, state: FSMContext):
     # Обновляем время последней попытки
     await db.update_last_promo_attempt(tg_id)
 
-    if not await db.acquire_user_lock(tg_id):
-        await message.answer("Подожди пару секунд ⏳")
-        await state.clear()
-        await show_main_menu(message)
-        return
-
-    try:
-        # Атомарно проверяем и увеличиваем счётчик использования промокода
-        success, error_msg = await db.increment_promo_usage_atomic(code)
-
-        if not success:
-            await message.answer(f"❌ {error_msg}")
+    async with db.UserLockContext(tg_id) as acquired:
+        if not acquired:
+            await message.answer("Подожди пару секунд ⏳")
             await state.clear()
             await show_main_menu(message)
             return
 
-        # Получаем информацию о промокоде (дни)
-        promo = await db.get_promo_code(code)
-        if not promo:
-            await message.answer("❌ Ошибка при получении информации о промокоде")
-            await state.clear()
-            await show_main_menu(message)
-            return
+        try:
+            # Атомарно проверяем и увеличиваем счётчик использования промокода
+            success, error_msg = await db.increment_promo_usage_atomic(code)
 
-        days = promo[0]
+            if not success:
+                await message.answer(f"❌ {error_msg}")
+                await state.clear()
+                await show_main_menu(message)
+                return
 
-        # Создаём или получаем пользователя в Remnawave
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+            # Получаем информацию о промокоде (дни)
+            promo = await db.get_promo_code(code)
+            if not promo:
+                await message.answer("❌ Ошибка при получении информации о промокоде")
+                logging.error(f"Promo code info not found after increment: {code}")
+                await state.clear()
+                await show_main_menu(message)
+                return
+
+            days = promo[0]  # Первый элемент - дни
+
+            # Создаём или получаем пользователя в Remnawave
+            from main import get_global_session
+            
+            session = get_global_session()
+            
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days=days, extend_if_exists=True
             )
 
             if not uuid:
+                logging.error(f"[USER:{tg_id}] Failed to create/get Remnawave user for promo {code}")
                 await message.answer("❌ Ошибка при применении промокода")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
             # Добавляем в сквад
-            await remnawave_add_to_squad(session, uuid)
+            if not await remnawave_add_to_squad(session, uuid):
+                logging.warning(f"[USER:{tg_id}] Failed to add to squad, continuing anyway")
 
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
 
             if not sub_url:
+                logging.error(f"[USER:{tg_id}] Failed to get subscription URL for promo {code}")
                 await message.answer("❌ Ошибка при получении ссылки подписки")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-        # Обновляем подписку пользователя в БД
-        new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-        await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            # Обновляем подписку пользователя в БД
+            new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        # Отправляем успешное сообщение
-        await message.answer(
-            f"✅ <b>Промокод активирован!</b>\n\n"
-            f"Добавлено {days} дней подписки\n\n"
-            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
-        )
+            # Отправляем успешное сообщение
+            await message.answer(
+                f"✅ <b>Промокод активирован!</b>\n\n"
+                f"Добавлено {days} дней подписки\n\n"
+                f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+            )
 
-        logging.info(f"Promo code {code} applied by user {tg_id}")
+            logging.info(f"[USER:{tg_id}] Promo code activated: {code} → +{days} days")
 
-    except Exception as e:
-        logging.error(f"Promo error: {e}")
-        await message.answer("❌ Ошибка при применении промокода")
+        except Exception as e:
+            logging.error(f"[USER:{tg_id}] Promo activation error: {e}", exc_info=True)
+            await message.answer("❌ Ошибка при применении промокода")
 
-    finally:
-        await db.release_user_lock(tg_id)
-
-    await state.clear()
-    await show_main_menu(message)
+        finally:
+            await state.clear()
+            await show_main_menu(message)

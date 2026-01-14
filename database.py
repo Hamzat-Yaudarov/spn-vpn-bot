@@ -207,13 +207,14 @@ async def db_execute(query, params=(), fetch_one=False, fetch_all=False):
             raise
 
 
-async def acquire_user_lock(tg_id: int) -> bool:
+async def acquire_user_lock(tg_id: int, timeout: float = 5.0) -> bool:
     """
     Получить блокировку пользователя используя PostgreSQL advisory lock
-    
+
     Args:
         tg_id: ID пользователя Telegram
-        
+        timeout: Таймаут ожидания блокировки в секундах
+
     Returns:
         True если удалось получить блокировку, False иначе
     """
@@ -221,6 +222,7 @@ async def acquire_user_lock(tg_id: int) -> bool:
     async with pool.acquire() as conn:
         try:
             # Используем advisory lock с ID пользователя
+            # pg_try_advisory_lock - неблокирующая версия
             result = await conn.fetchval(
                 "SELECT pg_try_advisory_lock($1);",
                 tg_id
@@ -234,7 +236,7 @@ async def acquire_user_lock(tg_id: int) -> bool:
 async def release_user_lock(tg_id: int):
     """
     Освободить блокировку пользователя
-    
+
     Args:
         tg_id: ID пользователя Telegram
     """
@@ -247,6 +249,50 @@ async def release_user_lock(tg_id: int):
             )
         except Exception as e:
             logging.error(f"Unlock error: {e}")
+
+
+class UserLockContext:
+    """Асинхронный context manager для блокировок пользователя с гарантией освобождения"""
+
+    def __init__(self, tg_id: int, max_retries: int = 50, retry_delay: float = 0.1):
+        """
+        Args:
+            tg_id: ID пользователя Telegram
+            max_retries: Максимальное количество попыток получить блокировку
+            retry_delay: Задержка между попытками в секундах
+        """
+        self.tg_id = tg_id
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.acquired = False
+
+    async def __aenter__(self):
+        """Получить блокировку с повторными попытками"""
+        import asyncio
+
+        for attempt in range(self.max_retries):
+            if await acquire_user_lock(self.tg_id):
+                self.acquired = True
+                logging.debug(f"Lock acquired for user {self.tg_id}")
+                return True
+
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self.retry_delay)
+
+        logging.warning(f"Failed to acquire lock for user {self.tg_id} after {self.max_retries} retries")
+        return False
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Освободить блокировку (гарантированно вызывается даже при исключениях)"""
+        if self.acquired:
+            try:
+                await release_user_lock(self.tg_id)
+                logging.debug(f"Lock released for user {self.tg_id}")
+            except Exception as e:
+                logging.error(f"Error releasing lock for user {self.tg_id}: {e}")
+
+        # Не подавляем исключения
+        return False
 
 
 # ────────────────────────────────────────────────
@@ -333,13 +379,13 @@ async def has_subscription(tg_id: int) -> bool:
 
 async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
     """Создать запись о платеже"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         """
         INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
         VALUES ($1, $2, $3, $4, $5, $6)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id))
+        (tg_id, tariff_code, amount, datetime.now(timezone.utc), provider, str(invoice_id))
     )
 
 
@@ -572,10 +618,10 @@ async def can_request_gift(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_gift_attempt(tg_id: int):
     """Обновить время последней попытки получить подарок"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_gift_attempt = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
 
 
@@ -665,10 +711,10 @@ async def can_request_promo(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_promo_attempt(tg_id: int):
     """Обновить время последней попытки активировать промокод"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_promo_attempt = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
 
 
@@ -696,8 +742,109 @@ async def can_check_payment(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_payment_check(tg_id: int):
     """Обновить время последней проверки платежа"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
+
+
+# ────────────────────────────────────────────────
+#           PAYMENT IDEMPOTENCY CHECK
+# ────────────────────────────────────────────────
+
+async def is_payment_already_processed(invoice_id: str) -> bool:
+    """
+    Проверить был ли платеж уже обработан (идемпотентность)
+
+    Args:
+        invoice_id: ID платежа
+
+    Returns:
+        True если платеж уже обработан (статус = 'paid'), False иначе
+    """
+    result = await db_execute(
+        "SELECT status FROM payments WHERE invoice_id = $1",
+        (invoice_id,),
+        fetch_one=True
+    )
+
+    if result:
+        return result['status'] == 'paid'
+    return False
+
+
+async def mark_payment_processed(invoice_id: str) -> bool:
+    """
+    Атомарно отметить платеж как обработанный (статус 'paid')
+    Гарантирует что только один обработчик обработает платеж
+
+    Args:
+        invoice_id: ID платежа
+
+    Returns:
+        True если успешно отметили (платеж был 'pending'), False иначе
+    """
+    result = await db_execute(
+        """
+        UPDATE payments
+        SET status = 'paid'
+        WHERE invoice_id = $1 AND status = 'pending'
+        RETURNING 1
+        """,
+        (invoice_id,),
+        fetch_one=True
+    )
+    return result is not None
+
+
+# ────────────────────────────────────────────────
+#              STATISTICS & ANALYTICS
+# ────────────────────────────────────────────────
+
+async def get_overall_stats() -> dict | None:
+    """
+    Получить общую статистику бота
+
+    Returns:
+        Словарь со статистикой или None если ошибка
+    """
+    from datetime import datetime, timezone
+
+    try:
+        result = await db_execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM users WHERE subscription_until IS NOT NULL
+                 AND subscription_until > $1) as active_subscriptions,
+                (SELECT COUNT(*) FROM users WHERE accepted_terms = TRUE) as accepted_terms,
+                (SELECT COUNT(*) FROM payments WHERE status = 'paid') as paid_payments,
+                (SELECT COUNT(*) FROM payments WHERE status = 'pending') as pending_payments,
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid') as total_revenue,
+                (SELECT COUNT(*) FROM users WHERE gift_received = TRUE) as gifts_given,
+                (SELECT COUNT(*) FROM users WHERE referrer_id IS NOT NULL) as total_referrals,
+                (SELECT COALESCE(SUM(active_referrals), 0) FROM users) as active_referrals,
+                (SELECT COUNT(*) FROM promo_codes WHERE used_count > 0) as promos_used
+            """,
+            (datetime.now(timezone.utc),),
+            fetch_one=True
+        )
+
+        if result:
+            return {
+                'total_users': result['total_users'] or 0,
+                'active_subscriptions': result['active_subscriptions'] or 0,
+                'accepted_terms': result['accepted_terms'] or 0,
+                'paid_payments': result['paid_payments'] or 0,
+                'pending_payments': result['pending_payments'] or 0,
+                'total_revenue': float(result['total_revenue'] or 0),
+                'gifts_given': result['gifts_given'] or 0,
+                'total_referrals': result['total_referrals'] or 0,
+                'active_referrals': result['active_referrals'] or 0,
+                'promos_used': result['promos_used'] or 0,
+            }
+    except Exception as e:
+        logging.error(f"Get overall stats error: {e}", exc_info=True)
+
+    return None
