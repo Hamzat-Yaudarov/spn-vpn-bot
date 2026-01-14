@@ -22,23 +22,15 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     args = message.text.split()
     referrer_id = None
 
-    # Проверяем есть ли уже такой пользователь в БД
-    user_already_exists = await db.user_exists(tg_id)
-
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
             referrer_id = int(args[1].split("_")[1])
-            # ⚠️ ВАЖНО: Считаем реф-ссылку только если пользователь ещё не создан!
-            # Это предотвращает race condition когда пользователь дважды нажимает /start
-            if not user_already_exists:
-                await db.update_referral_count(referrer_id)
-                logging.info(f"New user {tg_id} joined via referral link from {referrer_id}")
-            else:
-                logging.info(f"User {tg_id} re-opened bot with referral link from {referrer_id} (already exists)")
+            await db.update_referral_count(referrer_id)
+            logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
         except (ValueError, IndexError):
             referrer_id = None
 
-    # Создаём пользователя если его нет (или обновляем существующего)
+    # Создаём пользователя если его нет
     await db.create_user(tg_id, username, referrer_id)
 
     # Проверяем принял ли пользователь условия

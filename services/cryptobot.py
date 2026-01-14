@@ -96,56 +96,35 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
 async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:
     """
     Обработать оплаченный счёт и активировать подписку
-
+    
     Args:
         bot: Экземпляр Bot
         tg_id: ID пользователя Telegram
         invoice_id: ID счёта в CryptoBot
         tariff_code: Код тарифа
-
+        
     Returns:
         True если успешно, False иначе
     """
     try:
         days = TARIFFS[tariff_code]["days"]
-
-        timeout = aiohttp.ClientTimeout(total=15, connect=10)
+        
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             # Создаём или получаем пользователя в Remnawave
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days, extend_if_exists=True
             )
-
+            
             if not uuid:
-                # ⚠️ ОТКАТЫВАЕМ ПЛАТЁЖ если ошибка создания пользователя
-                await db.update_payment_status_by_invoice(invoice_id, 'failed')
-                logging.error(f"Failed to create/get Remnawave user for {tg_id}, payment marked as failed")
-                await bot.send_message(
-                    tg_id,
-                    "❌ <b>Ошибка при активации подписки</b>\n\n"
-                    "Платёж зарезервирован. Пожалуйста свяжитесь с поддержкой."
-                )
+                logging.error(f"Failed to create/get Remnawave user for {tg_id}")
                 return False
 
             # Добавляем в сквад
-            squad_added = await remnawave_add_to_squad(session, uuid)
-            if not squad_added:
-                # ⚠️ ОТКАТЫВАЕМ ПЛАТЁЖ если ошибка добавления в сквад
-                await db.update_payment_status_by_invoice(invoice_id, 'failed')
-                logging.error(f"Failed to add user {uuid} to squad, payment marked as failed")
-                await bot.send_message(
-                    tg_id,
-                    "❌ <b>Ошибка при активации подписки</b>\n\n"
-                    "Платёж зарезервирован. Пожалуйста свяжитесь с поддержкой."
-                )
-                return False
-
+            await remnawave_add_to_squad(session, uuid)
+            
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
-            if not sub_url:
-                logging.warning(f"Failed to get subscription URL for {uuid}, using generic message")
-                sub_url = "ошибка получения ссылки"
 
             # Обрабатываем реферальную программу
             referrer = await db.get_referrer(tg_id)
@@ -155,12 +134,12 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
                     await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
                     await db.increment_active_referrals(referrer[0])
                     logging.info(f"Referral bonus given to {referrer[0]}")
-
+                
                 await db.mark_first_payment(tg_id)
 
             # Обновляем платеж в БД
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
-
+            
             # Обновляем подписку пользователя
             new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
             await db.update_subscription(tg_id, uuid, username, new_until, None)
@@ -172,35 +151,11 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
                 f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
             )
             await bot.send_message(tg_id, text)
-
-            logging.info(f"Payment processed successfully: user={tg_id}, tariff={tariff_code}, days={days}")
+            
             return True
 
-    except asyncio.TimeoutError:
-        # ⚠️ ОТКАТЫВАЕМ ПЛАТЁЖ при таймауте
-        await db.update_payment_status_by_invoice(invoice_id, 'failed')
-        logging.error(f"Timeout while processing payment for {tg_id}, payment marked as failed")
-        try:
-            await bot.send_message(
-                tg_id,
-                "⏱️ <b>Истекло время ожидания</b>\n\n"
-                "Платёж был зарезервирован. Попробуйте проверить платёж позже."
-            )
-        except Exception:
-            pass
-        return False
     except Exception as e:
-        # ⚠️ ОТКАТЫВАЕМ ПЛАТЁЖ при других ошибках
-        await db.update_payment_status_by_invoice(invoice_id, 'failed')
-        logging.error(f"Process paid invoice exception: {e}, payment marked as failed")
-        try:
-            await bot.send_message(
-                tg_id,
-                "❌ <b>Неизвестная ошибка при активации подписки</b>\n\n"
-                "Платёж был зарезервирован. Свяжитесь с поддержкой."
-            )
-        except Exception:
-            pass
+        logging.error(f"Process paid invoice exception: {e}")
         return False
 
 

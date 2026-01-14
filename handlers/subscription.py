@@ -331,10 +331,8 @@ async def process_my_subscription(callback: CallbackQuery):
     sub_url = "ошибка получения ссылки"
 
     try:
-        # ⚠️ Добавляем таймаут для сессии (максимум 15 сек)
-        timeout = aiohttp.ClientTimeout(total=15, connect=10)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
 
@@ -354,9 +352,6 @@ async def process_my_subscription(callback: CallbackQuery):
                     minutes = (remaining.seconds % 3600) // 60
                     remaining_str = f"{days}д {hours}ч {minutes}м"
 
-    except asyncio.TimeoutError:
-        logging.error(f"Timeout fetching subscription info for user {tg_id}")
-        remaining_str = "ошибка загрузки"
     except Exception as e:
         logging.error(f"Error fetching subscription info from Remnawave: {e}")
         remaining_str = "ошибка загрузки"

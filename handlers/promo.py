@@ -69,10 +69,8 @@ async def process_promo_input(message: Message, state: FSMContext):
         days = promo[0]
 
         # Создаём или получаем пользователя в Remnawave
-        # ⚠️ Добавляем таймаут для сессии (максимум 15 сек)
-        timeout = aiohttp.ClientTimeout(total=15, connect=10)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days=days, extend_if_exists=True
             )

@@ -1,5 +1,4 @@
 import logging
-import asyncio
 import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
@@ -37,41 +36,14 @@ async def process_get_gift(callback: CallbackQuery):
     try:
         # Проверяем подписку на канал новостей
         try:
-            # ⚠️ Добавляем таймаут для проверки канала (максимум 5 сек)
-            member = await asyncio.wait_for(
-                callback.bot.get_chat_member(f"@{NEWS_CHANNEL_USERNAME}", tg_id),
-                timeout=5.0
-            )
+            member = await callback.bot.get_chat_member(f"@{NEWS_CHANNEL_USERNAME}", tg_id)
             logging.info(f"Channel check: user={tg_id}, status={member.status}")
-        except asyncio.TimeoutError:
-            # Бот не ответил вовремя
-            logging.error(f"Timeout checking channel membership for user {tg_id}")
+        except Exception as e:
+            logging.error(f"get_chat_member failed: {e}")
             await callback.answer(
-                "⏱️ Истекло время при проверке подписки. Попробуй позже.",
+                "Не удалось проверить подписку на канал. Попробуй позже.",
                 show_alert=True
             )
-            return
-        except Exception as e:
-            # Проверяем конкретный тип ошибки для лучшей диагностики
-            error_str = str(e).lower()
-            if "not found" in error_str or "chat not found" in error_str:
-                logging.error(f"Channel {NEWS_CHANNEL_USERNAME} not found or bot is not member: {e}")
-                await callback.answer(
-                    "❌ Ошибка конфигурации. Обратитесь к администратору.",
-                    show_alert=True
-                )
-            elif "not enough rights" in error_str or "permission" in error_str:
-                logging.error(f"Bot doesn't have permission to check membership: {e}")
-                await callback.answer(
-                    "❌ Бот не имеет прав для проверки подписки. Обратитесь к администратору.",
-                    show_alert=True
-                )
-            else:
-                logging.error(f"Failed to check channel membership for user {tg_id}: {e}")
-                await callback.answer(
-                    "Не удалось проверить подписку на канал. Попробуй позже.",
-                    show_alert=True
-                )
             return
 
         # Проверяем статус подписки
@@ -89,10 +61,8 @@ async def process_get_gift(callback: CallbackQuery):
             return
 
         # Выдаём подарок (3 дня подписки)
-        # ⚠️ Добавляем таймаут для сессии (максимум 15 сек)
-        timeout = aiohttp.ClientTimeout(total=15, connect=10)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,

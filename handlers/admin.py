@@ -31,55 +31,25 @@ async def admin_new_code(message: Message):
         logger.warning(f"User {admin_id} tried to use /new_code without admin permissions")
         return
 
-    parts = message.text.split()
+    try:
+        parts = message.text.split()
+        if len(parts) < 4:
+            raise ValueError("Not enough arguments")
 
-    # ⚠️ УЛУЧШЕННАЯ ВАЛИДАЦИЯ
-    if len(parts) < 4:
+        code = parts[1]
+        days = int(parts[2])
+        limit = int(parts[3])
+
+        if days <= 0 or limit <= 0:
+            raise ValueError("Days and limit must be positive numbers")
+
+    except (ValueError, IndexError) as e:
         await message.answer(
-            "❌ Не хватает параметров\n\n"
+            "❌ Неверный формат команды\n\n"
             "<b>Формат:</b> /new_code КОД ДНЕЙ ЛИМИТ\n\n"
             "<b>Пример:</b> /new_code SUMMER30 30 100"
         )
-        logger.warning(f"Admin {admin_id} /new_code: missing arguments")
-        return
-
-    code = parts[1]
-    days_str = parts[2]
-    limit_str = parts[3]
-
-    # Валидация КОД
-    if not code or len(code) < 3 or len(code) > 50:
-        await message.answer(
-            "❌ <b>Ошибка в КОД</b>\n\n"
-            "Промокод должен быть от 3 до 50 символов"
-        )
-        logger.warning(f"Admin {admin_id} /new_code: invalid code format")
-        return
-
-    # Валидация ДНЕЙ
-    try:
-        days = int(days_str)
-        if days <= 0 or days > 3650:  # максимум 10 лет
-            raise ValueError("out of range")
-    except ValueError:
-        await message.answer(
-            "❌ <b>Ошибка в ДНЕЙ</b>\n\n"
-            "Количество дней должно быть числом от 1 до 3650"
-        )
-        logger.warning(f"Admin {admin_id} /new_code: invalid days value '{days_str}'")
-        return
-
-    # Валидация ЛИМИТ
-    try:
-        limit = int(limit_str)
-        if limit <= 0 or limit > 100000:  # максимум 100k использований
-            raise ValueError("out of range")
-    except ValueError:
-        await message.answer(
-            "❌ <b>Ошибка в ЛИМИТ</b>\n\n"
-            "Лимит должен быть числом от 1 до 100000"
-        )
-        logger.warning(f"Admin {admin_id} /new_code: invalid limit value '{limit_str}'")
+        logger.error(f"Admin {admin_id} /new_code parsing error: {e}")
         return
 
     try:
@@ -110,46 +80,27 @@ async def admin_give_sub(message: Message):
         logger.warning(f"User {admin_id} tried to use /give_sub without admin permissions")
         return
 
-    parts = message.text.split()
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            raise ValueError("Not enough arguments")
 
-    # ⚠️ УЛУЧШЕННАЯ ВАЛИДАЦИЯ
-    if len(parts) < 3:
+        tg_id_str = parts[1]
+        days_str = parts[2]
+
+        tg_id = int(tg_id_str)
+        days = int(days_str)
+
+        if days <= 0:
+            raise ValueError("Days must be a positive number")
+
+    except (ValueError, IndexError) as e:
         await message.answer(
-            "❌ Не хватает параметров\n\n"
+            "❌ Неверный формат команды\n\n"
             "<b>Формат:</b> /give_sub ТГ_ИД ДНЕЙ\n\n"
             "<b>Пример:</b> /give_sub 123456789 30"
         )
-        logger.warning(f"Admin {admin_id} /give_sub: missing arguments")
-        return
-
-    tg_id_str = parts[1]
-    days_str = parts[2]
-
-    # Валидация ТГ_ИД
-    try:
-        tg_id = int(tg_id_str)
-        if tg_id <= 0 or tg_id > 9999999999:  # Telegram ID не может быть отрицательным
-            raise ValueError("out of range")
-    except ValueError:
-        await message.answer(
-            "❌ <b>Ошибка в ТГ_ИД</b>\n\n"
-            "ID должен быть числом без пробелов и спецсимволов\n\n"
-            "<b>Пример:</b> 123456789"
-        )
-        logger.warning(f"Admin {admin_id} /give_sub: invalid tg_id '{tg_id_str}'")
-        return
-
-    # Валидация ДНЕЙ
-    try:
-        days = int(days_str)
-        if days <= 0 or days > 3650:  # максимум 10 лет
-            raise ValueError("out of range")
-    except ValueError:
-        await message.answer(
-            "❌ <b>Ошибка в ДНЕЙ</b>\n\n"
-            "Количество дней должно быть числом от 1 до 3650"
-        )
-        logger.warning(f"Admin {admin_id} /give_sub: invalid days value '{days_str}'")
+        logger.error(f"Admin {admin_id} /give_sub parsing error: {e}")
         return
 
     if not await db.acquire_user_lock(tg_id):
@@ -162,10 +113,8 @@ async def admin_give_sub(message: Message):
             await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database")
 
-        # ⚠️ Добавляем таймаут для сессии (максимум 15 сек)
-        timeout = aiohttp.ClientTimeout(total=15, connect=10)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector) as session:
             # Создаём или получаем пользователя в Remnawave
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days=days, extend_if_exists=True
