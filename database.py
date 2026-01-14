@@ -12,31 +12,132 @@ async def run_migrations():
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
-            # Проверяем и добавляем недостающие столбцы для anti-spam защиты
             logging.info("Running migrations...")
 
-            # Миграция 1: Добавить столбцы для отслеживания времени попыток
-            migration_queries = [
+            # ═══════════════════════════════════════════════════════════
+            # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
+            # ═══════════════════════════════════════════════════════════
+
+            # Таблица пользователей
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT UNIQUE NOT NULL,
+                    username TEXT,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+
+                    -- Условия и подписка
+                    accepted_terms BOOLEAN DEFAULT FALSE,
+                    remnawave_uuid UUID,
+                    remnawave_username TEXT,
+                    subscription_until TIMESTAMP,
+                    squad_uuid UUID,
+
+                    -- Реферальная программа
+                    referrer_id BIGINT,
+                    first_payment BOOLEAN DEFAULT FALSE,
+                    referral_count INT DEFAULT 0,
+                    active_referrals INT DEFAULT 0,
+
+                    -- Подарки
+                    gift_received BOOLEAN DEFAULT FALSE,
+
+                    -- Anti-spam тайм-стемпы
+                    last_gift_attempt TIMESTAMP,
+                    last_promo_attempt TIMESTAMP,
+                    last_payment_check TIMESTAMP
+                )
+            """)
+            logging.info("✅ Таблица 'users' создана или уже существует")
+
+            # Таблица платежей
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    tariff_code TEXT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    provider TEXT NOT NULL,
+                    invoice_id TEXT UNIQUE NOT NULL,
+                    status TEXT DEFAULT 'pending'
+                )
+            """)
+            logging.info("✅ Таблица 'payments' создана или уже существует")
+
+            # Таблица промокодов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS promo_codes (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT UNIQUE NOT NULL,
+                    days INT NOT NULL,
+                    max_uses INT NOT NULL,
+                    used_count INT DEFAULT 0,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблица 'promo_codes' создана или уже существует")
+
+            # ═══════════════════════════════════════════════════════════
+            # ЭТАП 2: СОЗДАНИЕ ИНДЕКСОВ (для быстрого поиска)
+            # ═══════════════════════════════════════════════════════════
+
+            index_queries = [
+                # users индексы
+                "CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);",
+                "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
+
+                # payments индексы
+                "CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);",
+                "CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);",
+                "CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);",
+
+                # promo_codes индексы
+                "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
+            ]
+
+            for query in index_queries:
+                try:
+                    await conn.execute(query)
+                except Exception as e:
+                    # Индекс уже может существовать - это нормально
+                    if "already exists" not in str(e).lower():
+                        logging.debug(f"Index creation note: {e}")
+
+            logging.info("✅ Индексы созданы или уже существуют")
+
+            # ═══════════════════════════════════════════════════════════
+            # ЭТАП 3: ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ СТОЛБЦОВ
+            # ═══════════════════════════════════════════════════════════
+
+            # Эти столбцы могут не существовать в старых БД - добавляем их
+            alter_queries = [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
             ]
 
-            for query in migration_queries:
+            for query in alter_queries:
                 try:
                     await conn.execute(query)
-                    logging.info(f"Migration executed: {query.strip()}")
+                    logging.info(f"✅ Столбец добавлен: {query.strip()}")
                 except Exception as e:
-                    # Если столбец уже существует, будет ошибка - это нормально
                     if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
-                        logging.debug(f"Column already exists, skipping: {query.strip()}")
+                        logging.debug(f"Столбец уже существует, пропускаем: {query.strip()}")
                     else:
-                        logging.warning(f"Migration warning: {e}")
+                        logging.warning(f"⚠️ Ошибка миграции: {e}")
 
-            logging.info("All migrations completed successfully ✅")
+            logging.info("━" * 60)
+            logging.info("✨ ВСЕ МИГРАЦИИ УСПЕШНО ЗАВЕРШЕНЫ ✨")
+            logging.info("━" * 60)
 
         except Exception as e:
-            logging.error(f"Migration error: {e}")
+            logging.error(f"❌ ОШИБКА МИГРАЦИИ: {e}")
             raise
 
 
