@@ -141,7 +141,7 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
             
             # Обновляем подписку пользователя
-            new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            new_until = datetime.now(timezone.utc) + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
 
             # Отправляем сообщение пользователю

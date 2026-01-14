@@ -81,7 +81,7 @@ async def process_get_gift(callback: CallbackQuery):
             sub_url = await remnawave_get_subscription_url(session, uuid)
 
         # Обновляем данные пользователя в БД
-        new_until = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        new_until = datetime.now(timezone.utc) + timedelta(days=3)
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         # Отправляем сообщение пользователю

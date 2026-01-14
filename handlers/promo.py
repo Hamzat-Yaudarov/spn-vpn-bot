@@ -94,7 +94,7 @@ async def process_promo_input(message: Message, state: FSMContext):
                 return
 
         # Обновляем подписку пользователя в БД
-        new_until = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        new_until = datetime.now(timezone.utc) + timedelta(days=days)
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         # Отправляем успешное сообщение
