@@ -232,13 +232,13 @@ async def has_subscription(tg_id: int) -> bool:
 
 async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
     """Создать запись о платеже"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         """
         INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
         VALUES ($1, $2, $3, $4, $5, $6)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id))
+        (tg_id, tariff_code, amount, datetime.now(timezone.utc), provider, str(invoice_id))
     )
 
 
@@ -471,10 +471,10 @@ async def can_request_gift(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_gift_attempt(tg_id: int):
     """Обновить время последней попытки получить подарок"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_gift_attempt = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
 
 
@@ -564,10 +564,10 @@ async def can_request_promo(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_promo_attempt(tg_id: int):
     """Обновить время последней попытки активировать промокод"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_promo_attempt = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
 
 
@@ -595,8 +595,8 @@ async def can_check_payment(tg_id: int) -> tuple[bool, str]:
 
 async def update_last_payment_check(tg_id: int):
     """Обновить время последней проверки платежа"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     await db_execute(
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
-        (datetime.utcnow(), tg_id)
+        (datetime.now(timezone.utc), tg_id)
     )
