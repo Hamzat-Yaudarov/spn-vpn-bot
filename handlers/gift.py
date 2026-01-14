@@ -34,14 +34,32 @@ async def process_get_gift(callback: CallbackQuery):
         return
 
     try:
-        # Проверяем подписку на канал новостей
+        # Проверяем права бота в канале
+        try:
+            bot_info = await callback.bot.get_me()
+            bot_member = await callback.bot.get_chat_member(f"@{NEWS_CHANNEL_USERNAME}", bot_info.id)
+
+            # Проверяем, может ли бот читать членство в канале
+            if bot_member.status == "restricted" and not bot_member.can_read_all_group_messages:
+                logging.error(f"Bot doesn't have permission to read members in channel @{NEWS_CHANNEL_USERNAME}")
+                await callback.answer(
+                    "❌ Бот не имеет прав для проверки подписки на канал.\n"
+                    "Пожалуйста, дайте боту права на чтение членства.",
+                    show_alert=True
+                )
+                return
+        except Exception as e:
+            logging.warning(f"Failed to check bot permissions in channel: {e}")
+            # Продолжаем, может быть бот всё же может сделать проверку
+
+        # Проверяем подписку пользователя на канал новостей
         try:
             member = await callback.bot.get_chat_member(f"@{NEWS_CHANNEL_USERNAME}", tg_id)
             logging.info(f"Channel check: user={tg_id}, status={member.status}")
         except Exception as e:
             logging.error(f"get_chat_member failed: {e}")
             await callback.answer(
-                "Не удалось проверить подписку на канал. Попробуй позже.",
+                "❌ Не удалось проверить подписку на канал. Попробуй позже.",
                 show_alert=True
             )
             return
@@ -62,7 +80,8 @@ async def process_get_gift(callback: CallbackQuery):
 
         # Выдаём подарок (3 дня подписки)
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,

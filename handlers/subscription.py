@@ -332,7 +332,8 @@ async def process_my_subscription(callback: CallbackQuery):
 
     try:
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
 

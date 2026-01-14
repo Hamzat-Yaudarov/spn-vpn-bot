@@ -70,7 +70,8 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         # Создаём или получаем пользователя в Remnawave
         connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days=days, extend_if_exists=True
             )
