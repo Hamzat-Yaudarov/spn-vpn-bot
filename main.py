@@ -79,7 +79,11 @@ async def wait_for_shutdown():
         loop.add_signal_handler(sig, handle_signal, sig)
 
     # Ждём события завершения
-    await shutdown_event.wait()
+    try:
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        logger.info("Shutdown event cancelled")
+        raise
 
 
 # ────────────────────────────────────────────────
@@ -135,7 +139,7 @@ async def main():
         logger.warning("Shutdown signal received, gracefully stopping...")
 
         # Даём время на завершение текущих операций
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
         # Отменяем все задачи
         logger.info("Cancelling background tasks...")
@@ -144,10 +148,19 @@ async def main():
                 task.cancel()
 
         # Ждём завершения всех задач (с timeout)
-        try:
-            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=10)
-        except asyncio.TimeoutError:
-            logger.warning("Timeout waiting for tasks to complete")
+        pending = [t for t in tasks if not t.done()]
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=5
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout waiting for {len(pending)} tasks to complete, forcing shutdown")
+                # Собираем информацию о невыполненных задачах
+                for task in pending:
+                    if not task.done():
+                        logger.warning(f"  - Task still running: {task.get_name()}")
 
         logger.info("✅ All tasks cancelled")
 
@@ -157,12 +170,18 @@ async def main():
 
     finally:
         # Закрываем соединение с ботом
-        await bot.session.close()
-        logger.info("✅ Bot session closed")
+        try:
+            await bot.session.close()
+            logger.info("✅ Bot session closed")
+        except Exception as e:
+            logger.warning(f"Error closing bot session: {e}")
 
         # Закрываем БД при выходе
-        await db.close_db()
-        logger.info("✅ Database pool closed")
+        try:
+            await db.close_db()
+            logger.info("✅ Database pool closed")
+        except Exception as e:
+            logger.warning(f"Error closing database: {e}")
 
         logger.info("=" * 60)
         logger.info("Bot shut down gracefully")

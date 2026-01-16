@@ -211,33 +211,41 @@ async def check_cryptobot_invoices(bot):
 
     logging.info("CryptoBot polling mode enabled")
 
-    while True:
-        await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
-
-        pending = await db.get_pending_payments()
-
-        if not pending:
-            continue
-
-        for payment_record in pending:
-            payment_id = payment_record['id']
-            tg_id = payment_record['tg_id']
-            invoice_id = payment_record['invoice_id']
-            tariff_code = payment_record['tariff_code']
-            
-            if not await db.acquire_user_lock(tg_id):
-                continue
+    try:
+        while True:
+            await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
             try:
-                invoice = await get_invoice_status(invoice_id)
-                
-                if invoice and invoice.get("status") == "paid":
-                    success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
-                    if success:
-                        logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")
+                pending = await db.get_pending_payments()
 
-            except Exception as e:
-                logging.error(f"Check invoice error for {tg_id}: {e}")
-            
-            finally:
-                await db.release_user_lock(tg_id)
+                if not pending:
+                    continue
+
+                for payment_record in pending:
+                    payment_id = payment_record['id']
+                    tg_id = payment_record['tg_id']
+                    invoice_id = payment_record['invoice_id']
+                    tariff_code = payment_record['tariff_code']
+
+                    if not await db.acquire_user_lock(tg_id):
+                        continue
+
+                    try:
+                        invoice = await get_invoice_status(invoice_id)
+
+                        if invoice and invoice.get("status") == "paid":
+                            success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
+                            if success:
+                                logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")
+
+                    except Exception as e:
+                        logging.error(f"Check invoice error for {tg_id}: {e}")
+
+                    finally:
+                        await db.release_user_lock(tg_id)
+            except asyncio.CancelledError:
+                logging.info("CryptoBot polling task cancelled")
+                raise
+    except asyncio.CancelledError:
+        logging.info("CryptoBot polling task shut down gracefully")
+        raise

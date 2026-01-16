@@ -63,7 +63,7 @@ async def create_yookassa_payment(
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/spn_vpn_bot"  # После оплаты вернёт в бот
+                "return_url": "https://t.me/SPNchbot"  # После оплаты вернёт в бот
             },
             "capture": True,
             "description": f"Подписка SPN VPN — {tariff_code}",
@@ -265,11 +265,18 @@ async def cleanup_expired_payments():
     """
     logging.info(f"Cleanup task started (interval: {CLEANUP_CHECK_INTERVAL}s)")
 
-    while True:
-        await asyncio.sleep(CLEANUP_CHECK_INTERVAL)
+    try:
+        while True:
+            await asyncio.sleep(CLEANUP_CHECK_INTERVAL)
 
-        try:
-            await db.delete_expired_payments()
-            logging.info("Expired payments cleaned up")
-        except Exception as e:
-            logging.error(f"Cleanup expired payments error: {e}")
+            try:
+                await db.delete_expired_payments()
+                logging.info("Expired payments cleaned up")
+            except asyncio.CancelledError:
+                logging.info("Cleanup task cancelled")
+                raise
+            except Exception as e:
+                logging.error(f"Cleanup expired payments error: {e}")
+    except asyncio.CancelledError:
+        logging.info("Cleanup task shut down gracefully")
+        raise

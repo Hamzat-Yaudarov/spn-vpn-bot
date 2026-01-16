@@ -9,6 +9,11 @@ WorkingDirectory=/home/bot/spn-vpn-bot
 Environment="PATH=/home/bot/spn-vpn-bot/venv/bin"
 ExecStart=/home/bot/spn-vpn-bot/venv/bin/python3 /home/bot/spn-vpn-bot/main.py
 
+# Graceful shutdown
+TimeoutStopSec=120
+KillMode=mixed
+KillSignal=SIGTERM
+
 # Автоматически перезапускать при падении
 Restart=always
 RestartSec=10
