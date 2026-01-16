@@ -63,7 +63,7 @@ async def create_yookassa_payment(
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/SPNchbot"  # После оплаты вернёт в бот
+                "return_url": "https://t.me/WaySPN_robot"  # После оплаты вернёт в бот
             },
             "capture": True,
             "description": f"Подписка SPN VPN — {tariff_code}",
