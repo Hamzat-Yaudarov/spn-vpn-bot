@@ -21,6 +21,9 @@ router = Router()
 @router.callback_query(F.data == "enter_promo")
 async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
     """Предложить ввести промокод"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} initiated promo code entry")
+
     await callback.message.edit_text("Введи промокод:")
     await state.set_state(UserStates.waiting_for_promo)
 
@@ -30,6 +33,7 @@ async def process_promo_input(message: Message, state: FSMContext):
     """Обработать введённый промокод"""
     code = message.text.strip().upper()
     tg_id = message.from_user.id
+    logging.info(f"User {tg_id} entered promo code: {code}")
 
     # Проверка anti-spam: не более одной попытки в 1.5 секунды
     can_request, error_msg = await db.can_request_promo(tg_id)

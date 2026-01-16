@@ -72,3 +72,30 @@ TARIFFS = {
 # ────────────────────────────────────────────────
 
 PAYMENT_CHECK_INTERVAL = 30  # секунд - интервал проверки платежей
+CLEANUP_CHECK_INTERVAL = 300  # 5 минут - интервал удаления истёкших платежей
+PAYMENT_EXPIRY_TIME = 600  # 10 минут - время жизни неоплаченного счёта
+
+# ────────────────────────────────────────────────
+#           ANTI-SPAM COOLDOWNS
+# ────────────────────────────────────────────────
+
+GIFT_REQUEST_COOLDOWN = 2  # секунды - между попытками получить подарок
+PROMO_REQUEST_COOLDOWN = 1.5  # секунды - между попытками активировать промокод
+PAYMENT_CHECK_COOLDOWN = 1  # секунда - между проверками платежей
+
+# ────────────────────────────────────────────────
+#              API RETRY CONFIGURATION
+# ────────────────────────────────────────────────
+
+API_RETRY_ATTEMPTS = 3  # количество попыток при ошибке
+API_RETRY_INITIAL_DELAY = 1  # начальная задержка в секундах
+API_RETRY_MAX_DELAY = 10  # максимальная задержка между попытками
+API_REQUEST_TIMEOUT = 30  # timeout для HTTP запросов в секундах
+
+# ────────────────────────────────────────────────
+#            WEBHOOK CONFIGURATION
+# ────────────────────────────────────────────────
+
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8000"))
+WEBHOOK_USE_POLLING = os.getenv("WEBHOOK_USE_POLLING", "False").lower() == "true"  # Fallback на polling

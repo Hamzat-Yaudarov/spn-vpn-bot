@@ -4,8 +4,18 @@ import asyncio
 import base64
 import uuid
 from datetime import datetime, timedelta, timezone
-from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, YOOKASSA_API_URL, TARIFFS, PAYMENT_CHECK_INTERVAL
+from config import (
+    YOOKASSA_SHOP_ID,
+    YOOKASSA_SECRET_KEY,
+    YOOKASSA_API_URL,
+    TARIFFS,
+    PAYMENT_CHECK_INTERVAL,
+    CLEANUP_CHECK_INTERVAL,
+    API_REQUEST_TIMEOUT,
+    WEBHOOK_USE_POLLING
+)
 import database as db
+from utils import retry_with_backoff, safe_api_call
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_add_to_squad,
@@ -21,50 +31,51 @@ async def create_yookassa_payment(
     tg_id: int
 ) -> dict | None:
     """
-    Создать платёж через Yookassa API
-    
+    Создать платёж через Yookassa API с retry логикой
+
     Args:
         bot: Экземпляр Bot
         amount: Сумма платежа в рублях
         tariff_code: Код тарифа
         tg_id: ID пользователя Telegram
-        
+
     Returns:
         Словарь с информацией о платеже или None
     """
-    url = f"{YOOKASSA_API_URL}/payments"
-    
-    # Базовая авторизация: base64(shop_id:secret_key)
-    credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
-    headers = {
-        "Authorization": f"Basic {credentials}",
-        "Idempotence-Key": str(uuid.uuid4()),
-        "Content-Type": "application/json"
-    }
-    
-    # Генерируем уникальный ID платежа
-    payment_id = f"spn_{tg_id}_{int(datetime.now(timezone.utc).timestamp())}_{tariff_code}"
-    
-    payload = {
-        "amount": {
-            "value": str(amount),
-            "currency": "RUB"
-        },
-        "confirmation": {
-            "type": "redirect",
-            "return_url": "https://t.me/spn_vpn_bot"  # После оплаты вернёт в бот
-        },
-        "capture": True,
-        "description": f"Подписка SPN VPN — {tariff_code}",
-        "metadata": {
-            "tg_id": str(tg_id),
-            "tariff_code": tariff_code
+    async def _create_payment():
+        url = f"{YOOKASSA_API_URL}/payments"
+
+        # Базовая авторизация: base64(shop_id:secret_key)
+        credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+        headers = {
+            "Authorization": f"Basic {credentials}",
+            "Idempotence-Key": str(uuid.uuid4()),
+            "Content-Type": "application/json"
         }
-    }
-    
-    connector = aiohttp.TCPConnector(ssl=True)
-    timeout = aiohttp.ClientTimeout(total=30)
-    try:
+
+        # Генерируем уникальный ID платежа
+        payment_id = f"spn_{tg_id}_{int(datetime.now(timezone.utc).timestamp())}_{tariff_code}"
+
+        payload = {
+            "amount": {
+                "value": str(amount),
+                "currency": "RUB"
+            },
+            "confirmation": {
+                "type": "redirect",
+                "return_url": "https://t.me/spn_vpn_bot"  # После оплаты вернёт в бот
+            },
+            "capture": True,
+            "description": f"Подписка SPN VPN — {tariff_code}",
+            "metadata": {
+                "tg_id": str(tg_id),
+                "tariff_code": tariff_code
+            }
+        }
+
+        connector = aiohttp.TCPConnector(ssl=True)
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status in (200, 201):
@@ -73,45 +84,49 @@ async def create_yookassa_payment(
                     return data
                 else:
                     error_text = await resp.text()
-                    logging.error(f"Yookassa error {resp.status}: {error_text}")
-    except Exception as e:
-        logging.error(f"Yookassa payment creation exception: {e}")
-    
-    return None
+                    raise RuntimeError(f"Yookassa HTTP {resp.status}: {error_text}")
+
+    return await safe_api_call(
+        _create_payment,
+        error_message=f"Failed to create Yookassa payment for user {tg_id}"
+    )
 
 
 async def get_payment_status(payment_id: str) -> dict | None:
     """
-    Получить статус платежа в Yookassa
-    
+    Получить статус платежа в Yookassa с retry логикой
+
     Args:
         payment_id: ID платежа в Yookassa
-        
+
     Returns:
         Словарь с информацией о платеже или None
     """
-    url = f"{YOOKASSA_API_URL}/payments/{payment_id}"
-    
-    credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
-    headers = {
-        "Authorization": f"Basic {credentials}",
-        "Content-Type": "application/json"
-    }
-    
-    connector = aiohttp.TCPConnector(ssl=True)
-    timeout = aiohttp.ClientTimeout(total=30)
-    try:
+    async def _get_status():
+        url = f"{YOOKASSA_API_URL}/payments/{payment_id}"
+
+        credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+        headers = {
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/json"
+        }
+
+        connector = aiohttp.TCPConnector(ssl=True)
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data
                 else:
-                    logging.error(f"Get payment status error {resp.status}")
-    except Exception as e:
-        logging.error(f"Get payment status exception: {e}")
-    
-    return None
+                    error_text = await resp.text()
+                    raise RuntimeError(f"Yookassa HTTP {resp.status}: {error_text}")
+
+    return await safe_api_call(
+        _get_status,
+        error_message=f"Failed to get Yookassa payment status {payment_id}"
+    )
 
 
 async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff_code: str) -> bool:
@@ -198,9 +213,18 @@ async def check_yookassa_payments(bot):
     """
     Фоновая задача для проверки статусов платежей в Yookassa
 
+    Примечание: Если настроен WEBHOOK_HOST, платежи будут обработаны
+    через webhook'и мгновенно. Polling используется как fallback.
+
     Args:
         bot: Экземпляр Bot
     """
+    if not WEBHOOK_USE_POLLING:
+        logging.info("Yookassa polling disabled (webhook mode enabled)")
+        return
+
+    logging.info("Yookassa polling mode enabled")
+
     while True:
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
 
@@ -235,13 +259,17 @@ async def check_yookassa_payments(bot):
 
 async def cleanup_expired_payments():
     """
-    Фоновая задача для удаления истёкших неоплаченных счётов (старше 10 минут)
+    Фоновая задача для удаления истёкших неоплаченных счётов
+
+    Периодичность настраивается в config.CLEANUP_CHECK_INTERVAL
     """
+    logging.info(f"Cleanup task started (interval: {CLEANUP_CHECK_INTERVAL}s)")
+
     while True:
-        await asyncio.sleep(300)  # Проверяем каждые 5 минут
+        await asyncio.sleep(CLEANUP_CHECK_INTERVAL)
 
         try:
-            await db.delete_expired_payments(minutes=10)
+            await db.delete_expired_payments()
             logging.info("Expired payments cleaned up")
         except Exception as e:
             logging.error(f"Cleanup expired payments error: {e}")

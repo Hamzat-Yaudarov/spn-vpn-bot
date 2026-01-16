@@ -19,6 +19,8 @@ router = Router()
 async def process_get_gift(callback: CallbackQuery):
     """Обработчик получения подарка"""
     tg_id = callback.from_user.id
+    username = callback.from_user.username
+    logging.info(f"User {tg_id}(@{username}) requested gift")
 
     # Проверка anti-spam: не более одной попытки в 2 секунды
     can_request, error_msg = await db.can_request_gift(tg_id)

@@ -1,6 +1,12 @@
 import asyncpg
 import logging
-from config import DATABASE_URL
+from config import (
+    DATABASE_URL,
+    PAYMENT_EXPIRY_TIME,
+    GIFT_REQUEST_COOLDOWN,
+    PROMO_REQUEST_COOLDOWN,
+    PAYMENT_CHECK_COOLDOWN
+)
 
 
 # Глобальный пул подключений
@@ -388,11 +394,11 @@ async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, p
     if not result:
         return None
 
-    # Проверяем, не истёк ли счёт (старше 10 минут)
+    # Проверяем, не истёк ли счёт
     created_at = result['created_at']
     age = datetime.utcnow() - created_at
 
-    if age.total_seconds() > 600:  # 10 минут = 600 секунд
+    if age.total_seconds() > PAYMENT_EXPIRY_TIME:
         # Счёт истёк, удаляем его
         await delete_payment(result['id'])
         return None
@@ -409,16 +415,19 @@ async def delete_payment(payment_id: int):
     )
 
 
-async def delete_expired_payments(minutes: int = 10):
+async def delete_expired_payments(seconds: int = None):
     """
-    Удалить все неоплаченные счёты старше N минут
+    Удалить все неоплаченные счёты старше N секунд
 
     Args:
-        minutes: Время в минутах (по умолчанию 10)
+        seconds: Время в секундах (по умолчанию PAYMENT_EXPIRY_TIME из конфига)
     """
     from datetime import datetime, timedelta, timezone
 
-    cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
+    if seconds is None:
+        seconds = PAYMENT_EXPIRY_TIME
+
+    cutoff_time = datetime.utcnow() - timedelta(seconds=seconds)
 
     await db_execute(
         "DELETE FROM payments WHERE status = 'pending' AND created_at < $1",
@@ -560,11 +569,11 @@ async def can_request_gift(tg_id: int) -> tuple[bool, str]:
     if user.get('gift_received', False):
         return False, "Ты уже получал подарок"
 
-    # Проверяем anti-spam: не более одной попытки в 2 секунды
+    # Проверяем anti-spam: не более одной попытки за GIFT_REQUEST_COOLDOWN секунд
     last_gift_attempt = user.get('last_gift_attempt')
     if last_gift_attempt:
         time_since_attempt = datetime.utcnow() - last_gift_attempt
-        if time_since_attempt < timedelta(seconds=2):
+        if time_since_attempt < timedelta(seconds=GIFT_REQUEST_COOLDOWN):
             return False, "Подожди пару секунд ⏳"
 
     return True, ""
@@ -653,11 +662,11 @@ async def can_request_promo(tg_id: int) -> tuple[bool, str]:
     if not user:
         return False, "Пользователь не найден"
 
-    # Проверяем anti-spam: не более одной попытки в 1.5 секунды
+    # Проверяем anti-spam: не более одной попытки за PROMO_REQUEST_COOLDOWN секунд
     last_promo_attempt = user.get('last_promo_attempt')
     if last_promo_attempt:
         time_since_attempt = datetime.utcnow() - last_promo_attempt
-        if time_since_attempt < timedelta(seconds=1.5):
+        if time_since_attempt < timedelta(seconds=PROMO_REQUEST_COOLDOWN):
             return False, "Подожди пару секунд ⏳"
 
     return True, ""
@@ -684,11 +693,11 @@ async def can_check_payment(tg_id: int) -> tuple[bool, str]:
     if not user:
         return False, "Пользователь не найден"
 
-    # Проверяем anti-spam: не более одной проверки в 1 секунду
+    # Проверяем anti-spam: не более одной проверки за PAYMENT_CHECK_COOLDOWN секунд
     last_payment_check = user.get('last_payment_check')
     if last_payment_check:
         time_since_check = datetime.utcnow() - last_payment_check
-        if time_since_check < timedelta(seconds=1):
+        if time_since_check < timedelta(seconds=PAYMENT_CHECK_COOLDOWN):
             return False, "Подожди пару секунд ⏳"
 
     return True, ""

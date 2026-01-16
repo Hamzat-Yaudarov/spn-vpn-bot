@@ -10,6 +10,7 @@ router = Router()
 async def process_referral(callback: CallbackQuery):
     """Показать информацию о реферальной программе"""
     tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} viewing referral program")
 
     # Получаем реферальную ссылку
     bot_username = (await callback.bot.get_me()).username

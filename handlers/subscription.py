@@ -18,6 +18,9 @@ router = Router()
 @router.callback_query(F.data == "buy_subscription")
 async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
     """Показать выбор тарифов"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} clicked: buy_subscription")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1 месяц — 100₽", callback_data="tariff_1m")],
         [InlineKeyboardButton(text="3 месяца — 249₽", callback_data="tariff_3m")],
@@ -33,7 +36,10 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("tariff_"))
 async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     """Обработать выбор тарифа"""
+    tg_id = callback.from_user.id
     tariff_code = callback.data.split("_")[1]
+    logging.info(f"User {tg_id} selected tariff: {tariff_code}")
+
     await state.update_data(tariff_code=tariff_code)
 
     tariff = TARIFFS[tariff_code]
@@ -53,8 +59,10 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "pay_cryptobot")
 async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     """Создать или вернуть существующий счёт в CryptoBot"""
+    tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
+    logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code})")
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
@@ -137,8 +145,10 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "pay_yookassa")
 async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     """Создать или вернуть существующий платёж через Yookassa"""
+    tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
+    logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code})")
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
@@ -229,6 +239,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 async def process_check_payment(callback: CallbackQuery):
     """Проверить статус платежа"""
     tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} checking payment status")
 
     # Проверка anti-spam: не более одной проверки в 1 секунду
     can_check, error_msg = await db.can_check_payment(tg_id)
@@ -313,6 +324,8 @@ async def process_check_payment(callback: CallbackQuery):
 async def process_my_subscription(callback: CallbackQuery):
     """Показать информацию о подписке пользователя"""
     tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} checking subscription status")
+
     user = await db.get_user(tg_id)
 
     if not user or not user['remnawave_uuid']:
