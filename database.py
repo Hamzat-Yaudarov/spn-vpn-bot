@@ -33,26 +33,28 @@ async def run_migrations():
                     created_at TIMESTAMP DEFAULT now(),
                     updated_at TIMESTAMP DEFAULT now(),
 
-                    -- Условия и подписка (Обычная подписка)
+                    -- Условия и подписки (обычная подписка)
                     accepted_terms BOOLEAN DEFAULT FALSE,
                     remnawave_uuid UUID,
                     remnawave_username TEXT,
                     subscription_until TIMESTAMP,
                     squad_uuid UUID,
 
-                    -- VIP подписка (Обход глушилок через 3X-UI)
-                    vip_subscription_until TIMESTAMP,
-                    xui_client_uuid TEXT,
-                    xui_client_email TEXT,
+                    -- VIP подписка (Обход глушилок)
+                    remnawave_uuid_vip UUID,
+                    remnawave_username_vip TEXT,
+                    subscription_until_vip TIMESTAMP,
+                    squad_uuid_vip UUID,
 
-                    -- Баланс (для реферальной программы - 25% кешбэк)
-                    balance NUMERIC DEFAULT 0.0,
+                    -- Баланс пользователя
+                    balance NUMERIC DEFAULT 0,
 
                     -- Реферальная программа
                     referrer_id BIGINT,
                     first_payment BOOLEAN DEFAULT FALSE,
                     referral_count INT DEFAULT 0,
                     active_referrals INT DEFAULT 0,
+                    referral_balance NUMERIC DEFAULT 0,
 
                     -- Подарки
                     gift_received BOOLEAN DEFAULT FALSE,
@@ -65,19 +67,33 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'users' создана или уже существует")
 
-            # Таблица платежей
+            # Таблица платежей (для оплаты подписок)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id BIGSERIAL PRIMARY KEY,
                     tg_id BIGINT NOT NULL,
                     tariff_code TEXT NOT NULL,
                     amount NUMERIC NOT NULL,
+                    subscription_type TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT now(),
                     updated_at TIMESTAMP DEFAULT now(),
                     provider TEXT NOT NULL,
                     invoice_id TEXT UNIQUE NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    subscription_type TEXT DEFAULT 'normal'
+                    status TEXT DEFAULT 'pending'
+                )
+            """)
+
+            # Таблица платежей на пополнение баланса
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS balance_payments (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    provider TEXT NOT NULL,
+                    invoice_id TEXT UNIQUE NOT NULL,
+                    status TEXT DEFAULT 'pending'
                 )
             """)
             logging.info("✅ Таблица 'payments' создана или уже существует")
@@ -132,14 +148,20 @@ async def run_migrations():
 
             # Эти столбцы могут не существовать в старых БД - добавляем их
             alter_queries = [
+                # Старые столбцы
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_subscription_until TIMESTAMP;",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_client_uuid TEXT;",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_client_email TEXT;",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC DEFAULT 0.0;",
-                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_type TEXT DEFAULT 'normal';",
+                # VIP подписка (новые столбцы)
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS remnawave_uuid_vip UUID;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS remnawave_username_vip TEXT;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until_vip TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS squad_uuid_vip UUID;",
+                # Баланс
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC DEFAULT 0;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_balance NUMERIC DEFAULT 0;",
+                # Платежи - добавляем столбец subscription_type
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_type TEXT DEFAULT 'regular';",
             ]
 
             for query in alter_queries:
@@ -327,32 +349,129 @@ async def has_accepted_terms(tg_id: int) -> bool:
 # ────────────────────────────────────────────────
 
 async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
-    """Обновить подписку пользователя"""
+    """Обновить обычную подписку пользователя"""
     await db_execute(
         """
-        UPDATE users 
-        SET remnawave_uuid = $1, 
-            remnawave_username = $2, 
-            subscription_until = $3, 
-            squad_uuid = $4 
+        UPDATE users
+        SET remnawave_uuid = $1,
+            remnawave_username = $2,
+            subscription_until = $3,
+            squad_uuid = $4
         WHERE tg_id = $5
         """,
         (uuid, username, subscription_until, squad_uuid, tg_id)
     )
 
 
+async def update_subscription_vip(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
+    """Обновить VIP подписку пользователя"""
+    await db_execute(
+        """
+        UPDATE users
+        SET remnawave_uuid_vip = $1,
+            remnawave_username_vip = $2,
+            subscription_until_vip = $3,
+            squad_uuid_vip = $4
+        WHERE tg_id = $5
+        """,
+        (uuid, username, subscription_until, squad_uuid, tg_id)
+    )
+
+
+async def update_both_subscriptions(tg_id: int, uuid_regular: str, username_regular: str,
+                                   subscription_until_regular: str, squad_uuid_regular: str,
+                                   uuid_vip: str, username_vip: str,
+                                   subscription_until_vip: str, squad_uuid_vip: str):
+    """Обновить обе подписки пользователя (обычная и VIP)"""
+    await db_execute(
+        """
+        UPDATE users
+        SET remnawave_uuid = $1,
+            remnawave_username = $2,
+            subscription_until = $3,
+            squad_uuid = $4,
+            remnawave_uuid_vip = $5,
+            remnawave_username_vip = $6,
+            subscription_until_vip = $7,
+            squad_uuid_vip = $8
+        WHERE tg_id = $9
+        """,
+        (uuid_regular, username_regular, subscription_until_regular, squad_uuid_regular,
+         uuid_vip, username_vip, subscription_until_vip, squad_uuid_vip, tg_id)
+    )
+
+
 async def has_subscription(tg_id: int) -> bool:
-    """Проверить есть ли активная подписка"""
+    """Проверить есть ли активная подписка (обычная или VIP)"""
     user = await get_user(tg_id)
-    return user and user['remnawave_uuid'] is not None
+    return user and (user['remnawave_uuid'] is not None or user['remnawave_uuid_vip'] is not None)
+
+
+# ────────────────────────────────────────────────
+#              BALANCE MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_balance(tg_id: int) -> float:
+    """Получить баланс пользователя"""
+    result = await db_execute(
+        "SELECT balance FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return float(result['balance']) if result else 0.0
+
+
+async def add_balance(tg_id: int, amount: float):
+    """Добавить средства на баланс"""
+    await db_execute(
+        "UPDATE users SET balance = balance + $1 WHERE tg_id = $2",
+        (float(amount), tg_id)
+    )
+
+
+async def deduct_balance(tg_id: int, amount: float) -> bool:
+    """
+    Списать средства со счета. Возвращает True если успешно, False если недостаточно средств
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.fetchval(
+                """
+                UPDATE users
+                SET balance = balance - $1
+                WHERE tg_id = $2 AND balance >= $1
+                RETURNING 1
+                """,
+                float(amount), tg_id
+            )
+            return result is not None
+
+
+async def add_referral_balance(tg_id: int, amount: float):
+    """Добавить средства в реферальный баланс"""
+    await db_execute(
+        "UPDATE users SET referral_balance = referral_balance + $1 WHERE tg_id = $2",
+        (float(amount), tg_id)
+    )
+
+
+async def get_referral_balance(tg_id: int) -> float:
+    """Получить реферальный баланс"""
+    result = await db_execute(
+        "SELECT referral_balance FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return float(result['referral_balance']) if result else 0.0
 
 
 # ────────────────────────────────────────────────
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str, subscription_type: str = "normal"):
-    """Создать запись о платеже"""
+async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str, subscription_type: str = 'regular'):
+    """Создать запись о платеже подписки"""
     from datetime import datetime
     await db_execute(
         """
@@ -366,7 +485,7 @@ async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: 
 async def get_pending_payments():
     """Получить все ожидающие платежи"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code, subscription_type FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
         fetch_all=True
     )
 
@@ -374,7 +493,7 @@ async def get_pending_payments():
 async def get_pending_payments_by_provider(provider: str):
     """Получить все ожидающие платежи по конкретному провайдеру"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code, subscription_type FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
         (provider,),
         fetch_all=True
     )
@@ -478,6 +597,48 @@ async def update_payment_status_by_invoice(invoice_id: str, status: str):
     await db_execute(
         "UPDATE payments SET status = $1 WHERE invoice_id = $2",
         (status, invoice_id)
+    )
+
+
+# ────────────────────────────────────────────────
+#          BALANCE PAYMENT MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def create_balance_payment(tg_id: int, amount: float, provider: str, invoice_id: str):
+    """Создать запись о платеже для пополнения баланса"""
+    from datetime import datetime
+    await db_execute(
+        """
+        INSERT INTO balance_payments (tg_id, amount, created_at, provider, invoice_id)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        (tg_id, amount, datetime.utcnow(), provider, str(invoice_id))
+    )
+
+
+async def get_balance_payment_status(invoice_id: str):
+    """Получить информацию о платеже на пополнение баланса"""
+    result = await db_execute(
+        "SELECT id, tg_id, amount, status FROM balance_payments WHERE invoice_id = $1",
+        (invoice_id,),
+        fetch_one=True
+    )
+    return result
+
+
+async def update_balance_payment_status(invoice_id: str, status: str):
+    """Обновить статус платежа пополнения баланса"""
+    await db_execute(
+        "UPDATE balance_payments SET status = $1 WHERE invoice_id = $2",
+        (status, invoice_id)
+    )
+
+
+async def get_pending_balance_payments():
+    """Получить все ожидающие платежи на пополнение баланса"""
+    return await db_execute(
+        "SELECT id, tg_id, invoice_id FROM balance_payments WHERE status = 'pending' ORDER BY id",
+        fetch_all=True
     )
 
 
@@ -723,104 +884,4 @@ async def update_last_payment_check(tg_id: int):
     await db_execute(
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
         (datetime.utcnow(), tg_id)
-    )
-
-
-# ────────────────────────────────────────────────
-#           VIP SUBSCRIPTION MANAGEMENT
-# ────────────────────────────────────────────────
-
-async def update_vip_subscription(tg_id: int, xui_uuid: str, xui_email: str, vip_until: str):
-    """Обновить VIP подписку пользователя"""
-    await db_execute(
-        """
-        UPDATE users
-        SET xui_client_uuid = $1,
-            xui_client_email = $2,
-            vip_subscription_until = $3
-        WHERE tg_id = $4
-        """,
-        (xui_uuid, xui_email, vip_until, tg_id)
-    )
-
-
-async def has_vip_subscription(tg_id: int) -> bool:
-    """Проверить есть ли активная VIP подписка"""
-    user = await get_user(tg_id)
-    if not user or not user['xui_client_uuid']:
-        return False
-
-    from datetime import datetime
-    vip_until = user.get('vip_subscription_until')
-    if vip_until:
-        return vip_until > datetime.utcnow()
-    return False
-
-
-async def get_vip_subscription_info(tg_id: int) -> tuple[str | None, str | None]:
-    """Получить информацию о VIP подписке"""
-    user = await get_user(tg_id)
-    if user:
-        return user.get('xui_client_uuid'), user.get('xui_client_email')
-    return None, None
-
-
-# ────────────────────────────────────────────────
-#              BALANCE MANAGEMENT
-# ────────────────────────────────────────────────
-
-async def get_balance(tg_id: int) -> float:
-    """Получить баланс пользователя"""
-    result = await db_execute(
-        "SELECT balance FROM users WHERE tg_id = $1",
-        (tg_id,),
-        fetch_one=True
-    )
-    return float(result['balance']) if result else 0.0
-
-
-async def add_balance(tg_id: int, amount: float):
-    """Добавить средства на баланс"""
-    await db_execute(
-        "UPDATE users SET balance = balance + $1 WHERE tg_id = $2",
-        (amount, tg_id)
-    )
-
-
-async def subtract_balance(tg_id: int, amount: float) -> bool:
-    """
-    Вычесть средства с баланса
-
-    Args:
-        tg_id: ID пользователя Telegram
-        amount: Сумма для вычитания
-
-    Returns:
-        True если успешно, False если недостаточно средств
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Проверяем достаточность баланса
-            balance = await conn.fetchval(
-                "SELECT balance FROM users WHERE tg_id = $1",
-                tg_id
-            )
-
-            if balance is None or float(balance) < amount:
-                return False
-
-            # Вычитаем средства
-            await conn.execute(
-                "UPDATE users SET balance = balance - $1 WHERE tg_id = $2",
-                (amount, tg_id)
-            )
-            return True
-
-
-async def set_balance(tg_id: int, amount: float):
-    """Установить баланс (заменить текущее значение)"""
-    await db_execute(
-        "UPDATE users SET balance = $1 WHERE tg_id = $2",
-        (amount, tg_id)
     )

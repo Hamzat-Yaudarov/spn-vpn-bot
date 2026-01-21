@@ -8,12 +8,8 @@ from config import ADMIN_ID, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
-    remnawave_add_to_squad
-)
-from services.xui_panel import (
-    get_xui_session,
-    xui_create_or_extend_client,
-    xui_extend_client
+    remnawave_add_to_squad,
+    remnawave_extend_subscription
 )
 
 logger = logging.getLogger(__name__)
@@ -227,7 +223,7 @@ async def admin_give_sub(message: Message):
 
 @router.message(Command("give_vip_sub"))
 async def admin_give_vip_sub(message: Message):
-    """Админ команда: выдать/продлить только VIP подписку пользователю"""
+    """Админ команда: выдать/продлить VIP подписку пользователю по ИД"""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
@@ -290,69 +286,56 @@ async def admin_give_vip_sub(message: Message):
             await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
 
-        # Получаем XUI сессию
-        xui_session = await get_xui_session()
-        if not xui_session:
-            await message.answer("❌ Ошибка подключения к XUI панели. Попробуй позже.")
-            logger.error(f"Failed to get XUI session for /give_vip_sub by admin {admin_id}")
-            return
-
-        try:
-            # Проверяем есть ли уже VIP клиент у пользователя
-            uuid, email = await db.get_vip_subscription_info(tg_id)
-
-            if uuid and email:
-                # Продляем существующего клиента
-                success = await xui_extend_client(xui_session, uuid, email, days)
-                if not success:
-                    await message.answer(
-                        f"❌ Ошибка продления VIP подписки на XUI панели\n\n"
-                        "Попробуй позже"
-                    )
-                    logger.error(f"Failed to extend XUI client for user {tg_id} by admin {admin_id}")
-                    return
-            else:
-                # Создаём нового клиента
-                uuid, email = await xui_create_or_extend_client(xui_session, tg_id, days)
-                if not uuid or not email:
-                    await message.answer(
-                        f"❌ Ошибка создания VIP подписки на XUI панели\n\n"
-                        "Попробуй позже"
-                    )
-                    logger.error(f"Failed to create XUI client for user {tg_id} by admin {admin_id}")
-                    return
-
-            # Обновляем VIP подписку в БД
-            new_vip_until = datetime.utcnow() + timedelta(days=days)
-            await db.update_vip_subscription(tg_id, uuid, email, new_vip_until)
-
-            await message.answer(
-                f"✅ <b>VIP подписка выдана успешно!</b>\n\n"
-                f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
-                f"📅 <b>Дней:</b> {days}\n"
-                f"🔑 <b>XUI UUID:</b> <code>{uuid}</code>"
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            # Создаём или получаем VIP пользователя в Remnawave
+            uuid, username = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True, sub_type="vip"
             )
 
-            # Уведомляем пользователя
-            try:
-                await message.bot.send_message(
-                    tg_id,
-                    f"🎉 <b>Поздравляем!</b>\n\n"
-                    f"Вам выдана VIP подписка «Обход глушилок» на <b>{days} дней</b>\n\n"
-                    f"Спасибо за использование нашего сервиса! 🚀"
-                )
-                logger.info(f"User {tg_id} notified about VIP subscription by admin {admin_id}")
-            except Exception as e:
-                logger.warning(f"Failed to notify user {tg_id}: {e}")
+            if not uuid:
                 await message.answer(
-                    f"⚠️ VIP подписка выдана, но не удалось отправить уведомление пользователю\n"
-                    f"(Ошибка: {str(e)[:50]})"
+                    f"❌ <b>Ошибка Remnawave API</b>\n\n"
+                    f"Не удалось создать/обновить VIP аккаунт для пользователя {tg_id}\n\n"
+                    "Попробуй позже"
                 )
+                logger.error(f"Failed to get/create Remnawave VIP user for TG {tg_id} by admin {admin_id}")
+                return
 
-            logger.info(f"Admin {admin_id} gave {days} days VIP subscription to user {tg_id}")
+            # Добавляем в сквад
+            squad_added = await remnawave_add_to_squad(session, uuid)
+            if not squad_added:
+                logger.warning(f"Failed to add VIP user {uuid} to squad by admin {admin_id}, continuing")
 
-        finally:
-            await xui_session.close()
+            # Обновляем VIP подписку в БД
+            new_until = datetime.utcnow() + timedelta(days=days)
+            await db.update_subscription_vip(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+
+        await message.answer(
+            f"✅ <b>VIP подписка выдана успешно!</b>\n\n"
+            f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+            f"📅 <b>Дней:</b> {days}\n"
+            f"🔑 <b>UUID:</b> <code>{uuid}</code>"
+        )
+
+        # Уведомляем пользователя
+        try:
+            await message.bot.send_message(
+                tg_id,
+                f"🎉 <b>Поздравляем!</b>\n\n"
+                f"Вам выдана VIP подписка (Обход глушилок) на <b>{days} дней</b>\n\n"
+                f"Спасибо за использование нашего сервиса! 🚀"
+            )
+            logger.info(f"User {tg_id} notified about VIP subscription by admin {admin_id}")
+        except Exception as e:
+            logger.warning(f"Failed to notify user {tg_id}: {e}")
+            await message.answer(
+                f"⚠️ VIP подписка выдана, но не удалось отправить уведомление пользователю\n"
+                f"(Ошибка: {str(e)[:50]})"
+            )
+
+        logger.info(f"Admin {admin_id} gave {days} days VIP subscription to user {tg_id}")
 
     except Exception as e:
         logger.error(f"Give VIP subscription error: {e}")
@@ -364,7 +347,7 @@ async def admin_give_vip_sub(message: Message):
 
 @router.message(Command("give_all_sub"))
 async def admin_give_all_sub(message: Message):
-    """Админ команда: выдать/продлить обе подписки (обычную + VIP)"""
+    """Админ команда: выдать/продлить обе подписки пользователю по ИД"""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
@@ -427,88 +410,67 @@ async def admin_give_all_sub(message: Message):
             await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
 
-        # Получаем XUI сессию
-        xui_session = await get_xui_session()
-        if not xui_session:
-            await message.answer("❌ Ошибка подключения к XUI панели. Попробуй позже.")
-            logger.error(f"Failed to get XUI session for /give_all_sub by admin {admin_id}")
-            return
-
-        try:
-            # 1. Выдаём обычную подписку через Remnawave
-            connector = aiohttp.TCPConnector(ssl=False)
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as remnawave_session:
-                uuid, username = await remnawave_get_or_create_user(
-                    remnawave_session, tg_id, days=days, extend_if_exists=True
-                )
-
-                if not uuid:
-                    await message.answer(
-                        f"❌ <b>Ошибка Remnawave API</b>\n\n"
-                        f"Не удалось создать/обновить аккаунт для пользователя {tg_id}\n\n"
-                        "Попробуй позже"
-                    )
-                    logger.error(f"Failed to get/create Remnawave user for TG {tg_id} by admin {admin_id}")
-                    return
-
-                # Добавляем в сквад
-                squad_added = await remnawave_add_to_squad(remnawave_session, uuid)
-                if not squad_added:
-                    logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
-
-                # Обновляем обычную подписку в БД
-                new_until = datetime.utcnow() + timedelta(days=days)
-                await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
-
-            # 2. Выдаём VIP подписку через XUI
-            vip_uuid, vip_email = await db.get_vip_subscription_info(tg_id)
-
-            if vip_uuid and vip_email:
-                # Продляем существующего VIP клиента
-                success = await xui_extend_client(xui_session, vip_uuid, vip_email, days)
-                if not success:
-                    logger.warning(f"Failed to extend VIP subscription for user {tg_id}")
-            else:
-                # Создаём нового VIP клиента
-                vip_uuid, vip_email = await xui_create_or_extend_client(xui_session, tg_id, days)
-                if not vip_uuid or not vip_email:
-                    logger.warning(f"Failed to create VIP subscription for user {tg_id}")
-
-            # Обновляем VIP подписку в БД
-            new_vip_until = datetime.utcnow() + timedelta(days=days)
-            await db.update_vip_subscription(tg_id, vip_uuid, vip_email, new_vip_until)
-
-            await message.answer(
-                f"✅ <b>Обе подписки выданы успешно!</b>\n\n"
-                f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
-                f"📅 <b>Дней:</b> {days}\n"
-                f"🔑 <b>Remnawave UUID:</b> <code>{uuid}</code>\n"
-                f"🔑 <b>XUI UUID:</b> <code>{vip_uuid}</code>"
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            # Создаём или получаем обе подписки в Remnawave
+            uuid_regular, username_regular = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True, sub_type="regular"
+            )
+            uuid_vip, username_vip = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True, sub_type="vip"
             )
 
-            # Уведомляем пользователя
-            try:
-                await message.bot.send_message(
-                    tg_id,
-                    f"🎉 <b>Поздравляем!</b>\n\n"
-                    f"Вам выданы обе подписки на <b>{days} дней</b>:\n"
-                    f"• 📱 Обычная подписка\n"
-                    f"• 🚀 Обход глушилок (VIP)\n\n"
-                    f"Спасибо за использование нашего сервиса! 🚀"
-                )
-                logger.info(f"User {tg_id} notified about both subscriptions by admin {admin_id}")
-            except Exception as e:
-                logger.warning(f"Failed to notify user {tg_id}: {e}")
+            if not uuid_regular or not uuid_vip:
                 await message.answer(
-                    f"⚠️ Подписки выданы, но не удалось отправить уведомление пользователю\n"
-                    f"(Ошибка: {str(e)[:50]})"
+                    f"❌ <b>Ошибка Remnawave API</b>\n\n"
+                    f"Не удалось создать/обновить аккаунты для пользователя {tg_id}\n\n"
+                    "Попробуй позже"
                 )
+                logger.error(f"Failed to get/create Remnawave users for TG {tg_id} by admin {admin_id}")
+                return
 
-            logger.info(f"Admin {admin_id} gave {days} days both subscriptions to user {tg_id}")
+            # Добавляем обе подписки в сквады
+            squad_added_regular = await remnawave_add_to_squad(session, uuid_regular)
+            squad_added_vip = await remnawave_add_to_squad(session, uuid_vip)
+            if not squad_added_regular or not squad_added_vip:
+                logger.warning(f"Failed to add users to squad by admin {admin_id}, continuing")
 
-        finally:
-            await xui_session.close()
+            # Обновляем обе подписки в БД
+            new_until = datetime.utcnow() + timedelta(days=days)
+            await db.update_both_subscriptions(
+                tg_id,
+                uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
+                uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+            )
+
+        await message.answer(
+            f"✅ <b>Обе подписки выданы успешно!</b>\n\n"
+            f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+            f"📅 <b>Дней:</b> {days}\n"
+            f"🔑 <b>Regular UUID:</b> <code>{uuid_regular}</code>\n"
+            f"🔑 <b>VIP UUID:</b> <code>{uuid_vip}</code>"
+        )
+
+        # Уведомляем пользователя
+        try:
+            await message.bot.send_message(
+                tg_id,
+                f"🎉 <b>Поздравляем!</b>\n\n"
+                f"Вам выданы обе подписки на <b>{days} дней</b>:\n"
+                f"• 🌐 Обычная подписка\n"
+                f"• 🔒 Обход глушилок\n\n"
+                f"Спасибо за использование нашего сервиса! 🚀"
+            )
+            logger.info(f"User {tg_id} notified about all subscriptions by admin {admin_id}")
+        except Exception as e:
+            logger.warning(f"Failed to notify user {tg_id}: {e}")
+            await message.answer(
+                f"⚠️ Подписки выданы, но не удалось отправить уведомление пользователю\n"
+                f"(Ошибка: {str(e)[:50]})"
+            )
+
+        logger.info(f"Admin {admin_id} gave {days} days of all subscriptions to user {tg_id}")
 
     except Exception as e:
         logger.error(f"Give all subscriptions error: {e}")

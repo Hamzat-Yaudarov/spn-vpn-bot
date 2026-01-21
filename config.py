@@ -43,22 +43,6 @@ YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3"
 
 # ────────────────────────────────────────────────
-#                3X-UI PANEL CONFIG (VIP subscriptions)
-# ────────────────────────────────────────────────
-
-XUI_PANEL_URL = os.getenv("XUI_PANEL_URL", "https://51.250.117.234:2053")
-XUI_PANEL_PATH = os.getenv("XUI_PANEL_PATH", "/sXvL8myMex46uSa3NP/panel")
-XUI_USERNAME = os.getenv("XUI_USERNAME", "U0UiUl76S0")
-XUI_PASSWORD = os.getenv("XUI_PASSWORD", "2W1SwoZ0Ix")
-SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
-SUB_EXTERNAL_HOST = os.getenv("SUB_EXTERNAL_HOST", "51.250.117.234")
-INBOUND_ID = int(os.getenv("INBOUND_ID", "1"))
-
-# 3X-UI API URLs (правильные пути)
-XUI_API_BASE = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}"  # https://host/SECRET/panel
-XUI_LOGIN_URL = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.rsplit('/panel', 1)[0]}/login/"  # https://host/SECRET/login/
-
-# ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 
@@ -76,19 +60,35 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 #                TARIFFS CONFIG
 # ────────────────────────────────────────────────
 
-TARIFFS = {
+# Обычная подписка (VPN базовый)
+TARIFFS_REGULAR = {
     "1m": {"days": 30, "price": 100},
     "3m": {"days": 90, "price": 249},
     "6m": {"days": 180, "price": 449},
     "12m": {"days": 365, "price": 990}
 }
 
-# Тарифы для комбо подписки (Обычная + Обход глушилок)
-COMBO_TARIFFS = {
+# VIP подписка (Обход глушилок)
+TARIFFS_VIP = {
+    "1m": {"days": 30, "price": 100},
+    "3m": {"days": 90, "price": 249},
+    "6m": {"days": 180, "price": 449},
+    "12m": {"days": 365, "price": 990}
+}
+
+# Оба типа подписки вместе
+TARIFFS_BOTH = {
     "1m": {"days": 30, "price": 150},
     "3m": {"days": 90, "price": 349},
     "6m": {"days": 180, "price": 599},
     "12m": {"days": 365, "price": 1090}
+}
+
+# Все тарифы для удобства
+TARIFFS = {
+    "regular": TARIFFS_REGULAR,
+    "vip": TARIFFS_VIP,
+    "both": TARIFFS_BOTH
 }
 
 # ────────────────────────────────────────────────

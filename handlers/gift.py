@@ -10,11 +10,6 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
-from services.xui_panel import (
-    get_xui_session,
-    xui_create_or_extend_client,
-    xui_extend_client
-)
 
 
 router = Router()
@@ -85,62 +80,56 @@ async def process_get_gift(callback: CallbackQuery):
             await callback.answer("Ты уже получал подарок", show_alert=True)
             return
 
-        # Выдаём подарок (3 дня обеих подписок)
+        # Выдаём подарок (3 дня для обеих подписок)
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as remnawave_session:
-            # 1. Выдаём обычную подписку через Remnawave
-            uuid, username = await remnawave_get_or_create_user(
-                remnawave_session,
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            # Создаём/продлеваем обе подписки на 3 дня
+            uuid_regular, username_regular = await remnawave_get_or_create_user(
+                session,
                 tg_id,
                 days=3,
-                extend_if_exists=True
+                extend_if_exists=True,
+                sub_type="regular"
+            )
+            uuid_vip, username_vip = await remnawave_get_or_create_user(
+                session,
+                tg_id,
+                days=3,
+                extend_if_exists=True,
+                sub_type="vip"
             )
 
-            if not uuid:
+            if not uuid_regular or not uuid_vip:
                 await callback.answer(
                     "Ошибка при выдаче подарка. Попробуй позже.",
                     show_alert=True
                 )
                 return
 
-            await remnawave_add_to_squad(remnawave_session, uuid)
-            sub_url = await remnawave_get_subscription_url(remnawave_session, uuid)
+            # Добавляем обе подписки в сквады
+            await remnawave_add_to_squad(session, uuid_regular)
+            await remnawave_add_to_squad(session, uuid_vip)
 
-            # Обновляем обычную подписку в БД
-            new_until = datetime.utcnow() + timedelta(days=3)
-            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            # Получаем ссылки подписок
+            sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
+            sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
 
-        # 2. Выдаём VIP подписку через XUI
-        xui_session = await get_xui_session()
-        if xui_session:
-            try:
-                vip_uuid, vip_email = await db.get_vip_subscription_info(tg_id)
-
-                if vip_uuid and vip_email:
-                    # Продляем существующего VIP клиента
-                    await xui_extend_client(xui_session, vip_uuid, vip_email, 3)
-                else:
-                    # Создаём нового VIP клиента
-                    vip_uuid, vip_email = await xui_create_or_extend_client(xui_session, tg_id, 3)
-
-                if vip_uuid and vip_email:
-                    # Обновляем VIP подписку в БД
-                    new_vip_until = datetime.utcnow() + timedelta(days=3)
-                    await db.update_vip_subscription(tg_id, vip_uuid, vip_email, new_vip_until)
-            except Exception as e:
-                logging.warning(f"Failed to create/extend VIP subscription for gift: {e}")
-            finally:
-                await xui_session.close()
+        # Обновляем обе подписки в БД
+        new_until = datetime.utcnow() + timedelta(days=3)
+        await db.update_both_subscriptions(
+            tg_id,
+            uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
+            uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+        )
 
         # Отправляем сообщение пользователю
         text = (
             "🎁 <b>Подарок получен!</b>\n\n"
             "Спасибо за подписку на канал!\n"
-            "Тебе выданы обе подписки на 3 дня:\n"
-            "• 📱 Обычная подписка\n"
-            "• 🚀 Обход глушилок (VIP)\n\n"
-            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+            "Тебе выданы обе подписки на 3 дня.\n\n"
+            f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
+            f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
         )
 
         await callback.message.edit_text(text)

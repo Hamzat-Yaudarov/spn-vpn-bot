@@ -1,10 +1,10 @@
 import logging
 import aiohttp
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import TARIFFS, COMBO_TARIFFS, DEFAULT_SQUAD_UUID
+from config import TARIFFS_REGULAR, TARIFFS_VIP, TARIFFS_BOTH, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
 from services.remnawave import (
@@ -25,200 +25,263 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} clicked: buy_subscription")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Обычная подписка", callback_data="subscription_type_normal")],
-        [InlineKeyboardButton(text="📱 + Обход глушилок", callback_data="subscription_type_vip")],
-        [InlineKeyboardButton(text="📱 Обычная + Обход глушилок", callback_data="subscription_type_combo")],
+        [InlineKeyboardButton(text="🌐 Обычная подписка", callback_data="subtype_regular")],
+        [InlineKeyboardButton(text="🔒 Обход глушилок", callback_data="subtype_vip")],
+        [InlineKeyboardButton(text="⭐ Обычная + Обход", callback_data="subtype_both")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
     text = (
-        "<b>Выбери тип подписки:</b>\n\n"
-        "<b>📱 Обычная подписка</b>\n"
-        "Стабильное соединение, оптимизация интернета\n\n"
-        "<b>📱 + Обход глушилок</b>\n"
-        "Обычная подписка + улучшенный VIP доступ\n"
-        "с дополнительными серверами для преодоления блокировок\n\n"
-        "<b>📱 Обычная + Обход глушилок</b>\n"
-        "Оба типа подписок по выгодной цене"
+        "<b>Выберите тип подписки:</b>\n\n"
+        "<b>🌐 Обычная подписка</b>\n"
+        "Стандартный VPN доступ\n\n"
+        "<b>🔒 Обход глушилок</b>\n"
+        "Специальная подписка для обхода блокировок\n\n"
+        "<b>⭐ Обычная + Обход</b>\n"
+        "Оба типа подписки вместе по выгодной цене"
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
     await state.set_state(UserStates.choosing_subscription_type)
 
 
-@router.callback_query(F.data.startswith("subscription_type_"))
-async def process_subscription_type(callback: CallbackQuery, state: FSMContext):
-    """Обработать выбор типа подписки"""
+@router.callback_query(F.data.startswith("subtype_"), UserStates.choosing_subscription_type)
+async def process_subscription_type_choice(callback: CallbackQuery, state: FSMContext):
+    """Обработить выбор типа подписки"""
     tg_id = callback.from_user.id
-    sub_type = callback.data.split("_")[2]  # "normal", "vip" или "combo"
+    sub_type = callback.data.split("_")[1]  # regular, vip, both
     logging.info(f"User {tg_id} selected subscription type: {sub_type}")
 
     await state.update_data(subscription_type=sub_type)
 
-    # Выбираем правильные тарифы в зависимости от типа подписки
-    tariff_dict = COMBO_TARIFFS if sub_type == "combo" else TARIFFS
+    # Выбираем нужный набор тарифов
+    if sub_type == "regular":
+        tariffs = TARIFFS_REGULAR
+        title = "Обычная подписка"
+    elif sub_type == "vip":
+        tariffs = TARIFFS_VIP
+        title = "Обход глушилок"
+    else:  # both
+        tariffs = TARIFFS_BOTH
+        title = "Обычная + Обход глушилок"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"1 месяц — {tariff_dict['1m']['price']}₽", callback_data="tariff_1m")],
-        [InlineKeyboardButton(text=f"3 месяца — {tariff_dict['3m']['price']}₽", callback_data="tariff_3m")],
-        [InlineKeyboardButton(text=f"6 месяцев — {tariff_dict['6m']['price']}₽", callback_data="tariff_6m")],
-        [InlineKeyboardButton(text=f"12 месяцев — {tariff_dict['12m']['price']}₽", callback_data="tariff_12m")],
+        [InlineKeyboardButton(text=f"1 месяц — {tariffs['1m']['price']}₽", callback_data="tariff_1m")],
+        [InlineKeyboardButton(text=f"3 месяца — {tariffs['3m']['price']}₽", callback_data="tariff_3m")],
+        [InlineKeyboardButton(text=f"6 месяцев — {tariffs['6m']['price']}₽", callback_data="tariff_6m")],
+        [InlineKeyboardButton(text=f"12 месяцев — {tariffs['12m']['price']}₽", callback_data="tariff_12m")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
-    if sub_type == "combo":
-        sub_type_label = "Обычная + Обход глушилок"
-    elif sub_type == "vip":
-        sub_type_label = "Обход глушилок (VIP)"
-    else:
-        sub_type_label = "Обычная подписка"
-
-    text = f"<b>Выбери срок подписки</b> ({sub_type_label}):"
-
-    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(f"<b>{title}</b>\n\nВыбери срок подписки:", reply_markup=kb)
     await state.set_state(UserStates.choosing_tariff)
 
 
-@router.callback_query(F.data.startswith("tariff_"))
+@router.callback_query(F.data.startswith("tariff_"), UserStates.choosing_tariff)
 async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
-    """Обработать выбор тарифа - оплата ТОЛЬКО с баланса"""
+    """Обработать выбор тарифа"""
     tg_id = callback.from_user.id
     tariff_code = callback.data.split("_")[1]
-    logging.info(f"User {tg_id} selected tariff: {tariff_code}")
-
-    await state.update_data(tariff_code=tariff_code)
-
-    # Получаем тип подписки из состояния
     data = await state.get_data()
-    subscription_type = data.get("subscription_type", "normal")
+    sub_type = data.get("subscription_type", "regular")
+    logging.info(f"User {tg_id} selected tariff: {tariff_code} for {sub_type}")
 
-    # Выбираем правильные тарифы в зависимости от типа подписки
-    tariff_dict = COMBO_TARIFFS if subscription_type == "combo" else TARIFFS
-    tariff = tariff_dict[tariff_code]
-    price = tariff["price"]
-    days = tariff["days"]
+    # Выбираем правильный набор тарифов
+    if sub_type == "regular":
+        tariffs = TARIFFS_REGULAR
+    elif sub_type == "vip":
+        tariffs = TARIFFS_VIP
+    else:  # both
+        tariffs = TARIFFS_BOTH
 
-    # Получаем баланс пользователя
+    if tariff_code not in tariffs:
+        await callback.message.edit_text("❌ Неверный тариф")
+        await state.clear()
+        return
+
+    tariff = tariffs[tariff_code]
+    amount = tariff["price"]
+
+    await state.update_data(tariff_code=tariff_code, amount=amount)
+
+    # Проверяем баланс пользователя
     balance = await db.get_balance(tg_id)
 
-    if balance >= price:
-        # Достаточно средств - вычитаем со счёта и активируем подписку
-        if not await db.acquire_user_lock(tg_id):
-            await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+    if balance >= amount:
+        # Баланс достаточен - предлагаем оплатить с баланса или пополнить
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Оплатить с баланса", callback_data="pay_from_balance")],
+            [InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="top_up_balance_and_pay")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+        ])
+        text = (
+            f"<b>💰 Ваш баланс: {balance:.2f} ₽</b>\n\n"
+            f"Сумма: {amount} ₽\n\n"
+            "У вас достаточно средств. Как вы хотите оплатить?"
+        )
+    else:
+        # Баланса недостаточно - предлагаем пополнить
+        needed = amount - balance
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="top_up_balance_and_pay")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
+        ])
+        text = (
+            f"<b>💰 Ваш баланс: {balance:.2f} ₽</b>\n\n"
+            f"Сумма подписки: {amount} ₽\n"
+            f"<b>Не хватает: {needed:.2f} ₽</b>\n\n"
+            "Пополните баланс чтобы завершить покупку"
+        )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(UserStates.choosing_payment)
+
+
+@router.callback_query(F.data == "pay_from_balance", UserStates.choosing_payment)
+async def process_pay_from_balance(callback: CallbackQuery, state: FSMContext):
+    """Оплатить подписку с баланса"""
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    amount = data.get("amount")
+    subscription_type = data.get("subscription_type", "regular")
+    tariff_code = data.get("tariff_code")
+
+    if not await db.acquire_user_lock(tg_id):
+        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+        return
+
+    try:
+        # Списываем со счета
+        deducted = await db.deduct_balance(tg_id, amount)
+        if not deducted:
+            await callback.answer("❌ Недостаточно средств", show_alert=True)
             return
 
-        try:
-            success = await db.subtract_balance(tg_id, price)
+        # Выбираем нужный набор тарифов для получения количества дней
+        if subscription_type == "regular":
+            tariffs = TARIFFS_REGULAR
+        elif subscription_type == "vip":
+            tariffs = TARIFFS_VIP
+        else:  # both
+            tariffs = TARIFFS_BOTH
 
-            if not success:
-                await callback.answer("Ошибка при списании со счёта", show_alert=True)
-                return
+        tariff = tariffs[tariff_code]
+        days = tariff["days"]
 
-            # Активируем подписку
-            connector = aiohttp.TCPConnector(ssl=False)
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                # Создаём или получаем пользователя в Remnawave для обычной подписки
+        # Активируем подписку в Remnawave
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if subscription_type == "both":
+                # Создаём обе подписки
+                uuid_regular, username_regular = await remnawave_get_or_create_user(
+                    session, tg_id, days, extend_if_exists=True, sub_type="regular"
+                )
+                uuid_vip, username_vip = await remnawave_get_or_create_user(
+                    session, tg_id, days, extend_if_exists=True, sub_type="vip"
+                )
+
+                if not uuid_regular or not uuid_vip:
+                    await db.add_balance(tg_id, amount)  # Возвращаем деньги
+                    await callback.answer("❌ Ошибка активации подписки", show_alert=True)
+                    return
+
+                # Добавляем обе подписки в сквады
+                await remnawave_add_to_squad(session, uuid_regular)
+                await remnawave_add_to_squad(session, uuid_vip)
+
+                # Получаем ссылки подписок
+                sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
+                sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
+
+                # Обновляем обе подписки в БД
+                new_until = datetime.utcnow() + timedelta(days=days)
+                await db.update_both_subscriptions(
+                    tg_id,
+                    uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
+                    uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+                )
+
+                text = (
+                    "✅ <b>Подписка активирована!</b>\n\n"
+                    f"Срок: {days} дней\n\n"
+                    f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
+                    f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
+                )
+            else:
+                # Создаём только один тип подписки
                 uuid, username = await remnawave_get_or_create_user(
-                    session, tg_id, days, extend_if_exists=True
+                    session, tg_id, days, extend_if_exists=True, sub_type=subscription_type
                 )
 
                 if not uuid:
-                    logging.error(f"Failed to create/get Remnawave user for {tg_id}")
-                    # Откат: возвращаем деньги
-                    await db.add_balance(tg_id, price)
-                    await callback.answer("Ошибка создания подписки", show_alert=True)
+                    await db.add_balance(tg_id, amount)  # Возвращаем деньги
+                    await callback.answer("❌ Ошибка активации подписки", show_alert=True)
                     return
 
                 # Добавляем в сквад
-                squad_added = await remnawave_add_to_squad(session, uuid)
-                if not squad_added:
-                    logging.warning(f"Failed to add user {uuid} to squad")
-
-                # Получаем ссылку подписки
+                await remnawave_add_to_squad(session, uuid)
                 sub_url = await remnawave_get_subscription_url(session, uuid)
-                if not sub_url:
-                    logging.warning(f"Failed to get subscription URL for {uuid}")
 
-                # Обновляем обычную подписку пользователя в БД
+                # Обновляем подписку в БД
                 new_until = datetime.utcnow() + timedelta(days=days)
-                await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+                if subscription_type == "regular":
+                    await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+                else:  # vip
+                    await db.update_subscription_vip(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-            # Если выбрана VIP подписка или комбо, создаём её через XUI
-            if subscription_type in ("vip", "combo"):
-                from services.xui_panel import get_xui_session, xui_create_or_extend_client
-                xui_session = await get_xui_session()
-                if xui_session:
-                    try:
-                        vip_uuid, vip_email = await xui_create_or_extend_client(xui_session, tg_id, days)
-                        if vip_uuid and vip_email:
-                            new_vip_until = datetime.utcnow() + timedelta(days=days)
-                            await db.update_vip_subscription(tg_id, vip_uuid, vip_email, new_vip_until)
-                    except Exception as e:
-                        logging.warning(f"Failed to create/extend VIP subscription: {e}")
-                    finally:
-                        await xui_session.close()
+                text = (
+                    "✅ <b>Подписка активирована!</b>\n\n"
+                    f"Срок: {days} дней\n"
+                    f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+                )
 
-            # Отправляем сообщение пользователю
-            if subscription_type == "combo":
-                sub_type_text = "Обычная подписка + Обход глушилок"
-            elif subscription_type == "vip":
-                sub_type_text = "Обход глушилок (VIP)"
-            else:
-                sub_type_text = "Обычная подписка"
+            # Обрабатываем реферальную программу (25% от суммы)
+            try:
+                referrer = await db.get_referrer(tg_id)
+                if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
+                    referral_bonus = amount * 0.25
+                    await db.add_referral_balance(referrer[0], referral_bonus)
+                    await db.mark_first_payment(tg_id)
+                    logging.info(f"Referral bonus {referral_bonus} given to {referrer[0]}")
+            except Exception as e:
+                logging.error(f"Error processing referral for user {tg_id}: {e}")
 
-            text = (
-                "✅ <b>Подписка активирована!</b>\n\n"
-                f"Тариф: {tariff_code} ({days} дней)\n"
-                f"Тип: {sub_type_text}\n"
-                f"Списано со счёта: {price} ₽\n\n"
-                f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
-            )
-
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
-            ])
-
-            await callback.message.edit_text(text, reply_markup=kb)
-            await state.clear()
-
-        except Exception as e:
-            logging.error(f"Error processing subscription payment: {e}")
-            # Откат: возвращаем деньги
-            await db.add_balance(tg_id, price)
-            await callback.answer("Ошибка при активации подписки", show_alert=True)
-        finally:
-            await db.release_user_lock(tg_id)
-
-    else:
-        # Недостаточно средств
-        needed = price - balance
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="topup_balance")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
-        ])
-
-        text = (
-            f"<b>Недостаточно средств</b>\n\n"
-            f"Стоимость тарифа: {price} ₽\n"
-            f"Ваш баланс: {balance:.2f} ₽\n"
-            f"Не хватает: {needed:.2f} ₽\n\n"
-            "Пополните баланс, чтобы активировать подписку"
-        )
-
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text)
         await state.clear()
+
+    except Exception as e:
+        logging.error(f"Pay from balance error: {e}")
+        await db.add_balance(tg_id, amount)  # Возвращаем деньги при ошибке
+        await callback.answer(f"❌ Ошибка при оплате: {str(e)[:50]}", show_alert=True)
+
+    finally:
+        await db.release_user_lock(tg_id)
+
+
+@router.callback_query(F.data == "top_up_balance_and_pay")
+async def process_top_up_balance_and_pay(callback: CallbackQuery, state: FSMContext):
+    """Переходим на пополнение баланса, а потом назад к покупке"""
+    await state.update_data(return_to_payment=True)
+    await callback.message.edit_text("Выберите сумму для пополнения:", 
+                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="100 ₽", callback_data="topup_100")],
+        [InlineKeyboardButton(text="500 ₽", callback_data="topup_500")],
+        [InlineKeyboardButton(text="1000 ₽", callback_data="topup_1000")],
+        [InlineKeyboardButton(text="5000 ₽", callback_data="topup_5000")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+    ]))
 
 
 @router.callback_query(F.data == "my_subscription")
 async def process_my_subscription(callback: CallbackQuery):
-    """Показать информацию о подписке пользователя"""
+    """Показать информацию о подписках пользователя"""
     tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} checking subscription status")
+    logging.info(f"User {tg_id} checking subscriptions")
 
     user = await db.get_user(tg_id)
 
-    if not user or not user['remnawave_uuid']:
+    if not user or (not user['remnawave_uuid'] and not user['remnawave_uuid_vip']):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Оформить подписку", callback_data="buy_subscription")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
@@ -229,50 +292,62 @@ async def process_my_subscription(callback: CallbackQuery):
         )
         return
 
-    # Получаем актуальную информацию о подписке из Remnawave
-    remaining_str = "неизвестно"
-    sub_url = "ошибка получения ссылки"
-    vip_remaining_str = None
+    # Получаем информацию о подписках
+    sub_info_regular = "Не активирована"
+    sub_info_vip = "Не активирована"
 
     try:
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Получаем ссылку подписки
-            sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
+            # Обычная подписка
+            if user['remnawave_uuid']:
+                try:
+                    user_info = await remnawave_get_user_info(session, user['remnawave_uuid'])
+                    if user_info and "expireAt" in user_info:
+                        expire_at = user_info["expireAt"]
+                        exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
+                        remaining = exp_date - datetime.now(timezone.utc)
 
-            # Получаем информацию о пользователе (включая expireAt)
-            user_info = await remnawave_get_user_info(session, user['remnawave_uuid'])
+                        if remaining.total_seconds() <= 0:
+                            remaining_str = "истекла"
+                        else:
+                            days = remaining.days
+                            hours = remaining.seconds // 3600
+                            minutes = (remaining.seconds % 3600) // 60
+                            remaining_str = f"{days}д {hours}ч {minutes}м"
 
-            if user_info and "expireAt" in user_info:
-                expire_at = user_info["expireAt"]
-                exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
-                remaining = exp_date - datetime.now(timezone.utc)
+                        sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid'])
+                        sub_info_regular = f"Осталось: <b>{remaining_str}</b>\n<code>{sub_url or 'Ошибка'}</code>"
+                except Exception as e:
+                    logging.error(f"Error fetching regular subscription info: {e}")
+                    sub_info_regular = "Ошибка загрузки"
 
-                if remaining.total_seconds() <= 0:
-                    remaining_str = "истекла"
-                else:
-                    days = remaining.days
-                    hours = remaining.seconds // 3600
-                    minutes = (remaining.seconds % 3600) // 60
-                    remaining_str = f"{days}д {hours}ч {minutes}м"
+            # VIP подписка
+            if user['remnawave_uuid_vip']:
+                try:
+                    user_info = await remnawave_get_user_info(session, user['remnawave_uuid_vip'])
+                    if user_info and "expireAt" in user_info:
+                        expire_at = user_info["expireAt"]
+                        exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
+                        remaining = exp_date - datetime.now(timezone.utc)
+
+                        if remaining.total_seconds() <= 0:
+                            remaining_str = "истекла"
+                        else:
+                            days = remaining.days
+                            hours = remaining.seconds // 3600
+                            minutes = (remaining.seconds % 3600) // 60
+                            remaining_str = f"{days}д {hours}ч {minutes}м"
+
+                        sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid_vip'])
+                        sub_info_vip = f"Осталось: <b>{remaining_str}</b>\n<code>{sub_url or 'Ошибка'}</code>"
+                except Exception as e:
+                    logging.error(f"Error fetching VIP subscription info: {e}")
+                    sub_info_vip = "Ошибка загрузки"
 
     except Exception as e:
         logging.error(f"Error fetching subscription info from Remnawave: {e}")
-        remaining_str = "ошибка загрузки"
-
-    # Проверяем VIP подписку
-    vip_status = "❌ Нет"
-    if user['vip_subscription_until']:
-        vip_until = user['vip_subscription_until']
-        if vip_until > datetime.utcnow():
-            remaining = vip_until - datetime.utcnow()
-            days = remaining.days
-            hours = remaining.seconds // 3600
-            vip_remaining_str = f"{days}д {hours}ч"
-            vip_status = f"✅ Активна ({vip_remaining_str})"
-        else:
-            vip_status = "❌ Истекла"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_subscription")],
@@ -280,17 +355,21 @@ async def process_my_subscription(callback: CallbackQuery):
     ])
 
     text = (
-            "🔐 <b>Мой доступ</b>\n\n"
-            "<b>Обычная подписка:</b>\n"
-            "<blockquote>"
-            f"📆 Осталось времени: <b>{remaining_str}</b>\n"
-        "🌐 Группа подключения: <b>SPN-Squad</b>\n"
+        "🔐 <b>Мои подписки</b>\n\n"
+        "<blockquote>"
+        f"<b>🌐 Обычная подписка</b>\n{sub_info_regular}\n\n"
+        f"<b>🔒 Обход глушилок</b>\n{sub_info_vip}\n"
         "</blockquote>\n\n"
-        "<b>Обход глушилок (VIP):</b>\n"
-        f"<blockquote>{vip_status}</blockquote>\n\n"
-        "<b>Персональная ссылка доступа:</b>\n"
-        f"{sub_url or '<i>Ошибка получения ссылки</i>'}\n\n"
-        "🟢 <i>Статус: активен</i>"
+        "🟢 <i>Статус: активны</i>"
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "check_payment")
+async def process_check_payment(callback: CallbackQuery):
+    """Проверить статус платежа (не используется для оплаты с баланса, но оставляем для совместимости)"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} checking payment status")
+
+    await callback.answer("Эта функция используется для платежей через внешние системы", show_alert=True)

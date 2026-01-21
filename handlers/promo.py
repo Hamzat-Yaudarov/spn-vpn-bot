@@ -12,11 +12,6 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
-from services.xui_panel import (
-    get_xui_session,
-    xui_create_or_extend_client,
-    xui_extend_client
-)
 from handlers.start import show_main_menu
 
 
@@ -77,65 +72,52 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         days = promo[0]
 
-        # 1. Создаём или получаем пользователя в Remnawave для обычной подписки
+        # Создаём или получаем пользователя в Remnawave (обе подписки)
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as remnawave_session:
-            uuid, username = await remnawave_get_or_create_user(
-                remnawave_session, tg_id, days=days, extend_if_exists=True
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            # Промокоды всегда дают обе подписки
+            uuid_regular, username_regular = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True, sub_type="regular"
+            )
+            uuid_vip, username_vip = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True, sub_type="vip"
             )
 
-            if not uuid:
+            if not uuid_regular or not uuid_vip:
                 await message.answer("❌ Ошибка при применении промокода")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-            # Добавляем в сквад
-            await remnawave_add_to_squad(remnawave_session, uuid)
+            # Добавляем в сквады
+            await remnawave_add_to_squad(session, uuid_regular)
+            await remnawave_add_to_squad(session, uuid_vip)
 
-            # Получаем ссылку подписки
-            sub_url = await remnawave_get_subscription_url(remnawave_session, uuid)
+            # Получаем ссылки подписок
+            sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
+            sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
 
-            if not sub_url:
-                await message.answer("❌ Ошибка при получении ссылки подписки")
+            if not sub_url_regular or not sub_url_vip:
+                await message.answer("❌ Ошибка при получении ссылок подписок")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-            # Обновляем обычную подписку пользователя в БД
-            new_until = datetime.utcnow() + timedelta(days=days)
-            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
-
-        # 2. Создаём или продляем VIP подписку через XUI
-        xui_session = await get_xui_session()
-        if xui_session:
-            try:
-                vip_uuid, vip_email = await db.get_vip_subscription_info(tg_id)
-
-                if vip_uuid and vip_email:
-                    # Продляем существующего VIP клиента
-                    await xui_extend_client(xui_session, vip_uuid, vip_email, days)
-                else:
-                    # Создаём нового VIP клиента
-                    vip_uuid, vip_email = await xui_create_or_extend_client(xui_session, tg_id, days)
-
-                if vip_uuid and vip_email:
-                    # Обновляем VIP подписку в БД
-                    new_vip_until = datetime.utcnow() + timedelta(days=days)
-                    await db.update_vip_subscription(tg_id, vip_uuid, vip_email, new_vip_until)
-            except Exception as e:
-                logging.warning(f"Failed to create/extend VIP subscription with promo: {e}")
-            finally:
-                await xui_session.close()
+        # Обновляем обе подписки пользователя в БД
+        new_until = datetime.utcnow() + timedelta(days=days)
+        await db.update_both_subscriptions(
+            tg_id,
+            uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
+            uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+        )
 
         # Отправляем успешное сообщение
         await message.answer(
             f"✅ <b>Промокод активирован!</b>\n\n"
-            f"Добавлено {days} дней для обеих подписок:\n"
-            f"• 📱 Обычная подписка\n"
-            f"• 🚀 Обход глушилок (VIP)\n\n"
-            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+            f"Добавлено {days} дней к обеим подпискам\n\n"
+            f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
+            f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
         )
 
         logging.info(f"Promo code {code} applied by user {tg_id}")
