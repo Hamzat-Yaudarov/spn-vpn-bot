@@ -112,7 +112,13 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     tariff = tariffs[tariff_code]
 
-    await state.update_data(tariff_code=tariff_code, subscription_type=sub_type)
+    # Сохраняем все данные в state
+    await state.update_data(
+        tariff_code=tariff_code,
+        subscription_type=sub_type,
+        amount=tariff['price'],
+        tariff_days=tariff['days']
+    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
@@ -140,7 +146,12 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-    sub_type = data.get("subscription_type", "regular")
+    sub_type = data.get("subscription_type")
+
+    # Если subscription_type не в state, получаем из БД
+    if not sub_type:
+        sub_type = await db.get_subscription_type(tg_id)
+
     logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code}, type: {sub_type})")
 
     if not tariff_code:
@@ -150,8 +161,23 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
     # Выбираем правильный словарь тарифов
     tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+
+    if tariff_code not in tariffs:
+        await callback.message.edit_text("Ошибка: неверный тариф")
+        await state.clear()
+        return
+
     tariff = tariffs[tariff_code]
-    amount = tariff["price"]
+
+    # Используем amount из state если есть, иначе вычисляем
+    amount = data.get("amount") or tariff["price"]
+
+    # Проверяем, что amount совпадает с правильной ценой
+    if amount != tariff["price"]:
+        logging.warning(f"User {tg_id}: amount mismatch - stored={amount}, correct={tariff['price']}")
+        amount = tariff["price"]
+
+    logging.debug(f"CryptoBot: tariff_code={tariff_code}, sub_type={sub_type}, price={amount}")
 
     # Проверяем, есть ли уже активный счёт для этого пользователя, тарифа и типа подписки
     existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot", sub_type)
@@ -171,10 +197,13 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
                     [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
                 ])
 
+                type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
                 text = (
-                    f"<b>Счёт на оплату (существующий)</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    f"Сумма: {amount} ₽\n\n"
+                    f"<b>💎 CryptoBot (существующий счёт)</b>\n\n"
+                    f"<b>Тип подписки:</b> {type_name}\n"
+                    f"<b>Тариф:</b> {tariff_code.upper()}\n"
+                    f"<b>Сумма:</b> {amount} ₽\n\n"
                     "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
                     "Если не активировалось — нажми «Проверить оплату»"
                 )
@@ -211,10 +240,13 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
+    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
     text = (
-        f"<b>Счёт на оплату</b>\n\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n\n"
+        f"<b>💎 CryptoBot</b>\n\n"
+        f"<b>Тип подписки:</b> {type_name}\n"
+        f"<b>Тариф:</b> {tariff_code.upper()}\n"
+        f"<b>Сумма:</b> {amount} ₽\n\n"
         "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
         "Если не активировалось — нажми «Проверить оплату»"
     )
@@ -229,7 +261,12 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-    sub_type = data.get("subscription_type", "regular")
+    sub_type = data.get("subscription_type")
+
+    # Если subscription_type не в state, получаем из БД
+    if not sub_type:
+        sub_type = await db.get_subscription_type(tg_id)
+
     logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code}, type: {sub_type})")
 
     if not tariff_code:
@@ -239,8 +276,23 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
 
     # Выбираем правильный словарь тарифов
     tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+
+    if tariff_code not in tariffs:
+        await callback.message.edit_text("Ошибка: неверный тариф")
+        await state.clear()
+        return
+
     tariff = tariffs[tariff_code]
-    amount = tariff["price"]
+
+    # Используем amount из state если есть, иначе вычисляем
+    amount = data.get("amount") or tariff["price"]
+
+    # Проверяем, что amount совпадает с правильной ценой
+    if amount != tariff["price"]:
+        logging.warning(f"User {tg_id}: amount mismatch - stored={amount}, correct={tariff['price']}")
+        amount = tariff["price"]
+
+    logging.debug(f"Yookassa: tariff_code={tariff_code}, sub_type={sub_type}, price={amount}")
 
     # Проверяем, есть ли уже активный платёж для этого пользователя, тарифа и типа подписки
     existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa", sub_type)
@@ -260,10 +312,13 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
                     [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
                 ])
 
+                type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
                 text = (
                     f"<b>💳 Yookassa (существующий платёж)</b>\n\n"
-                    f"Тариф: {tariff_code}\n"
-                    f"Сумма: {amount} ₽\n\n"
+                    f"<b>Тип подписки:</b> {type_name}\n"
+                    f"<b>Тариф:</b> {tariff_code.upper()}\n"
+                    f"<b>Сумма:</b> {amount} ₽\n\n"
                     "Оплати картой, СБП или другим способом через Yookassa.\n"
                     "После оплаты бот автоматически активирует подписку.\n"
                     "Если не активировалось — нажми «Проверить оплату»"
@@ -306,10 +361,13 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
+    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
     text = (
         f"<b>💳 Yookassa</b>\n\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n\n"
+        f"<b>Тип подписки:</b> {type_name}\n"
+        f"<b>Тариф:</b> {tariff_code.upper()}\n"
+        f"<b>Сумма:</b> {amount} ₽\n\n"
         "Оплати картой, СБП или другим способом через Yookassa.\n"
         "После оплаты бот автоматически активирует подписку.\n"
         "Если не активировалось — нажми «Проверить оплату»"
@@ -370,10 +428,12 @@ async def process_check_payment(callback: CallbackQuery):
                 success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code, sub_type)
 
                 if success:
+                    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
                     await callback.message.edit_text(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
-                        f"Тариф: {tariff_code}\n"
-                        "Подписка активирована"
+                        f"<b>Тип подписки:</b> {type_name}\n"
+                        f"<b>Тариф:</b> {tariff_code.upper()}\n"
+                        "Подписка активирована ✓"
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)
@@ -388,10 +448,12 @@ async def process_check_payment(callback: CallbackQuery):
                 success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code, sub_type)
 
                 if success:
+                    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
                     await callback.message.edit_text(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
-                        f"Тариф: {tariff_code}\n"
-                        "Подписка активирована"
+                        f"<b>Тип подписки:</b> {type_name}\n"
+                        f"<b>Тариф:</b> {tariff_code.upper()}\n"
+                        "Подписка активирована ✓"
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)

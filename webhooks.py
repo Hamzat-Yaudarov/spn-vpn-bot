@@ -3,7 +3,7 @@ import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
-from config import WEBHOOK_HOST, WEBHOOK_PORT, TARIFFS, DEFAULT_SQUAD_UUID
+from config import WEBHOOK_HOST, WEBHOOK_PORT, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,

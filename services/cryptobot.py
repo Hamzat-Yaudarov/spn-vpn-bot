@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from config import (
     CRYPTOBOT_TOKEN,
     CRYPTOBOT_API_URL,
-    TARIFFS,
     TARIFFS_REGULAR,
     TARIFFS_ANTI_JAMMING,
     PAYMENT_CHECK_INTERVAL,
