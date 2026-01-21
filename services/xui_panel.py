@@ -1,10 +1,9 @@
 import aiohttp
 import logging
 import secrets
-import string
 import json
 import uuid as uuid_lib
-from datetime import datetime, timedelta
+from datetime import datetime
 from config import (
     XUI_PANEL_URL,
     XUI_PANEL_PATH,
@@ -15,113 +14,97 @@ from config import (
     INBOUND_ID,
     API_REQUEST_TIMEOUT
 )
-from utils import retry_with_backoff, safe_api_call
+from utils import safe_api_call
 
 logger = logging.getLogger(__name__)
 
+# =========================
+# BASE URLS
+# =========================
+XUI_API_BASE = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api"
+XUI_LOGIN_URL = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.rsplit('/panel', 1)[0]}/login/"
 
+
+# =========================
+# SESSION / LOGIN
+# =========================
 async def get_xui_session() -> aiohttp.ClientSession | None:
-    """
-    Получить аутентифицированную сессию для 3X-UI панели с retry логикой
-
-    Returns:
-        aiohttp.ClientSession с установленными cookies или None если ошибка
-    """
     async def _login():
-        login_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}/login"
-        payload = {"username": XUI_USERNAME, "password": XUI_PASSWORD}
-
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
+        payload = {
+            "username": XUI_USERNAME,
+            "password": XUI_PASSWORD
+        }
+
         try:
-            async with session.post(login_url, json=payload) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("success"):
-                        return session
-                    else:
-                        await session.close()
-                        raise RuntimeError(f"XUI login failed: {data}")
-                else:
-                    await session.close()
-                    error_text = await resp.text()
-                    raise RuntimeError(f"XUI HTTP {resp.status}: {error_text}")
-        except Exception as e:
+            async with session.post(XUI_LOGIN_URL, json=payload) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(f"XUI HTTP {resp.status}: {text}")
+
+                data = await resp.json()
+                if not data.get("success"):
+                    raise RuntimeError(f"XUI login failed: {data}")
+
+                return session
+
+        except Exception:
             await session.close()
-            raise e
+            raise
 
     try:
-        session = await safe_api_call(
-            _login,
-            error_message="Failed to authenticate with XUI panel"
-        )
-        return session
+        return await safe_api_call(_login, "Failed to authenticate with XUI panel")
     except Exception as e:
         logger.error(f"Get XUI session error: {e}")
         return None
 
 
-async def xui_get_client_expiry(session: aiohttp.ClientSession, email: str) -> int | None:
-    """
-    Получить время истечения подписки клиента в 3X-UI
+# =========================
+# GET CLIENT EXPIRY
+# =========================
+async def xui_get_client_expiry(
+    session: aiohttp.ClientSession,
+    email: str
+) -> int | None:
 
-    Args:
-        session: Аутентифицированная сессия
-        email: Email/идентификатор клиента
+    async def _get():
+        url = f"{XUI_API_BASE}/inbounds/getClientTraffics/{email}"
 
-    Returns:
-        Unix timestamp в миллисекундах или None если ошибка
-    """
-    async def _get_expiry():
-        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
-        get_traffic_url = f"{base_url}/api/inbounds/getClientTraffics/{email}"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"XUI HTTP {resp.status}: {await resp.text()}")
 
-        async with session.get(get_traffic_url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("success"):
-                    return data['obj']['expiryTime']
-                else:
-                    raise RuntimeError(f"Get client traffic failed: {data}")
-            else:
-                error_text = await resp.text()
-                raise RuntimeError(f"XUI HTTP {resp.status}: {error_text}")
+            data = await resp.json()
+            if not data.get("success"):
+                raise RuntimeError(f"Get client traffic failed: {data}")
+
+            return data["obj"]["expiryTime"]
 
     try:
-        expiry = await safe_api_call(
-            _get_expiry,
-            error_message=f"Failed to get client expiry for {email}"
-        )
-        return expiry
+        return await safe_api_call(_get, f"Failed to get client expiry for {email}")
     except Exception as e:
         logger.error(f"Get client expiry error: {e}")
         return None
 
 
+# =========================
+# CREATE CLIENT
+# =========================
 async def xui_create_or_extend_client(
     session: aiohttp.ClientSession,
     tg_id: int,
     days: int
 ) -> tuple[str | None, str | None]:
-    """
-    Создать или продлить клиента в 3X-UI панели с retry логикой
 
-    Args:
-        session: Аутентифицированная сессия
-        tg_id: ID пользователя Telegram
-        days: Количество дней подписки
-
-    Returns:
-        Кортеж (UUID, email) или (None, None) если ошибка
-    """
-    async def _create_or_extend():
-        # Используем UUID для уникальности внутри панели
+    async def _create():
         client_uuid = str(uuid_lib.uuid4())
         client_email = f"tg_{tg_id}_{secrets.token_hex(4)}"
+
         add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
-        new_expiry = int(datetime.utcnow().timestamp() * 1000) + add_ms
+        expiry = int(datetime.utcnow().timestamp() * 1000) + add_ms
 
         settings = {
             "clients": [{
@@ -130,7 +113,7 @@ async def xui_create_or_extend_client(
                 "email": client_email,
                 "limitIp": 0,
                 "totalGB": 0,
-                "expiryTime": new_expiry,
+                "expiryTime": expiry,
                 "enable": True,
                 "tgId": str(tg_id),
                 "subId": secrets.token_hex(8),
@@ -143,61 +126,42 @@ async def xui_create_or_extend_client(
             "settings": json.dumps(settings)
         }
 
-        # Пытаемся использовать оба возможных пути API
-        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
-        add_url = f"{base_url}/api/inbounds/addClient"
+        url = f"{XUI_API_BASE}/inbounds/addClient"
 
-        async with session.post(add_url, data=payload) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("success"):
-                    logger.info(f"Created XUI client for TG {tg_id}: {client_uuid}")
-                    return client_uuid, client_email
-                else:
-                    raise RuntimeError(f"Add client failed: {data}")
-            else:
-                error_text = await resp.text()
-                raise RuntimeError(f"XUI HTTP {resp.status}: {error_text}")
+        async with session.post(url, data=payload) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"XUI HTTP {resp.status}: {await resp.text()}")
+
+            data = await resp.json()
+            if not data.get("success"):
+                raise RuntimeError(f"Add client failed: {data}")
+
+            logger.info(f"Created XUI client TG={tg_id} UUID={client_uuid}")
+            return client_uuid, client_email
 
     try:
-        result = await safe_api_call(
-            _create_or_extend,
-            error_message=f"Failed to create XUI client for TG {tg_id}"
-        )
-        if result:
-            return result
+        return await safe_api_call(_create, f"Failed to create XUI client for TG {tg_id}")
     except Exception as e:
-        logger.error(f"Create/extend XUI client error: {e}")
+        logger.error(f"Create client error: {e}")
+        return None, None
 
-    return None, None
 
-
+# =========================
+# EXTEND CLIENT
+# =========================
 async def xui_extend_client(
     session: aiohttp.ClientSession,
     client_uuid: str,
     client_email: str,
     days: int
 ) -> bool:
-    """
-    Продлить подписку существующего клиента в 3X-UI с retry логикой
 
-    Args:
-        session: Аутентифицированная сессия
-        client_uuid: UUID клиента
-        client_email: Email клиента
-        days: Количество дней для продления
-
-    Returns:
-        True если успешно, False иначе
-    """
     async def _extend():
-        add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
-
-        # Получаем текущее время истечения
         current_expiry = await xui_get_client_expiry(session, client_email)
         if not current_expiry:
-            raise RuntimeError("Could not get current expiry time")
+            raise RuntimeError("Cannot get current expiry")
 
+        add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
         new_expiry = current_expiry + add_ms
 
         settings = {
@@ -218,46 +182,29 @@ async def xui_extend_client(
             "settings": json.dumps(settings)
         }
 
-        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
-        update_url = f"{base_url}/api/inbounds/updateClient/{client_uuid}"
+        url = f"{XUI_API_BASE}/inbounds/updateClient/{client_uuid}"
 
-        async with session.post(update_url, data=payload) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("success"):
-                    logger.info(f"Extended XUI client {client_uuid} by {days} days")
-                    return True
-                else:
-                    raise RuntimeError(f"Update client failed: {data}")
-            else:
-                error_text = await resp.text()
-                raise RuntimeError(f"XUI HTTP {resp.status}: {error_text}")
+        async with session.post(url, data=payload) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"XUI HTTP {resp.status}: {await resp.text()}")
+
+            data = await resp.json()
+            if not data.get("success"):
+                raise RuntimeError(f"Update client failed: {data}")
+
+            logger.info(f"Extended XUI client {client_uuid} by {days} days")
+            return True
 
     try:
-        result = await safe_api_call(
-            _extend,
-            error_message=f"Failed to extend XUI client {client_uuid}"
-        )
-        return result is not None
+        await safe_api_call(_extend, f"Failed to extend XUI client {client_uuid}")
+        return True
     except Exception as e:
-        logger.error(f"Extend XUI client error: {e}")
+        logger.error(f"Extend client error: {e}")
         return False
 
 
-async def xui_get_subscription_url(client_email: str) -> str | None:
-    """
-    Получить ссылку подписки для клиента из 3X-UI
-
-    Args:
-        client_email: Email клиента
-
-    Returns:
-        URL подписки или None если ошибка
-    """
-    try:
-        sub_url = f"http://{SUB_EXTERNAL_HOST}:{SUB_PORT}/sub/{client_email}"
-        logger.debug(f"Generated XUI subscription URL for {client_email}")
-        return sub_url
-    except Exception as e:
-        logger.error(f"Get XUI subscription URL error: {e}")
-        return None
+# =========================
+# SUBSCRIPTION URL
+# =========================
+async def xui_get_subscription_url(client_email: str) -> str:
+    return f"http://{SUB_EXTERNAL_HOST}:{SUB_PORT}/sub/{client_email}"
