@@ -54,6 +54,10 @@ SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
 SUB_EXTERNAL_HOST = os.getenv("SUB_EXTERNAL_HOST", "51.250.117.234")
 INBOUND_ID = int(os.getenv("INBOUND_ID", "1"))
 
+# 3X-UI API URLs (правильные пути)
+XUI_API_BASE = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}"  # https://host/SECRET/panel
+XUI_LOGIN_URL = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.rsplit('/panel', 1)[0]}/login/"  # https://host/SECRET/login/
+
 # ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
