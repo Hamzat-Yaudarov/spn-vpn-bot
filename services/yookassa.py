@@ -182,8 +182,8 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        # Если выбрана VIP подписка, создаём её через XUI
-        if subscription_type == "vip":
+        # Если выбрана VIP подписка или комбо, создаём её через XUI
+        if subscription_type in ("vip", "combo"):
             xui_session = await get_xui_session()
             if xui_session:
                 try:
@@ -227,7 +227,13 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
         await db.update_payment_status_by_invoice(payment_id, 'paid')
 
         # Отправляем сообщение пользователю
-        sub_type_text = "Обычная подписка + Обход глушилок (VIP)" if subscription_type == "vip" else "Обычная подписка"
+        if subscription_type == "combo":
+            sub_type_text = "Обычная подписка + Обход глушилок"
+        elif subscription_type == "vip":
+            sub_type_text = "Обход глушилок (VIP)"
+        else:
+            sub_type_text = "Обычная подписка"
+
         text = (
             "✅ <b>Оплата прошла успешно!</b>\n\n"
             f"Тариф: {tariff_code} ({days} дней)\n"
@@ -282,9 +288,17 @@ async def check_yookassa_payments(bot):
                 payment = await get_payment_status(invoice_id)
 
                 if payment and payment.get("status") == "succeeded":
-                    success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code, subscription_type)
-                    if success:
-                        logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")
+                    if subscription_type == "topup":
+                        # Пополнение баланса
+                        amount = int(tariff_code.split("_")[1])
+                        await db.add_balance(tg_id, amount)
+                        await db.update_payment_status_by_invoice(invoice_id, 'paid')
+                        logging.info(f"Processed topup for user {tg_id}, amount {amount}₽")
+                    else:
+                        # Покупка подписки
+                        success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code, subscription_type)
+                        if success:
+                            logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")
 
             except Exception as e:
                 logging.error(f"Check Yookassa payment error for {tg_id}: {e}")

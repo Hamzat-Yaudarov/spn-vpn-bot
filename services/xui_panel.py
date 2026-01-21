@@ -75,7 +75,8 @@ async def xui_get_client_expiry(session: aiohttp.ClientSession, email: str) -> i
         Unix timestamp в миллисекундах или None если ошибка
     """
     async def _get_expiry():
-        get_traffic_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/getClientTraffics/{email}"
+        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
+        get_traffic_url = f"{base_url}/api/inbounds/getClientTraffics/{email}"
 
         async with session.get(get_traffic_url) as resp:
             if resp.status == 200:
@@ -142,7 +143,9 @@ async def xui_create_or_extend_client(
             "settings": json.dumps(settings)
         }
 
-        add_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/addClient"
+        # Пытаемся использовать оба возможных пути API
+        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
+        add_url = f"{base_url}/api/inbounds/addClient"
 
         async with session.post(add_url, data=payload) as resp:
             if resp.status == 200:
@@ -215,7 +218,8 @@ async def xui_extend_client(
             "settings": json.dumps(settings)
         }
 
-        update_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/updateClient/{client_uuid}"
+        base_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}"
+        update_url = f"{base_url}/api/inbounds/updateClient/{client_uuid}"
 
         async with session.post(update_url, data=payload) as resp:
             if resp.status == 200:

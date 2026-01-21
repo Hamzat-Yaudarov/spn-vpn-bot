@@ -16,3 +16,7 @@ class UserStates(StatesGroup):
 
     # Ввод промокода
     waiting_for_promo = State()
+
+    # Пополнение баланса
+    choosing_topup_amount = State()
+    choosing_topup_method = State()

@@ -6,6 +6,8 @@ from config import SUPPORT_URL
 from states import UserStates
 import database as db
 from handlers.start import show_main_menu
+from services.cryptobot import create_cryptobot_invoice, get_invoice_status
+from services.yookassa import create_yookassa_payment, get_payment_status
 
 
 router = Router()
@@ -85,6 +87,7 @@ async def process_check_balance(callback: CallbackQuery):
     balance = await db.get_balance(tg_id)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="topup_balance")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
@@ -132,3 +135,246 @@ async def process_how_to_connect(callback: CallbackQuery):
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "topup_balance")
+async def process_topup_balance(callback: CallbackQuery, state: FSMContext):
+    """Показать варианты пополнения баланса"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} clicked: topup_balance")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="100 ₽", callback_data="topup_amount_100")],
+        [InlineKeyboardButton(text="250 ₽", callback_data="topup_amount_250")],
+        [InlineKeyboardButton(text="500 ₽", callback_data="topup_amount_500")],
+        [InlineKeyboardButton(text="1000 ₽", callback_data="topup_amount_1000")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="check_balance")]
+    ])
+
+    text = (
+        "<b>➕ Пополнить баланс</b>\n\n"
+        "Выбери сумму пополнения:\n\n"
+        "💡 Совет: пополните баланс и экономьте на подписках!"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(UserStates.choosing_topup_amount)
+
+
+@router.callback_query(F.data.startswith("topup_amount_"))
+async def process_topup_amount(callback: CallbackQuery, state: FSMContext):
+    """Обработать выбор суммы пополнения"""
+    tg_id = callback.from_user.id
+    amount = int(callback.data.split("_")[2])
+    logging.info(f"User {tg_id} selected topup amount: {amount}")
+
+    await state.update_data(topup_amount=amount)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="topup_cryptobot")],
+        [InlineKeyboardButton(text="💳 Yookassa", callback_data="topup_yookassa")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="topup_balance")]
+    ])
+
+    text = (
+        f"<b>Пополнение баланса</b>\n\n"
+        f"Сумма: <b>{amount} ₽</b>\n\n"
+        "Выбери способ оплаты:"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(UserStates.choosing_topup_method)
+
+
+@router.callback_query(F.data == "topup_cryptobot")
+async def process_topup_cryptobot(callback: CallbackQuery, state: FSMContext):
+    """Создать счёт для пополнения баланса через CryptoBot"""
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    amount = data.get("topup_amount")
+    logging.info(f"User {tg_id} selected topup via CryptoBot (amount: {amount})")
+
+    if not amount:
+        await callback.message.edit_text("Ошибка: сумма не выбрана")
+        await state.clear()
+        return
+
+    # Создаём счёт для пополнения баланса
+    invoice = await create_cryptobot_invoice(callback.bot, amount, f"topup_{amount}", tg_id)
+
+    if not invoice:
+        await callback.message.edit_text("Ошибка создания счёта в CryptoBot. Попробуй позже.")
+        await state.clear()
+        return
+
+    invoice_id = invoice["invoice_id"]
+    pay_url = invoice["bot_invoice_url"]
+
+    # Записываем платеж в БД с типом "topup"
+    await db.create_payment(
+        tg_id,
+        f"topup_{amount}",
+        amount,
+        "cryptobot",
+        invoice_id,
+        "topup"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_topup_payment")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="check_balance")]
+    ])
+
+    text = (
+        f"<b>Пополнение баланса</b>\n\n"
+        f"Сумма: {amount} ₽\n\n"
+        "Оплати через CryptoBot. После оплаты баланс пополнится автоматически.\n"
+        "Если не пополнилось — нажми «Проверить оплату»"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.clear()
+
+
+@router.callback_query(F.data == "topup_yookassa")
+async def process_topup_yookassa(callback: CallbackQuery, state: FSMContext):
+    """Создать платёж для пополнения баланса через Yookassa"""
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    amount = data.get("topup_amount")
+    logging.info(f"User {tg_id} selected topup via Yookassa (amount: {amount})")
+
+    if not amount:
+        await callback.message.edit_text("Ошибка: сумма не выбрана")
+        await state.clear()
+        return
+
+    # Создаём платёж для пополнения баланса
+    payment = await create_yookassa_payment(callback.bot, amount, f"topup_{amount}", tg_id)
+
+    if not payment:
+        await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
+        await state.clear()
+        return
+
+    payment_id = payment["id"]
+    confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+    if not confirmation_url:
+        await callback.message.edit_text("Ошибка: не получена ссылка для оплаты")
+        await state.clear()
+        return
+
+    # Записываем платеж в БД с типом "topup"
+    await db.create_payment(
+        tg_id,
+        f"topup_{amount}",
+        amount,
+        "yookassa",
+        payment_id,
+        "topup"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_topup_payment")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="check_balance")]
+    ])
+
+    text = (
+        f"<b>Пополнение баланса</b>\n\n"
+        f"Сумма: {amount} ₽\n\n"
+        "Оплати картой, СБП или другим способом через Yookassa.\n"
+        "После оплаты баланс пополнится автоматически.\n"
+        "Если не пополнилось — нажми «Проверить оплату»"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.clear()
+
+
+@router.callback_query(F.data == "check_topup_payment")
+async def process_check_topup_payment(callback: CallbackQuery):
+    """Проверить статус платежа пополнения баланса"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} checking topup payment status")
+
+    # Проверка anti-spam: не более одной проверки в 1 секунду
+    can_check, error_msg = await db.can_check_payment(tg_id)
+    if not can_check:
+        await callback.answer(error_msg, show_alert=True)
+        return
+
+    # Обновляем время последней проверки
+    await db.update_last_payment_check(tg_id)
+
+    # Получаем последний ожидающий платеж пополнения с информацией о провайдере
+    result = await db.db_execute(
+        """
+        SELECT invoice_id, tariff_code, provider, subscription_type
+        FROM payments
+        WHERE tg_id = $1 AND status = 'pending' AND subscription_type = 'topup'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (tg_id,),
+        fetch_one=True
+    )
+
+    if not result:
+        await callback.answer("Нет ожидающих пополнений", show_alert=True)
+        return
+
+    invoice_id = result['invoice_id']
+    tariff_code = result['tariff_code']
+    provider = result['provider']
+    amount = int(tariff_code.split("_")[1])
+
+    if not await db.acquire_user_lock(tg_id):
+        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+        return
+
+    try:
+        if provider == "yookassa":
+            # Проверяем платёж в Yookassa
+            payment = await get_payment_status(invoice_id)
+
+            if payment and payment.get("status") == "succeeded":
+                # Пополняем баланс
+                await db.add_balance(tg_id, amount)
+                await db.update_payment_status_by_invoice(invoice_id, 'paid')
+
+                await callback.message.edit_text(
+                    f"✅ <b>Пополнение прошло успешно!</b>\n\n"
+                    f"Сумма: {amount} ₽\n"
+                    f"Баланс пополнен!"
+                )
+                logging.info(f"User {tg_id} balance topped up with {amount}₽ via Yookassa")
+            else:
+                await callback.answer("Оплата ещё не прошла", show_alert=True)
+
+        elif provider == "cryptobot":
+            # Проверяем платёж в CryptoBot
+            invoice = await get_invoice_status(invoice_id)
+
+            if invoice and invoice.get("status") == "paid":
+                # Пополняем баланс
+                await db.add_balance(tg_id, amount)
+                await db.update_payment_status_by_invoice(invoice_id, 'paid')
+
+                await callback.message.edit_text(
+                    f"✅ <b>Пополнение прошло успешно!</b>\n\n"
+                    f"Сумма: {amount} ₽\n"
+                    f"Баланс пополнен!"
+                )
+                logging.info(f"User {tg_id} balance topped up with {amount}₽ via CryptoBot")
+            else:
+                await callback.answer("Оплата ещё не прошла", show_alert=True)
+
+    except Exception as e:
+        logging.error(f"Check topup payment error: {e}")
+        await callback.answer("Ошибка при проверке платежа", show_alert=True)
+
+    finally:
+        await db.release_user_lock(tg_id)
