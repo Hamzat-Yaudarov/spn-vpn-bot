@@ -52,7 +52,8 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
 async def process_subscription_type_choice(callback: CallbackQuery, state: FSMContext):
     """Обработать выбор типа подписки"""
     tg_id = callback.from_user.id
-    sub_type = callback.data.split("_")[2]  # regular или anti_jamming
+    # Парсим корректно: "subscription_type_regular" или "subscription_type_anti_jamming"
+    sub_type = callback.data.replace("subscription_type_", "")
     logging.info(f"User {tg_id} selected subscription type: {sub_type}")
 
     # Сохраняем тип подписки в state
