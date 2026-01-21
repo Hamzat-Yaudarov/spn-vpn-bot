@@ -7,14 +7,16 @@ class UserStates(StatesGroup):
     # Принятие условий использования
     waiting_for_agreement = State()
 
-    # Выбор подписки и тарифа
+    # Выбор типа подписки (Обычная / VIP / Комбо)
     choosing_subscription_type = State()
+
+    # Выбор и оплата тарифа
     choosing_tariff = State()
     choosing_payment = State()
 
-    # Пополнение баланса
-    choosing_topup_amount = State()
-    choosing_topup_payment = State()
-
     # Ввод промокода
     waiting_for_promo = State()
+
+    # Пополнение баланса
+    topup_choose_amount = State()
+    topup_choose_payment = State()

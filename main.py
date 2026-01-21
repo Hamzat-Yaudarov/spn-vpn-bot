@@ -6,18 +6,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import (
-    BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING,
-    XUI_PANEL_URL, XUI_PANEL_PATH, XUI_USERNAME, XUI_PASSWORD,
-    XUI_SUB_PORT, XUI_SUB_EXTERNAL_HOST, XUI_INBOUND_ID
-)
+from config import BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
 
 # Импортируем все роутеры обработчиков
-from handlers import start, callbacks, subscription, gift, referral, promo, admin
+from handlers import start, callbacks, subscription, gift, referral, promo, admin, balance
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
-from services import xui
 import webhooks
 
 
@@ -54,6 +49,7 @@ def setup_handlers():
     """Регистрируем все роутеры обработчиков"""
     dp.include_router(start.router)
     dp.include_router(callbacks.router)
+    dp.include_router(balance.router)
     dp.include_router(subscription.router)
     dp.include_router(gift.router)
     dp.include_router(referral.router)
@@ -104,16 +100,6 @@ async def main():
     # Инициализируем БД
     await db.init_db()
     logger.info("✅ Database initialized")
-
-    # Инициализируем 3X-UI конфиг для VIP подписок
-    if all([XUI_PANEL_URL, XUI_PANEL_PATH, XUI_USERNAME, XUI_PASSWORD, XUI_SUB_EXTERNAL_HOST]):
-        xui.init_xui_config(
-            XUI_PANEL_URL, XUI_PANEL_PATH, XUI_USERNAME, XUI_PASSWORD,
-            XUI_SUB_PORT, XUI_SUB_EXTERNAL_HOST, XUI_INBOUND_ID
-        )
-        logger.info("✅ 3X-UI initialized for VIP subscriptions")
-    else:
-        logger.warning("⚠️ 3X-UI config incomplete, VIP subscriptions may not work")
 
     # Регистрируем обработчики
     setup_handlers()

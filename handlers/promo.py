@@ -73,52 +73,67 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         days = promo[0]
 
-        # Промокоды всегда дают обе подписки
+        # Создаём или получаем пользователя в Remnawave (обычная подписка)
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Создаём/продлеваем обычную подписку через Remnawave
-            uuid_regular, username_regular = await remnawave_get_or_create_user(
-                session, tg_id, days=days, extend_if_exists=True, sub_type="regular"
+            uuid, username = await remnawave_get_or_create_user(
+                session, tg_id, days=days, extend_if_exists=True
             )
 
-            # Создаём/продлеваем VIP подписку через 3X-UI
-            email_vip, _ = await xui.xui_get_or_create_client(tg_id, days=days, extend_if_exists=True)
-
-            if not uuid_regular or not email_vip:
+            if not uuid:
                 await message.answer("❌ Ошибка при применении промокода")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-            # Добавляем обычную подписку в сквад
-            await remnawave_add_to_squad(session, uuid_regular)
+            # Добавляем в сквад
+            await remnawave_add_to_squad(session, uuid)
 
-            # Получаем ссылки подписок
-            sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
-            sub_url_vip = await xui.xui_get_subscription_url(tg_id, email_vip)
+            # Получаем ссылку подписки
+            sub_url = await remnawave_get_subscription_url(session, uuid)
 
-            if not sub_url_regular or not sub_url_vip:
-                await message.answer("❌ Ошибка при получении ссылок подписок")
+            if not sub_url:
+                await message.answer("❌ Ошибка при получении ссылки подписки")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-        # Обновляем обе подписки пользователя в БД
+        # Обновляем подписку пользователя в БД
         new_until = datetime.utcnow() + timedelta(days=days)
-        await db.update_both_subscriptions(
-            tg_id,
-            uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
-            email_vip, email_vip, new_until, DEFAULT_SQUAD_UUID
-        )
+        await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+
+        # Выдаём VIP подписку (промокод даёт обе подписки)
+        vip_info = await db.get_vip_subscription_info(tg_id)
+        vip_sub_url = None
+
+        if vip_info and vip_info['xui_uuid']:
+            # Продляем существующего клиента
+            await xui.extend_vip_client(
+                tg_id,
+                vip_info['xui_email'],
+                vip_info['xui_uuid'],
+                vip_info['xui_subscription_id'],
+                days
+            )
+        else:
+            # Создаём нового VIP клиента
+            result = await xui.create_or_extend_vip_client(tg_id, days, is_new=True)
+            if result:
+                email, client_uuid, subscription_id, vip_sub_url = result
+                vip_until = datetime.utcnow() + timedelta(days=days)
+                await db.update_vip_subscription(tg_id, email, client_uuid, subscription_id, vip_until)
 
         # Отправляем успешное сообщение
-        await message.answer(
+        text = (
             f"✅ <b>Промокод активирован!</b>\n\n"
-            f"Добавлено {days} дней к обеим подпискам\n\n"
-            f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
-            f"<b>🔒 Обход глушилок (3X-UI):</b>\n<code>{sub_url_vip}</code>"
+            f"Добавлено {days} дней обеим подпискам:\n"
+            f"• 📱 Обычная подписка\n"
+            f"• 🛡️ Обход глушилок (VIP)\n\n"
+            f"<b>Ссылка обычной подписки:</b>\n<code>{sub_url}</code>\n\n"
+            "VIP ссылка доступна в разделе «Моя подписка»"
         )
+        await message.answer(text)
 
         logging.info(f"Promo code {code} applied by user {tg_id}")
 

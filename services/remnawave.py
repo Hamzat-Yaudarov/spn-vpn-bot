@@ -16,8 +16,7 @@ async def remnawave_get_or_create_user(
     session: aiohttp.ClientSession,
     tg_id: int,
     days: int = 30,
-    extend_if_exists: bool = False,
-    sub_type: str = "regular"
+    extend_if_exists: bool = False
 ) -> tuple[str | None, str | None]:
     """
     Получить или создать пользователя в Remnawave API с retry логикой
@@ -27,14 +26,11 @@ async def remnawave_get_or_create_user(
         tg_id: ID пользователя Telegram
         days: Количество дней подписки для новых пользователей
         extend_if_exists: Продлить подписку если пользователь существует
-        sub_type: Тип подписки ('regular' или 'vip')
 
     Returns:
         Кортеж (UUID пользователя, имя пользователя) или (None, None)
     """
-    # Используем разные префиксы для разных типов подписок
-    suffix = "_vip" if sub_type == "vip" else ""
-    remna_username = f"tg_{tg_id}{suffix}"
+    remna_username = f"tg_{tg_id}"
 
     # Пытаемся получить существующего пользователя
     async def _get_existing_user():
@@ -304,47 +300,3 @@ async def remnawave_get_user_info(
         _get_info,
         error_message=f"Failed to get user info for {user_uuid}"
     )
-
-
-# ════════════════════════════════════════════════════════════════════════════════════
-# VIP Subscription Helper Functions (для удобства работы с VIP подписками)
-# ════════════════════════════════════════════════════════════════════════════════════
-
-async def remnawave_get_or_create_vip_user(
-    session: aiohttp.ClientSession,
-    tg_id: int,
-    days: int = 30,
-    extend_if_exists: bool = False
-) -> tuple[str | None, str | None]:
-    """
-    Получить или создать VIP пользователя в Remnawave (Обход глушилок)
-
-    Args:
-        session: aiohttp сессия
-        tg_id: ID пользователя Telegram
-        days: Количество дней VIP подписки
-        extend_if_exists: Продлить VIP подписку если пользователь существует
-
-    Returns:
-        Кортеж (UUID пользователя, имя пользователя) или (None, None)
-    """
-    return await remnawave_get_or_create_user(session, tg_id, days, extend_if_exists, sub_type="vip")
-
-
-async def remnawave_extend_vip_subscription(
-    session: aiohttp.ClientSession,
-    user_uuid: str,
-    days: int
-) -> bool:
-    """
-    Продлить VIP подписку пользователя
-
-    Args:
-        session: aiohttp сессия
-        user_uuid: UUID VIP пользователя в Remnawave
-        days: Количество дней для продления
-
-    Returns:
-        True если успешно, False иначе
-    """
-    return await remnawave_extend_subscription(session, user_uuid, days)

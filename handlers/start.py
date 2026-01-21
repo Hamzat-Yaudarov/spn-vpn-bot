@@ -53,7 +53,7 @@ async def show_main_menu(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
-        [InlineKeyboardButton(text="💰 Баланс", callback_data="show_balance")],
+        [InlineKeyboardButton(text="💰 Мой баланс", callback_data="balance")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="🎁 Получить подарок", callback_data="get_gift")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
@@ -81,7 +81,7 @@ async def show_main_menu(message: Message):
         "<b>Реферальная программа:</b>\n"
         "<blockquote>"
         "👥 За каждого приглашённого пользователя,\n"
-        "активировавшего доступ, получаете 25% от суммы"
+        "активировавшего доступ, вы получаете +7 дней"
         "</blockquote>"
     )
 

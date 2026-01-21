@@ -1,230 +1,270 @@
 import aiohttp
 import logging
+import json
 import secrets
 import string
-import json
 from datetime import datetime, timedelta
-from config import API_REQUEST_TIMEOUT
-from utils import retry_with_backoff, safe_api_call
+from config import (
+    XUI_PANEL_URL,
+    XUI_PANEL_PATH,
+    XUI_USERNAME,
+    XUI_PASSWORD,
+    SUB_PORT,
+    SUB_EXTERNAL_HOST,
+    INBOUND_ID,
+    API_REQUEST_TIMEOUT
+)
+from utils import safe_api_call, retry_with_backoff
 
 
-# Параметры 3X-UI из окружения (нужно добавить в .env)
-XUI_PANEL_URL = None
-XUI_PANEL_PATH = None
-XUI_USERNAME = None
-XUI_PASSWORD = None
-SUB_PORT = None
-SUB_EXTERNAL_HOST = None
-INBOUND_ID = None
+logger = logging.getLogger(__name__)
 
 
-def init_xui_config(panel_url: str, panel_path: str, username: str, password: str,
-                    sub_port: int, sub_external_host: str, inbound_id: int):
-    """
-    Инициализировать параметры 3X-UI
-    
-    Args:
-        panel_url: URL панели 3X-UI (например, https://51.250.117.234:2053)
-        panel_path: Путь к панели (например, /sXvL8myMex46uSa3NP/panel)
-        username: Логин для панели
-        password: Пароль для панели
-        sub_port: Порт для выдачи подписок (например, 2096)
-        sub_external_host: Внешний хост для ссылок подписок (например, 51.250.117.234)
-        inbound_id: ID inbound для создания клиентов
-    """
-    global XUI_PANEL_URL, XUI_PANEL_PATH, XUI_USERNAME, XUI_PASSWORD, SUB_PORT, SUB_EXTERNAL_HOST, INBOUND_ID
-    XUI_PANEL_URL = panel_url
-    XUI_PANEL_PATH = panel_path
-    XUI_USERNAME = username
-    XUI_PASSWORD = password
-    SUB_PORT = sub_port
-    SUB_EXTERNAL_HOST = sub_external_host
-    INBOUND_ID = inbound_id
-
-
-async def xui_get_session():
-    """
-    Получить сессию 3X-UI с аутентификацией
-    
-    Returns:
-        aiohttp.ClientSession с cookie аутентификации
-    """
+async def get_xui_session() -> aiohttp.ClientSession:
+    """Получить аутентифицированную сессию для 3X-UI"""
     session = aiohttp.ClientSession()
     
     try:
-        login_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH.replace('/panel', '')}/login"
-        payload = {
-            "username": XUI_USERNAME,
-            "password": XUI_PASSWORD
-        }
+        login_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/login"
+        payload = {"username": XUI_USERNAME, "password": XUI_PASSWORD}
         
-        async with session.post(login_url, json=payload, ssl=False, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            if resp.status != 200:
-                raise Exception(f"3X-UI login failed with status {resp.status}")
-            
-            data = await resp.json()
-            if not data.get("success"):
-                raise Exception(f"3X-UI login failed: {data}")
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.post(login_url, json=payload, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise Exception(f"XUI login failed ({resp.status}): {error_text}")
                 
-        logging.info("Successfully authenticated with 3X-UI")
-        return session
-        
+                data = await resp.json()
+                if not data.get("success"):
+                    raise Exception(f"XUI login failed: {data}")
+                
+                # Копируем cookies в новую сессию
+                session.cookie_jar.update_cookies(resp.cookies)
+                
+                return session
+                
     except Exception as e:
         await session.close()
-        raise Exception(f"3X-UI authentication error: {str(e)}")
+        logger.error(f"Failed to get XUI session: {e}")
+        raise
 
 
-async def xui_get_client_expiry(session: aiohttp.ClientSession, email: str) -> int:
-    """
-    Получить время истечения подписки клиента в 3X-UI
-    
-    Args:
-        session: aiohttp сессия
-        email: Email (идентификатор) клиента
-        
-    Returns:
-        expiryTime в миллисекундах
-    """
+async def get_client_expiry(email: str) -> int:
+    """Получить время истечения подписки клиента в миллисекундах"""
     async def _get_expiry():
-        get_traffic_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/getClientTraffics/{email}"
+        url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/getClientTraffics/{email}"
         
-        async with session.get(get_traffic_url, ssl=False, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise Exception(f"3X-UI get client traffic failed ({resp.status}): {error_text}")
-            
-            data = await resp.json()
-            if not data.get("success"):
-                raise Exception(f"3X-UI API error: {data}")
-            
-            return data['obj']['expiryTime']
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise Exception(f"Get client traffic failed ({resp.status}): {error_text}")
+                
+                data = await resp.json()
+                if not data.get("success"):
+                    raise Exception(f"Get client traffic failed: {data}")
+                
+                obj = data.get('obj', {})
+                expiry = obj.get('expiryTime')
+                if not expiry:
+                    raise Exception("expiryTime not found in response")
+                
+                return int(expiry)
     
     return await safe_api_call(
         _get_expiry,
-        error_message=f"Failed to get client expiry from 3X-UI for {email}"
+        error_message=f"Failed to get client expiry for {email}"
     )
 
 
-async def xui_get_or_create_client(tg_id: int, days: int = 30, extend_if_exists: bool = False) -> tuple[str | None, str | None]:
+async def create_or_extend_vip_client(
+    tg_id: int,
+    days: int,
+    is_new: bool = False
+) -> tuple[str, str, str, str] | None:
     """
-    Получить или создать клиента в 3X-UI для VIP подписки (Обход глушилок)
+    Создать или продлить VIP клиента в 3X-UI
     
     Args:
         tg_id: ID пользователя Telegram
-        days: Количество дней подписки
-        extend_if_exists: Продлить если клиент уже существует
-        
-    Returns:
-        Кортеж (UUID клиента, Email клиента) или (None, None)
-    """
-    session = await xui_get_session()
+        days: Количество дней для подписки
+        is_new: True если это новый клиент
     
-    try:
-        client_email = f"vip_{tg_id}"  # Используем префикс VIP для различия
-        
-        # Пытаемся получить существующего клиента
+    Returns:
+        Кортеж (email, uuid, subscription_id, sub_url) или None при ошибке
+    """
+    async def _create_or_extend():
+        session = None
         try:
-            expiry_time = await xui_get_client_expiry(session, client_email)
+            # Генерируем случайные значения
+            alphabet = string.ascii_lowercase + string.digits
+            email = ''.join(secrets.choice(alphabet) for _ in range(12))
+            client_uuid = ''.join(secrets.choice(alphabet) for _ in range(8))
+            subscription_id = ''.join(secrets.choice(alphabet) for _ in range(16))
             
-            if extend_if_exists:
-                # Продлеваем существующего клиента
-                add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
-                new_expiry = expiry_time + add_ms
-                
-                settings = {
-                    "clients": [{
-                        "email": client_email,
-                        "expiryTime": new_expiry,
-                    }]
-                }
-                
-                update_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/updateClient/{client_email}"
-                payload = {
-                    "id": str(INBOUND_ID),
-                    "settings": json.dumps(settings)
-                }
-                
-                async with session.post(update_url, data=payload, ssl=False, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            # Рассчитываем время истечения
+            add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
+            new_expiry = int(datetime.now().timestamp() * 1000) + add_ms
+            
+            # Создаём конфиг клиента
+            settings = {
+                "clients": [{
+                    "id": client_uuid,
+                    "flow": "xtls-rprx-vision",
+                    "email": email,
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": new_expiry,
+                    "enable": True,
+                    "tgId": str(tg_id),
+                    "subId": subscription_id,
+                    "reset": 0
+                }]
+            }
+            
+            payload = {
+                "id": str(INBOUND_ID),
+                "settings": json.dumps(settings)
+            }
+            
+            # Выбираем URL в зависимости от того новый клиент или нет
+            if is_new:
+                api_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/addClient"
+            else:
+                api_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/updateClient/{client_uuid}"
+            
+            # Отправляем запрос
+            timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(api_url, data=payload, ssl=False) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
-                        raise Exception(f"3X-UI update failed ({resp.status}): {error_text}")
+                        raise Exception(f"XUI operation failed ({resp.status}): {error_text}")
                     
                     data = await resp.json()
                     if not data.get("success"):
-                        raise Exception(f"3X-UI update failed: {data}")
-                    
-                    logging.info(f"Extended VIP client for user {tg_id} in 3X-UI")
-                    return client_email, client_email
+                        raise Exception(f"XUI operation failed: {data}")
             
-            # Клиент существует и не нужно продлевать
-            logging.info(f"VIP client already exists for user {tg_id}")
-            return client_email, client_email
+            # Генерируем ссылку подписки
+            sub_url = f"https://{SUB_EXTERNAL_HOST}:{SUB_PORT}/{subscription_id}"
+            
+            logger.info(f"Created/extended VIP client for user {tg_id}: {subscription_id}")
+            return email, client_uuid, subscription_id, sub_url
             
         except Exception as e:
-            if "API error" not in str(e) and "failed" not in str(e).lower():
-                # Клиента нет, создаём нового
-                pass
-            else:
-                raise
+            logger.error(f"Create/extend VIP client error: {e}")
+            if session:
+                await session.close()
+            raise
+    
+    return await safe_api_call(
+        _create_or_extend,
+        error_message=f"Failed to create/extend VIP client for user {tg_id}"
+    )
+
+
+async def extend_vip_client(
+    tg_id: int,
+    email: str,
+    client_uuid: str,
+    subscription_id: str,
+    days: int
+) -> bool:
+    """
+    Продлить существующую VIP подписку клиента
+    
+    Args:
+        tg_id: ID пользователя Telegram
+        email: Email клиента в 3X-UI
+        client_uuid: UUID клиента
+        subscription_id: ID подписки
+        days: Количество дней для добавления
+    
+    Returns:
+        True если успешно, False иначе
+    """
+    async def _extend():
+        # 1. Получаем текущее время истечения
+        current_expiry = await get_client_expiry(email)
         
-        # Создаём нового клиента
-        client_uuid = f"vip_{tg_id}_{secrets.token_hex(4)}"
-        
+        # 2. Рассчитываем новое время истечения
         add_ms = int(days * 30 * 24 * 60 * 60 * 1000)
-        new_expiry = int(datetime.utcnow().timestamp() * 1000) + add_ms
+        new_expiry = current_expiry + add_ms
         
+        # 3. Создаём конфиг обновления
         settings = {
             "clients": [{
                 "id": client_uuid,
-                "flow": "",
-                "email": client_email,
+                "flow": "xtls-rprx-vision",
+                "email": email,
                 "limitIp": 0,
                 "totalGB": 0,
                 "expiryTime": new_expiry,
                 "enable": True,
                 "tgId": str(tg_id),
+                "subId": subscription_id,
                 "reset": 0
             }]
         }
         
-        add_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/addClient"
         payload = {
             "id": str(INBOUND_ID),
             "settings": json.dumps(settings)
         }
         
-        async with session.post(add_url, data=payload, ssl=False, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                raise Exception(f"3X-UI add client failed ({resp.status}): {error_text}")
-            
-            data = await resp.json()
-            if not data.get("success"):
-                raise Exception(f"3X-UI add client failed: {data}")
-            
-            logging.info(f"Created new VIP client in 3X-UI for user {tg_id}")
-            return client_email, client_email
+        # 4. Отправляем запрос обновления
+        api_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/updateClient/{client_uuid}"
+        
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(api_url, data=payload, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise Exception(f"Extend failed ({resp.status}): {error_text}")
+                
+                data = await resp.json()
+                if not data.get("success"):
+                    raise Exception(f"Extend failed: {data}")
+        
+        logger.info(f"Extended VIP subscription for user {tg_id} by {days} days")
+        return True
     
-    finally:
-        await session.close()
+    return await safe_api_call(
+        _extend,
+        error_message=f"Failed to extend VIP client for user {tg_id}"
+    ) or False
 
 
-async def xui_get_subscription_url(tg_id: int, email: str) -> str | None:
+async def delete_vip_client(email: str) -> bool:
     """
-    Получить ссылку подписки VIP клиента из 3X-UI
+    Удалить VIP клиента из 3X-UI
     
     Args:
-        tg_id: ID пользователя Telegram
         email: Email клиента в 3X-UI
-        
+    
     Returns:
-        Ссылка подписки или None
+        True если успешно, False иначе
     """
-    try:
-        # Формируем ссылку подписки на основе email (который работает как sub_id)
-        sub_url = f"http://{SUB_EXTERNAL_HOST}:{SUB_PORT}/sub/{email}"
-        logging.info(f"Generated VIP subscription URL for user {tg_id}")
-        return sub_url
-    except Exception as e:
-        logging.error(f"Error generating subscription URL for {tg_id}: {e}")
-        return None
+    async def _delete():
+        api_url = f"{XUI_PANEL_URL}{XUI_PANEL_PATH}/api/inbounds/delClient/{email}"
+        
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(api_url, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise Exception(f"Delete failed ({resp.status}): {error_text}")
+                
+                data = await resp.json()
+                if not data.get("success"):
+                    raise Exception(f"Delete failed: {data}")
+        
+        logger.info(f"Deleted VIP client: {email}")
+        return True
+    
+    return await safe_api_call(
+        _delete,
+        error_message=f"Failed to delete VIP client {email}"
+    ) or False
