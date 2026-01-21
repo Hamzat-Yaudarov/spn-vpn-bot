@@ -304,8 +304,13 @@ async def check_yookassa_payments(bot):
                 payment = await get_payment_status(invoice_id)
 
                 if payment and payment.get("status") == "succeeded":
-                    # Получаем тип подписки пользователя
-                    sub_type = await db.get_subscription_type(tg_id)
+                    # Получаем тип подписки из БД
+                    payment_data = await db.db_execute(
+                        "SELECT subscription_type FROM payments WHERE id = $1",
+                        (payment_id,),
+                        fetch_one=True
+                    )
+                    sub_type = payment_data['subscription_type'] if payment_data else 'regular'
                     success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code, sub_type)
                     if success:
                         logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")

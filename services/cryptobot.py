@@ -292,8 +292,13 @@ async def check_cryptobot_invoices(bot):
                         invoice = await get_invoice_status(invoice_id)
 
                         if invoice and invoice.get("status") == "paid":
-                            # Получаем тип подписки пользователя
-                            sub_type = await db.get_subscription_type(tg_id)
+                            # Получаем тип подписки из БД
+                            payment_data = await db.db_execute(
+                                "SELECT subscription_type FROM payments WHERE id = $1",
+                                (payment_id,),
+                                fetch_one=True
+                            )
+                            sub_type = payment_data['subscription_type'] if payment_data else 'regular'
                             success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code, sub_type)
                             if success:
                                 logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")

@@ -72,6 +72,7 @@ async def run_migrations():
                     id BIGSERIAL PRIMARY KEY,
                     tg_id BIGINT NOT NULL,
                     tariff_code TEXT NOT NULL,
+                    subscription_type TEXT DEFAULT 'regular',
                     amount NUMERIC NOT NULL,
                     created_at TIMESTAMP DEFAULT now(),
                     updated_at TIMESTAMP DEFAULT now(),
@@ -142,6 +143,7 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_uuid TEXT;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_username TEXT;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_subscription_until TIMESTAMP;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_type TEXT DEFAULT 'regular';",
             ]
 
             for query in alter_queries:
@@ -355,15 +357,15 @@ async def has_subscription(tg_id: int) -> bool:
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
+async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str, subscription_type: str = 'regular'):
     """Создать запись о платеже"""
     from datetime import datetime
     await db_execute(
         """
-        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id, subscription_type)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id))
+        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id), subscription_type)
     )
 
 
@@ -384,14 +386,15 @@ async def get_pending_payments_by_provider(provider: str):
     )
 
 
-async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, provider: str):
+async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, provider: str, subscription_type: str = 'regular'):
     """
-    Получить существующий неоплаченный счёт пользователя для конкретного тарифа и провайдера
+    Получить существующий неоплаченный счёт пользователя для конкретного тарифа, типа подписки и провайдера
 
     Args:
         tg_id: ID пользователя Telegram
         tariff_code: Код тарифа
         provider: Провайдер платежа (cryptobot, yookassa)
+        subscription_type: Тип подписки (regular или anti_jamming)
 
     Returns:
         Кортеж (invoice_id, pay_url) или None если нет активного счёта
@@ -401,11 +404,11 @@ async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, p
     result = await db_execute(
         """
         SELECT id, invoice_id, created_at FROM payments
-        WHERE tg_id = $1 AND tariff_code = $2 AND status = 'pending' AND provider = $3
+        WHERE tg_id = $1 AND tariff_code = $2 AND status = 'pending' AND provider = $3 AND subscription_type = $4
         ORDER BY id DESC
         LIMIT 1
         """,
-        (tg_id, tariff_code, provider),
+        (tg_id, tariff_code, provider, subscription_type),
         fetch_one=True
     )
 

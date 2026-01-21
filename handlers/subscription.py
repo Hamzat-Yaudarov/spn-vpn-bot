@@ -153,8 +153,8 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     tariff = tariffs[tariff_code]
     amount = tariff["price"]
 
-    # Проверяем, есть ли уже активный счёт для этого пользователя и тарифа
-    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot")
+    # Проверяем, есть ли уже активный счёт для этого пользователя, тарифа и типа подписки
+    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot", sub_type)
 
     if existing_invoice_id:
         # Счёт уже есть - получаем его статус
@@ -195,13 +195,14 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     invoice_id = invoice["invoice_id"]
     pay_url = invoice["bot_invoice_url"]
 
-    # Записываем платеж в БД
+    # Записываем платеж в БД с типом подписки
     await db.create_payment(
         tg_id,
         tariff_code,
         amount,
         "cryptobot",
-        invoice_id
+        invoice_id,
+        sub_type
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -241,8 +242,8 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     tariff = tariffs[tariff_code]
     amount = tariff["price"]
 
-    # Проверяем, есть ли уже активный платёж для этого пользователя и тарифа
-    existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa")
+    # Проверяем, есть ли уже активный платёж для этого пользователя, тарифа и типа подписки
+    existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa", sub_type)
 
     if existing_payment_id:
         # Платёж уже есть - получаем его статус
@@ -289,13 +290,14 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Записываем платеж в БД
+    # Записываем платеж в БД с типом подписки
     await db.create_payment(
         tg_id,
         tariff_code,
         amount,
         "yookassa",
-        payment_id
+        payment_id,
+        sub_type
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -332,10 +334,10 @@ async def process_check_payment(callback: CallbackQuery):
     # Обновляем время последней проверки
     await db.update_last_payment_check(tg_id)
 
-    # Получаем последний ожидающий платеж с информацией о провайдере
+    # Получаем последний ожидающий платеж с информацией о провайдере и типе подписки
     result = await db.db_execute(
         """
-        SELECT invoice_id, tariff_code, provider
+        SELECT invoice_id, tariff_code, provider, subscription_type
         FROM payments
         WHERE tg_id = $1 AND status = 'pending'
         ORDER BY id DESC
@@ -352,14 +354,13 @@ async def process_check_payment(callback: CallbackQuery):
     invoice_id = result['invoice_id']
     tariff_code = result['tariff_code']
     provider = result['provider']
+    sub_type = result['subscription_type']
 
     if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)
         return
 
     try:
-        # Получаем тип подписки пользователя
-        sub_type = await db.get_subscription_type(tg_id)
 
         if provider == "yookassa":
             # Проверяем платёж в Yookassa

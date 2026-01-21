@@ -28,25 +28,36 @@ def set_bot(bot):
     _bot = bot
 
 
-async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:
+async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str, subscription_type: str = 'regular') -> bool:
     """
     Обработать оплаченный счёт и активировать подписку
-    
+
     Args:
         bot: Экземпляр Bot
         tg_id: ID пользователя Telegram
         invoice_id: ID счёта в CryptoBot
         tariff_code: Код тарифа
-        
+        subscription_type: Тип подписки (regular или anti_jamming)
+
     Returns:
         True если успешно, False иначе
     """
+    from config import TARIFFS_REGULAR, TARIFFS_ANTI_JAMMING
+    from services.xui import create_xui_client
+
     if not await db.acquire_user_lock(tg_id):
         logger.warning(f"Could not acquire lock for user {tg_id}")
         return False
-    
+
     try:
-        days = TARIFFS[tariff_code]["days"]
+        # Выбираем правильный словарь тарифов
+        tariffs = TARIFFS_ANTI_JAMMING if subscription_type == 'anti_jamming' else TARIFFS_REGULAR
+
+        if tariff_code not in tariffs:
+            logger.error(f"Invalid tariff code {tariff_code} for subscription type {subscription_type}")
+            return False
+
+        days = tariffs[tariff_code]["days"]
         uuid = None
         sub_url = None
 
@@ -71,6 +82,24 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             sub_url = await remnawave_get_subscription_url(session, uuid)
             if not sub_url:
                 logger.warning(f"Failed to get subscription URL for {uuid}")
+
+            # Если тип подписки anti_jamming, создаём клиента в 3X-UI
+            xui_url = None
+            if subscription_type == 'anti_jamming':
+                try:
+                    xui_data = await create_xui_client(tg_id, days)
+                    xui_url = xui_data['subscription_url']
+
+                    # Сохраняем 3X-UI данные в БД
+                    await db.update_xui_subscription(
+                        tg_id,
+                        xui_data['xui_uuid'],
+                        xui_data['xui_username'],
+                        xui_data['subscription_until']
+                    )
+                    logger.info(f"Created 3X-UI client for user {tg_id}")
+                except Exception as e:
+                    logger.error(f"Failed to create 3X-UI client for {tg_id}: {e}")
 
             # Обрабатываем реферальную программу
             try:
@@ -112,12 +141,24 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
 
             # Отправляем сообщение пользователю
-            text = (
-                "✅ <b>Оплата прошла успешно!</b>\n\n"
-                f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
-            )
-            
+            if subscription_type == 'anti_jamming' and xui_url:
+                text = (
+                    "✅ <b>Оплата прошла успешно!</b>\n\n"
+                    f"Тариф: {tariff_code} ({days} дней)\n"
+                    "<b>Обычная подписка + Обход глушилок</b>\n\n"
+                    "<b>📌 Ссылка для обычного подключения:</b>\n"
+                    f"<code>{sub_url or 'Ошибка получения ссылки'}</code>\n\n"
+                    "<b>📌 Ссылка для обхода глушилок:</b>\n"
+                    f"<code>{xui_url}</code>"
+                )
+            else:
+                text = (
+                    "✅ <b>Оплата прошла успешно!</b>\n\n"
+                    f"Тариф: {tariff_code} ({days} дней)\n"
+                    "<b>Обычная подписка</b>\n\n"
+                    f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
+                )
+
             if bot:
                 try:
                     await bot.send_message(tg_id, text)
@@ -165,25 +206,26 @@ async def webhook_cryptobot(request: Request):
         # Получаем информацию о платеже из БД
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code 
-            FROM payments 
+            SELECT tg_id, tariff_code, subscription_type
+            FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'cryptobot'
             LIMIT 1
             """,
             (invoice_id,),
             fetch_one=True
         )
-        
+
         if not result:
             logger.warning(f"Payment not found for invoice {invoice_id}")
             return JSONResponse({"ok": True})
-        
+
         tg_id = result['tg_id']
         tariff_code = result['tariff_code']
-        
+        subscription_type = result['subscription_type']
+
         # Обрабатываем платеж асинхронно
         if _bot:
-            asyncio.create_task(_process_paid_invoice(_bot, tg_id, invoice_id, tariff_code))
+            asyncio.create_task(_process_paid_invoice(_bot, tg_id, invoice_id, tariff_code, subscription_type))
         else:
             logger.error("Bot not available for webhook processing")
         
@@ -239,22 +281,24 @@ async def webhook_yookassa(request: Request):
         # Получаем информацию о платеже из БД
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code 
-            FROM payments 
+            SELECT tg_id, tariff_code, subscription_type
+            FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'yookassa'
             LIMIT 1
             """,
             (payment_id,),
             fetch_one=True
         )
-        
+
         if not result:
             logger.warning(f"Payment not found for payment ID {payment_id}")
             return JSONResponse({"ok": True})
-        
+
+        subscription_type = result['subscription_type']
+
         # Обрабатываем платеж асинхронно
         if _bot:
-            asyncio.create_task(_process_paid_invoice(_bot, tg_id, payment_id, tariff_code))
+            asyncio.create_task(_process_paid_invoice(_bot, tg_id, payment_id, tariff_code, subscription_type))
         else:
             logger.error("Bot not available for webhook processing")
         
