@@ -8,8 +8,7 @@ from config import (
     YOOKASSA_SHOP_ID,
     YOOKASSA_SECRET_KEY,
     YOOKASSA_API_URL,
-    TARIFFS_REGULAR,
-    TARIFFS_ANTI_JAMMING,
+    TARIFFS,
     PAYMENT_CHECK_INTERVAL,
     CLEANUP_CHECK_INTERVAL,
     API_REQUEST_TIMEOUT,
@@ -130,7 +129,7 @@ async def get_payment_status(payment_id: str) -> dict | None:
     )
 
 
-async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff_code: str, subscription_type: str = 'regular') -> bool:
+async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff_code: str) -> bool:
     """
     Обработать оплаченный платёж Yookassa и активировать подписку
 
@@ -139,26 +138,14 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
         tg_id: ID пользователя Telegram
         payment_id: ID платежа в Yookassa
         tariff_code: Код тарифа
-        subscription_type: Тип подписки ('regular' или 'anti_jamming')
 
     Returns:
         True если успешно, False иначе
     """
     try:
-        from config import TARIFFS_REGULAR, TARIFFS_ANTI_JAMMING
-        from services.xui import create_xui_client
-
-        # Выбираем правильный словарь тарифов
-        tariffs = TARIFFS_ANTI_JAMMING if subscription_type == 'anti_jamming' else TARIFFS_REGULAR
-
-        if tariff_code not in tariffs:
-            logging.error(f"Invalid tariff code {tariff_code} for subscription type {subscription_type}")
-            return False
-
-        days = tariffs[tariff_code]["days"]
+        days = TARIFFS[tariff_code]["days"]
         uuid = None
         sub_url = None
-        xui_url = None
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
@@ -183,52 +170,21 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             if not sub_url:
                 logging.warning(f"Failed to get subscription URL for {uuid}")
 
-            # Если тип подписки anti_jamming, создаём клиента в 3X-UI
-            if subscription_type == 'anti_jamming':
-                try:
-                    xui_data = await create_xui_client(tg_id, days)
-                    xui_url = xui_data['subscription_url']
-
-                    # Сохраняем 3X-UI данные в БД
-                    await db.update_xui_subscription(
-                        tg_id,
-                        xui_data['xui_uuid'],
-                        xui_data['xui_username'],
-                        xui_data['subscription_until']
-                    )
-                    logging.info(f"Created 3X-UI client for user {tg_id}")
-                except Exception as e:
-                    logging.error(f"Failed to create 3X-UI client for {tg_id}: {e}")
-                    # 3X-UI ошибка не должна блокировать основной платеж, но логируем
-
             # Обрабатываем реферальную программу
             try:
                 referrer = await db.get_referrer(tg_id)
                 if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    referrer_id = referrer[0]
-                    referrer_uuid_row = await db.get_user(referrer_id)
+                    referrer_uuid_row = await db.get_user(referrer[0])
+                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
+                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
+                        if ref_extended:
+                            await db.increment_active_referrals(referrer[0])
+                            logging.info(f"Referral bonus given to {referrer[0]}")
 
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
-                        try:
-                            ref_extended = await remnawave_extend_subscription(
-                                session,
-                                referrer_uuid_row['remnawave_uuid'],
-                                7
-                            )
-                            if ref_extended:
-                                await db.increment_active_referrals(referrer_id)
-                                logging.info(f"Referral bonus (+7 days) given to {referrer_id} by user {tg_id}")
-                            else:
-                                logging.warning(f"Failed to extend subscription for referrer {referrer_id}")
-                        except Exception as ref_err:
-                            logging.error(f"Error extending referrer subscription for {referrer_id}: {ref_err}")
-                    else:
-                        logging.warning(f"Referrer {referrer_id} has no active Remnawave account")
-
-                    # Отмечаем что пользователь сделал первый платеж
                     await db.mark_first_payment(tg_id)
             except Exception as e:
                 logging.error(f"Error processing referral for user {tg_id}: {e}")
+                # Реферальная ошибка не должна блокировать основной платеж
 
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
             new_until = datetime.utcnow() + timedelta(days=days)
@@ -237,25 +193,12 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             # Только после успешных операций отмечаем платеж как paid
             await db.update_payment_status_by_invoice(payment_id, 'paid')
 
-            # Формируем сообщение в зависимости от типа подписки
-            if subscription_type == 'anti_jamming' and xui_url:
-                text = (
-                    "✅ <b>Оплата прошла успешно!</b>\n\n"
-                    f"Тариф: {tariff_code} ({days} дней)\n"
-                    "<b>Обычная подписка + Обход глушилок</b>\n\n"
-                    "<b>📌 Ссылка для обычного подключения:</b>\n"
-                    f"<code>{sub_url or 'Ошибка получения ссылки'}</code>\n\n"
-                    "<b>📌 Ссылка для обхода глушилок:</b>\n"
-                    f"<code>{xui_url}</code>"
-                )
-            else:
-                text = (
-                    "✅ <b>Оплата прошла успешно!</b>\n\n"
-                    f"Тариф: {tariff_code} ({days} дней)\n"
-                    "<b>Обычная подписка</b>\n\n"
-                    f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
-                )
-
+            # Отправляем сообщение пользователю
+            text = (
+                "✅ <b>Оплата прошла успешно!</b>\n\n"
+                f"Тариф: {tariff_code} ({days} дней)\n"
+                f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
+            )
             await bot.send_message(tg_id, text)
 
             return True
@@ -303,14 +246,7 @@ async def check_yookassa_payments(bot):
                 payment = await get_payment_status(invoice_id)
 
                 if payment and payment.get("status") == "succeeded":
-                    # Получаем тип подписки из БД
-                    payment_data = await db.db_execute(
-                        "SELECT subscription_type FROM payments WHERE id = $1",
-                        (payment_id,),
-                        fetch_one=True
-                    )
-                    sub_type = payment_data['subscription_type'] if payment_data else 'regular'
-                    success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code, sub_type)
+                    success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code)
                     if success:
                         logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")
 

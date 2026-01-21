@@ -28,18 +28,6 @@ REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")
 
 # ────────────────────────────────────────────────
-#               3X-UI PANEL CONFIG
-# ────────────────────────────────────────────────
-
-XUI_PANEL_URL = os.getenv("XUI_PANEL_URL", "https://51.250.117.234:2053")
-XUI_PANEL_PATH = os.getenv("XUI_PANEL_PATH", "/sXvL8myMex46uSa3NP/panel")
-XUI_USERNAME = os.getenv("XUI_USERNAME", "U0UiUl76S0")
-XUI_PASSWORD = os.getenv("XUI_PASSWORD", "2W1SwoZ0Ix")
-SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
-SUB_EXTERNAL_HOST = os.getenv("SUB_EXTERNAL_HOST", "51.250.117.234")
-INBOUND_ID = int(os.getenv("INBOUND_ID", "1"))
-
-# ────────────────────────────────────────────────
 #            CRYPTOBOT PAYMENT CONFIG
 # ────────────────────────────────────────────────
 
@@ -72,24 +60,12 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 #                TARIFFS CONFIG
 # ────────────────────────────────────────────────
 
-# Обычная подписка (только Remnawave)
-TARIFFS_REGULAR = {
+TARIFFS = {
     "1m": {"days": 30, "price": 100},
     "3m": {"days": 90, "price": 249},
     "6m": {"days": 180, "price": 449},
     "12m": {"days": 365, "price": 990}
 }
-
-# Обычная подписка + Обход глушилок (Remnawave + 3X-UI)
-TARIFFS_ANTI_JAMMING = {
-    "1m": {"days": 30, "price": 150},
-    "3m": {"days": 90, "price": 349},
-    "6m": {"days": 180, "price": 599},
-    "12m": {"days": 365, "price": 1190}
-}
-
-# Для обратной совместимости
-TARIFFS = TARIFFS_REGULAR
 
 # ────────────────────────────────────────────────
 #             TASK CONFIGURATION

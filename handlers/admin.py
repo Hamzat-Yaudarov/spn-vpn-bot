@@ -98,42 +98,27 @@ async def admin_new_code(message: Message):
 
 @router.message(Command("give_sub"))
 async def admin_give_sub(message: Message):
-    """Админ команда: выдать/продлить ОБЫЧНУЮ подписку пользователю по ИД"""
-    await _give_subscription_command(message, subscription_type='regular', command_name='give_sub')
-
-
-@router.message(Command("give_vib_sub"))
-async def admin_give_vib_sub(message: Message):
-    """Админ команда: выдать/продлить подписку ОБЫЧНАЯ + ОБХОД ГЛУШИЛОК пользователю по ИД"""
-    await _give_subscription_command(message, subscription_type='anti_jamming', command_name='give_vib_sub')
-
-
-async def _give_subscription_command(message: Message, subscription_type: str = 'regular', command_name: str = 'give_sub'):
-    """Обработать команду выдачи подписки"""
-    from services.xui import create_xui_client
-
+    """Админ команда: выдать/продлить подписку пользователю по ИД"""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
         await message.answer("❌ Эта команда доступна только администратору")
-        logger.warning(f"Unauthorized /{command_name} attempt from user {admin_id}")
+        logger.warning(f"Unauthorized /give_sub attempt from user {admin_id}")
         return
 
     parts = message.text.split()
 
     # Валидация количества аргументов
     if len(parts) < 3:
-        type_name = "ОБЫЧНАЯ + ОБХОД ГЛУШИЛОК" if subscription_type == 'anti_jamming' else "ОБЫЧНАЯ"
         await message.answer(
             "❌ <b>Неверный формат команды</b>\n\n"
-            f"<b>Использование:</b> /{command_name} ТГ_ИД ДНЕЙ\n\n"
-            f"<b>Тип подписки:</b> {type_name}\n\n"
+            "<b>Использование:</b> /give_sub ТГ_ИД ДНЕЙ\n\n"
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
             "• <code>ДНЕЙ</code> - количество дней (число > 0)\n\n"
-            f"<b>Пример:</b> /{command_name} 123456789 30"
+            "<b>Пример:</b> /give_sub 123456789 30"
         )
-        logger.warning(f"Admin {admin_id} /{command_name} - wrong number of arguments: {len(parts)-1}")
+        logger.warning(f"Admin {admin_id} /give_sub - wrong number of arguments: {len(parts)-1}")
         return
 
     try:
@@ -160,14 +145,14 @@ async def _give_subscription_command(message: Message, subscription_type: str = 
             "Убедитесь, что:\n"
             "• ТГ_ИД и ДНЕЙ - целые числа\n"
             "• Оба числа больше 0\n\n"
-            f"<b>Пример:</b> /{command_name} 123456789 30"
+            "<b>Пример:</b> /give_sub 123456789 30"
         )
-        logger.warning(f"Admin {admin_id} /{command_name} - parsing error for arguments: {parts[1:]}")
+        logger.warning(f"Admin {admin_id} /give_sub - parsing error for arguments: {parts[1:]}")
         return
 
     if not await db.acquire_user_lock(tg_id):
         await message.answer(f"❌ Пользователь {tg_id} занят, попробуй позже")
-        logger.info(f"Admin {admin_id} /{command_name} - could not acquire lock for user {tg_id}")
+        logger.info(f"Admin {admin_id} /give_sub - could not acquire lock for user {tg_id}")
         return
 
     try:
@@ -175,9 +160,6 @@ async def _give_subscription_command(message: Message, subscription_type: str = 
         if not await db.user_exists(tg_id):
             await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
-
-        # Устанавливаем тип подписки в БД
-        await db.set_subscription_type(tg_id, subscription_type)
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
@@ -201,39 +183,14 @@ async def _give_subscription_command(message: Message, subscription_type: str = 
             if not squad_added:
                 logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
 
-            # Если тип подписки anti_jamming, создаём клиента в 3X-UI
-            xui_uuid = None
-            xui_username = None
-            if subscription_type == 'anti_jamming':
-                try:
-                    xui_data = await create_xui_client(tg_id, days)
-                    xui_uuid = xui_data['xui_uuid']
-                    xui_username = xui_data['xui_username']
-
-                    # Сохраняем 3X-UI данные в БД
-                    await db.update_xui_subscription(
-                        tg_id,
-                        xui_uuid,
-                        xui_username,
-                        xui_data['subscription_until']
-                    )
-                    logger.info(f"Created 3X-UI client for user {tg_id} by admin {admin_id}")
-                except Exception as e:
-                    logger.error(f"Failed to create 3X-UI client for {tg_id}: {e}")
-                    await message.answer(
-                        f"⚠️ Подписка Remnawave создана, но ошибка с 3X-UI: {str(e)[:50]}"
-                    )
-
             # Обновляем подписку в БД
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        type_name = "ОБЫЧНАЯ + ОБХОД ГЛУШИЛОК" if subscription_type == 'anti_jamming' else "ОБЫЧНАЯ"
         await message.answer(
             f"✅ <b>Подписка выдана успешно!</b>\n\n"
             f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
             f"📅 <b>Дней:</b> {days}\n"
-            f"<b>Тип:</b> {type_name}\n"
             f"🔑 <b>UUID:</b> <code>{uuid}</code>"
         )
 
@@ -242,8 +199,7 @@ async def _give_subscription_command(message: Message, subscription_type: str = 
             await message.bot.send_message(
                 tg_id,
                 f"🎉 <b>Поздравляем!</b>\n\n"
-                f"Вам выдана подписка SPN VPN на <b>{days} дней</b>\n"
-                f"<b>Тип: {type_name}</b>\n\n"
+                f"Вам выдана подписка SPN VPN на <b>{days} дней</b>\n\n"
                 f"Спасибо за использование нашего сервиса! 🚀"
             )
             logger.info(f"User {tg_id} notified about subscription by admin {admin_id}")
@@ -254,7 +210,7 @@ async def _give_subscription_command(message: Message, subscription_type: str = 
                 f"(Ошибка: {str(e)[:50]})"
             )
 
-        logger.info(f"Admin {admin_id} gave {days} days {subscription_type} subscription to user {tg_id}")
+        logger.info(f"Admin {admin_id} gave {days} days subscription to user {tg_id}")
 
     except Exception as e:
         logger.error(f"Give subscription error: {e}")
