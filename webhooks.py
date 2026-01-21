@@ -76,16 +76,33 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             try:
                 referrer = await db.get_referrer(tg_id)
                 if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    referrer_uuid_row = await db.get_user(referrer[0])
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
-                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
-                        if ref_extended:
-                            await db.increment_active_referrals(referrer[0])
-                            logger.info(f"Referral bonus given to {referrer[0]}")
+                    referrer_id = referrer[0]
+                    referrer_uuid_row = await db.get_user(referrer_id)
 
+                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
+                        try:
+                            ref_extended = await remnawave_extend_subscription(
+                                session,
+                                referrer_uuid_row['remnawave_uuid'],
+                                7
+                            )
+                            if ref_extended:
+                                await db.increment_active_referrals(referrer_id)
+                                logger.info(f"Referral bonus (+7 days) given to {referrer_id} by user {tg_id}")
+                            else:
+                                logger.warning(f"Failed to extend subscription for referrer {referrer_id}")
+                        except Exception as ref_err:
+                            logger.error(f"Error extending referrer subscription for {referrer_id}: {ref_err}")
+                    else:
+                        logger.warning(f"Referrer {referrer_id} has no active Remnawave account")
+
+                    # Отмечаем что пользователь сделал первый платеж
+                    # (независимо от статуса реферала)
                     await db.mark_first_payment(tg_id)
             except Exception as e:
                 logger.error(f"Error processing referral for user {tg_id}: {e}")
+                # Реферальная ошибка не должна блокировать основной платеж
+                # но мы логируем её для анализа
 
             # Обновляем подписку пользователя
             new_until = datetime.utcnow() + timedelta(days=days)

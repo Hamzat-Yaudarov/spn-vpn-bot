@@ -35,10 +35,19 @@ async def run_migrations():
 
                     -- Условия и подписка
                     accepted_terms BOOLEAN DEFAULT FALSE,
+                    subscription_type TEXT DEFAULT 'regular',  -- regular или anti_jamming
+                    balance NUMERIC DEFAULT 0,
+
+                    -- Remnawave интеграция
                     remnawave_uuid UUID,
                     remnawave_username TEXT,
                     subscription_until TIMESTAMP,
                     squad_uuid UUID,
+
+                    -- 3X-UI интеграция
+                    xui_uuid TEXT,
+                    xui_username TEXT,
+                    xui_subscription_until TIMESTAMP,
 
                     -- Реферальная программа
                     referrer_id BIGINT,
@@ -126,6 +135,13 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS notified_1_day_before BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS notified_expired BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_type TEXT DEFAULT 'regular';",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC DEFAULT 0;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_uuid TEXT;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_username TEXT;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS xui_subscription_until TIMESTAMP;",
             ]
 
             for query in alter_queries:
@@ -313,14 +329,16 @@ async def has_accepted_terms(tg_id: int) -> bool:
 # ────────────────────────────────────────────────
 
 async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
-    """Обновить подписку пользователя"""
+    """Обновить подписку пользователя и сбросить флаги уведомлений"""
     await db_execute(
         """
-        UPDATE users 
-        SET remnawave_uuid = $1, 
-            remnawave_username = $2, 
-            subscription_until = $3, 
-            squad_uuid = $4 
+        UPDATE users
+        SET remnawave_uuid = $1,
+            remnawave_username = $2,
+            subscription_until = $3,
+            squad_uuid = $4,
+            notified_1_day_before = FALSE,
+            notified_expired = FALSE
         WHERE tg_id = $5
         """,
         (uuid, username, subscription_until, squad_uuid, tg_id)
@@ -710,3 +728,151 @@ async def update_last_payment_check(tg_id: int):
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
         (datetime.utcnow(), tg_id)
     )
+
+
+# ────────────────────────────────────────────────
+#           SUBSCRIPTION EXPIRY NOTIFICATIONS
+# ────────────────────────────────────────────────
+
+async def get_users_with_active_subscription():
+    """Получить всех пользователей с активной подпиской (remnawave_uuid не NULL)"""
+    return await db_execute(
+        """
+        SELECT tg_id, remnawave_uuid, subscription_until, notified_1_day_before, notified_expired
+        FROM users
+        WHERE remnawave_uuid IS NOT NULL
+        ORDER BY tg_id
+        """,
+        fetch_all=True
+    )
+
+
+async def mark_notified_1_day_before(tg_id: int):
+    """Отметить что пользователю отправлено уведомление за 1 день до конца"""
+    await db_execute(
+        "UPDATE users SET notified_1_day_before = TRUE WHERE tg_id = $1",
+        (tg_id,)
+    )
+
+
+async def mark_notified_expired(tg_id: int):
+    """Отметить что пользователю отправлено уведомление об истечении подписки"""
+    await db_execute(
+        "UPDATE users SET notified_expired = TRUE WHERE tg_id = $1",
+        (tg_id,)
+    )
+
+
+async def reset_subscription_notifications(tg_id: int):
+    """Сбросить флаги уведомлений при продлении подписки"""
+    await db_execute(
+        "UPDATE users SET notified_1_day_before = FALSE, notified_expired = FALSE WHERE tg_id = $1",
+        (tg_id,)
+    )
+
+
+# ────────────────────────────────────────────────
+#              BALANCE MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_balance(tg_id: int) -> float:
+    """Получить баланс пользователя"""
+    result = await db_execute(
+        "SELECT balance FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return float(result['balance']) if result else 0.0
+
+
+async def add_balance(tg_id: int, amount: float):
+    """Добавить средства на баланс"""
+    await db_execute(
+        "UPDATE users SET balance = balance + $1 WHERE tg_id = $2",
+        (amount, tg_id)
+    )
+
+
+async def subtract_balance(tg_id: int, amount: float) -> bool:
+    """Снять средства с баланса. Возвращает True если удалось, False если недостаточно средств"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Проверяем баланс и снимаем атомарно
+            result = await conn.fetchval(
+                "UPDATE users SET balance = balance - $1 WHERE tg_id = $2 AND balance >= $1 RETURNING 1",
+                (amount, tg_id)
+            )
+            return result is not None
+
+
+async def set_balance(tg_id: int, amount: float):
+    """Установить баланс на конкретное значение"""
+    await db_execute(
+        "UPDATE users SET balance = $1 WHERE tg_id = $2",
+        (amount, tg_id)
+    )
+
+
+# ────────────────────────────────────────────────
+#           SUBSCRIPTION TYPE MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_subscription_type(tg_id: int) -> str:
+    """Получить тип подписки пользователя (regular или anti_jamming)"""
+    result = await db_execute(
+        "SELECT subscription_type FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return result['subscription_type'] if result else 'regular'
+
+
+async def set_subscription_type(tg_id: int, sub_type: str):
+    """Установить тип подписки пользователя"""
+    if sub_type not in ('regular', 'anti_jamming'):
+        raise ValueError(f"Invalid subscription type: {sub_type}")
+    await db_execute(
+        "UPDATE users SET subscription_type = $1 WHERE tg_id = $2",
+        (sub_type, tg_id)
+    )
+
+
+# ────────────────────────────────────────────────
+#              3X-UI INTEGRATION
+# ────────────────────────────────────────────────
+
+async def update_xui_subscription(tg_id: int, xui_uuid: str, xui_username: str, xui_subscription_until: str):
+    """Обновить 3X-UI подписку пользователя"""
+    await db_execute(
+        """
+        UPDATE users
+        SET xui_uuid = $1, xui_username = $2, xui_subscription_until = $3
+        WHERE tg_id = $4
+        """,
+        (xui_uuid, xui_username, xui_subscription_until, tg_id)
+    )
+
+
+async def get_xui_subscription(tg_id: int):
+    """Получить 3X-UI подписку пользователя"""
+    result = await db_execute(
+        "SELECT xui_uuid, xui_username, xui_subscription_until FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return {
+        'xui_uuid': result['xui_uuid'],
+        'xui_username': result['xui_username'],
+        'xui_subscription_until': result['xui_subscription_until']
+    } if result else None
+
+
+async def has_xui_subscription(tg_id: int) -> bool:
+    """Проверить есть ли 3X-UI подписка у пользователя"""
+    result = await db_execute(
+        "SELECT 1 FROM users WHERE tg_id = $1 AND xui_uuid IS NOT NULL",
+        (tg_id,),
+        fetch_one=True
+    )
+    return result is not None

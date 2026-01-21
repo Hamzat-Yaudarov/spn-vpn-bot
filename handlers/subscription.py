@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import TARIFFS, DEFAULT_SQUAD_UUID
+from config import TARIFFS, TARIFFS_REGULAR, TARIFFS_ANTI_JAMMING, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
@@ -17,32 +17,101 @@ router = Router()
 
 @router.callback_query(F.data == "buy_subscription")
 async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
-    """Показать выбор тарифов"""
+    """Показать выбор типа подписки"""
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} clicked: buy_subscription")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 месяц — 100₽", callback_data="tariff_1m")],
-        [InlineKeyboardButton(text="3 месяца — 249₽", callback_data="tariff_3m")],
-        [InlineKeyboardButton(text="6 месяцев — 449₽", callback_data="tariff_6m")],
-        [InlineKeyboardButton(text="12 месяцев — 990₽", callback_data="tariff_12m")],
+        [InlineKeyboardButton(
+            text="🔐 Обычная подписка",
+            callback_data="subscription_type_regular"
+        )],
+        [InlineKeyboardButton(
+            text="🛡️ Обычная подписка + Обход глушилок",
+            callback_data="subscription_type_anti_jamming"
+        )],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
-    await callback.message.edit_text("Выбери срок подписки:", reply_markup=kb)
+    text = (
+        "<b>Выберите тип подписки:</b>\n\n"
+        "<b>🔐 Обычная подписка</b>\n"
+        "• Быстрый интернет\n"
+        "• VPN серверы\n\n"
+        "<b>🛡️ Обычная подписка + Обход глушилок</b>\n"
+        "• Все возможности обычной подписки\n"
+        "• Дополнительный способ подключения\n"
+        "• Защита от помех\n"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(UserStates.choosing_subscription_type)
+
+
+@router.callback_query(UserStates.choosing_subscription_type, F.data.startswith("subscription_type_"))
+async def process_subscription_type_choice(callback: CallbackQuery, state: FSMContext):
+    """Обработать выбор типа подписки"""
+    tg_id = callback.from_user.id
+    sub_type = callback.data.split("_")[2]  # regular или anti_jamming
+    logging.info(f"User {tg_id} selected subscription type: {sub_type}")
+
+    # Сохраняем тип подписки в state
+    await state.update_data(subscription_type=sub_type)
+
+    # Устанавливаем тип подписки в БД
+    await db.set_subscription_type(tg_id, sub_type)
+
+    # Показываем тарифы для выбранного типа
+    await show_tariffs_for_type(callback, state, sub_type)
+
+
+async def show_tariffs_for_type(callback: CallbackQuery, state: FSMContext, sub_type: str):
+    """Показать тарифы для выбранного типа подписки"""
+    from config import TARIFFS_REGULAR, TARIFFS_ANTI_JAMMING
+
+    tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+
+    kb_buttons = []
+    for code, tariff in tariffs.items():
+        days = tariff['days']
+        price = tariff['price']
+        kb_buttons.append([InlineKeyboardButton(
+            text=f"{code.upper()} — {price}₽",
+            callback_data=f"tariff_{code}_{sub_type}"
+        )])
+
+    kb_buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+
+    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
+    await callback.message.edit_text(f"<b>{type_name}</b>\n\nВыбери срок подписки:", reply_markup=kb)
     await state.set_state(UserStates.choosing_tariff)
 
 
-@router.callback_query(F.data.startswith("tariff_"))
+@router.callback_query(UserStates.choosing_tariff, F.data.startswith("tariff_"))
 async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     """Обработать выбор тарифа"""
+    from config import TARIFFS_REGULAR, TARIFFS_ANTI_JAMMING
+
     tg_id = callback.from_user.id
-    tariff_code = callback.data.split("_")[1]
-    logging.info(f"User {tg_id} selected tariff: {tariff_code}")
+    data_parts = callback.data.split("_")
+    tariff_code = data_parts[1]  # 1m, 3m, 6m, 12m
+    sub_type = data_parts[2]      # regular или anti_jamming
 
-    await state.update_data(tariff_code=tariff_code)
+    logging.info(f"User {tg_id} selected tariff: {tariff_code} for type: {sub_type}")
 
-    tariff = TARIFFS[tariff_code]
+    # Получаем тарифы для выбранного типа подписки
+    tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+
+    if tariff_code not in tariffs:
+        await callback.answer("Неверный тариф")
+        return
+
+    tariff = tariffs[tariff_code]
+
+    await state.update_data(tariff_code=tariff_code, subscription_type=sub_type)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
@@ -50,7 +119,15 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription")]
     ])
 
-    text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
+    type_name = "Обычная подписка" if sub_type == "regular" else "Обычная подписка + Обход глушилок"
+
+    text = (
+        f"<b>{type_name}</b>\n"
+        f"Тариф: <b>{tariff_code.upper()}</b>\n"
+        f"Срок: <b>{tariff['days']} дней</b>\n"
+        f"Сумма: <b>{tariff['price']} ₽</b>\n\n"
+        "Выбери способ оплаты:"
+    )
 
     await callback.message.edit_text(text, reply_markup=kb)
     await state.set_state(UserStates.choosing_payment)
@@ -62,16 +139,18 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-    logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code})")
+    sub_type = data.get("subscription_type", "regular")
+    logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code}, type: {sub_type})")
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
         await state.clear()
         return
 
-    tariff = TARIFFS[tariff_code]
+    # Выбираем правильный словарь тарифов
+    tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+    tariff = tariffs[tariff_code]
     amount = tariff["price"]
-    tg_id = callback.from_user.id
 
     # Проверяем, есть ли уже активный счёт для этого пользователя и тарифа
     existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "cryptobot")
@@ -148,16 +227,18 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-    logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code})")
+    sub_type = data.get("subscription_type", "regular")
+    logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code}, type: {sub_type})")
 
     if not tariff_code:
         await callback.message.edit_text("Ошибка: тариф не выбран")
         await state.clear()
         return
 
-    tariff = TARIFFS[tariff_code]
+    # Выбираем правильный словарь тарифов
+    tariffs = TARIFFS_ANTI_JAMMING if sub_type == "anti_jamming" else TARIFFS_REGULAR
+    tariff = tariffs[tariff_code]
     amount = tariff["price"]
-    tg_id = callback.from_user.id
 
     # Проверяем, есть ли уже активный платёж для этого пользователя и тарифа
     existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, tariff_code, "yookassa")
@@ -276,18 +357,21 @@ async def process_check_payment(callback: CallbackQuery):
         return
 
     try:
+        # Получаем тип подписки пользователя
+        sub_type = await db.get_subscription_type(tg_id)
+
         if provider == "yookassa":
             # Проверяем платёж в Yookassa
             payment = await get_payment_status(invoice_id)
 
             if payment and payment.get("status") == "succeeded":
-                success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
+                success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code, sub_type)
 
                 if success:
                     await callback.message.edit_text(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
+                        "Подписка активирована"
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)
@@ -299,13 +383,13 @@ async def process_check_payment(callback: CallbackQuery):
             invoice = await get_invoice_status(invoice_id)
 
             if invoice and invoice.get("status") == "paid":
-                success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
+                success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code, sub_type)
 
                 if success:
                     await callback.message.edit_text(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
+                        "Подписка активирована"
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)
@@ -338,6 +422,9 @@ async def process_my_subscription(callback: CallbackQuery):
             reply_markup=kb
         )
         return
+
+    # Получаем тип подписки пользователя
+    sub_type = await db.get_subscription_type(tg_id)
 
     # Получаем актуальную информацию о подписке из Remnawave
     remaining_str = "неизвестно"
@@ -375,15 +462,43 @@ async def process_my_subscription(callback: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
-    text = (
-            "🔐 <b>Мой доступ</b>\n\n"
+    # Для anti_jamming показываем обе ссылки
+    if sub_type == "anti_jamming":
+        xui_sub = await db.get_xui_subscription(tg_id)
+        xui_link = "ошибка получения ссылки"
+
+        # Получаем 3X-UI ссылку подписки
+        if xui_sub and xui_sub['xui_username']:
+            try:
+                from services.xui import get_xui_client_traffic
+                traffic_info = await get_xui_client_traffic(xui_sub['xui_username'])
+                if traffic_info:
+                    xui_link = traffic_info.get('link', xui_link)
+            except Exception as e:
+                logging.error(f"Error getting 3X-UI link: {e}")
+
+        text = (
+            "🔐 <b>Мой доступ (Обычная подписка + Обход глушилок)</b>\n\n"
             "<blockquote>"
             f"📆 Осталось времени: <b>{remaining_str}</b>\n"
-        "🌐 Группа подключения: <b>SPN-Squad</b>\n"
-        "</blockquote>\n\n"
-        "<b>Персональная ссылка доступа:</b>\n"
-        f"{sub_url or '<i>Ошибка получения ссылки</i>'}\n\n"
-        "🟢 <i>Статус: активен</i>"
-    )
+            "🌐 Статус: <b>Активен</b>\n"
+            "</blockquote>\n\n"
+            "<b>📌 Ссылка для обычного подключения (Remnawave):</b>\n"
+            f"<code>{sub_url or 'Ошибка получения ссылки'}</code>\n\n"
+            "<b>📌 Ссылка для обхода глушилок (3X-UI):</b>\n"
+            f"<code>{xui_link}</code>\n\n"
+            "🟢 <i>Оба способа активны</i>"
+        )
+    else:
+        text = (
+            "🔐 <b>Мой доступ (Обычная подписка)</b>\n\n"
+            "<blockquote>"
+            f"📆 Осталось времени: <b>{remaining_str}</b>\n"
+            "🌐 Группа подключения: <b>SPN-Squad</b>\n"
+            "</blockquote>\n\n"
+            "<b>Персональная ссылка доступа:</b>\n"
+            f"<code>{sub_url or 'Ошибка получения ссылки'}</code>\n\n"
+            "🟢 <i>Статус: активен</i>"
+        )
 
     await callback.message.edit_text(text, reply_markup=kb)

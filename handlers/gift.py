@@ -51,8 +51,12 @@ async def process_get_gift(callback: CallbackQuery):
                 )
                 return
         except Exception as e:
-            logging.warning(f"Failed to check bot permissions in channel: {e}")
-            # Продолжаем, может быть бот всё же может сделать проверку
+            logging.error(f"Failed to check bot permissions in channel: {e}")
+            await callback.answer(
+                "❌ Не удалось проверить права бота в канале. Попробуй позже.",
+                show_alert=True
+            )
+            return
 
         # Проверяем подписку пользователя на канал новостей
         try:
@@ -74,47 +78,65 @@ async def process_get_gift(callback: CallbackQuery):
             )
             return
 
-        # Атомарно проверяем и отмечаем подарок
-        gift_marked = await db.mark_gift_received_atomic(tg_id)
-        if not gift_marked:
-            await callback.answer("Ты уже получал подарок", show_alert=True)
-            return
-
-        # Выдаём подарок (3 дня подписки)
+        # Сначала создаём/получаем VPN аккаунт и выдаём подарок
+        # (ДО отметки в БД что подарок получен)
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            uuid, username = await remnawave_get_or_create_user(
-                session,
-                tg_id,
-                days=3,
-                extend_if_exists=True
-            )
 
-            if not uuid:
-                await callback.answer(
-                    "Ошибка при выдаче подарка. Попробуй позже.",
-                    show_alert=True
+        try:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                uuid, username = await remnawave_get_or_create_user(
+                    session,
+                    tg_id,
+                    days=3,
+                    extend_if_exists=True
                 )
+
+                if not uuid:
+                    await callback.answer(
+                        "Ошибка при выдаче подарка. Попробуй позже.",
+                        show_alert=True
+                    )
+                    return
+
+                await remnawave_add_to_squad(session, uuid)
+                sub_url = await remnawave_get_subscription_url(session, uuid)
+
+                if not sub_url:
+                    await callback.answer(
+                        "Ошибка при получении ссылки подписки. Попробуй позже.",
+                        show_alert=True
+                    )
+                    return
+
+            # Обновляем данные пользователя в БД
+            new_until = datetime.utcnow() + timedelta(days=3)
+            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+
+            # ТОЛЬКО ПОСЛЕ успешной выдачи подарка атомарно отмечаем его
+            gift_marked = await db.mark_gift_received_atomic(tg_id)
+            if not gift_marked:
+                # Подарок уже был отмечен (пока бот был занят выше)
+                await callback.answer("Ты уже получал подарок", show_alert=True)
                 return
 
-            await remnawave_add_to_squad(session, uuid)
-            sub_url = await remnawave_get_subscription_url(session, uuid)
+            # Отправляем сообщение пользователю
+            text = (
+                "🎁 <b>Подарок получен!</b>\n\n"
+                "Спасибо за подписку на канал!\n"
+                "Тебе выдана подписка на 3 дня.\n\n"
+                f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+            )
 
-        # Обновляем данные пользователя в БД
-        new_until = datetime.utcnow() + timedelta(days=3)
-        await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            await callback.message.edit_text(text)
+            logging.info(f"Gift given to user {tg_id}")
 
-        # Отправляем сообщение пользователю
-        text = (
-            "🎁 <b>Подарок получен!</b>\n\n"
-            "Спасибо за подписку на канал!\n"
-            "Тебе выдана подписка на 3 дня.\n\n"
-            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
-        )
-
-        await callback.message.edit_text(text)
-        logging.info(f"Gift given to user {tg_id}")
+        except Exception as e:
+            logging.error(f"Error giving gift to user {tg_id}: {e}")
+            await callback.answer(
+                "Ошибка при выдаче подарка. Попробуй позже.",
+                show_alert=True
+            )
 
     except Exception as e:
         logging.error(f"Get gift error: {e}")
