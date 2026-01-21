@@ -43,6 +43,18 @@ YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3"
 
 # ────────────────────────────────────────────────
+#                3X-UI PANEL CONFIG (VIP subscriptions)
+# ────────────────────────────────────────────────
+
+XUI_PANEL_URL = os.getenv("XUI_PANEL_URL", "https://51.250.117.234:2053")
+XUI_PANEL_PATH = os.getenv("XUI_PANEL_PATH", "/sXvL8myMex46uSa3NP/panel")
+XUI_USERNAME = os.getenv("XUI_USERNAME", "U0UiUl76S0")
+XUI_PASSWORD = os.getenv("XUI_PASSWORD", "2W1SwoZ0Ix")
+SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
+SUB_EXTERNAL_HOST = os.getenv("SUB_EXTERNAL_HOST", "51.250.117.234")
+INBOUND_ID = int(os.getenv("INBOUND_ID", "1"))
+
+# ────────────────────────────────────────────────
 #                DATABASE CONFIG (Supabase/PostgreSQL)
 # ────────────────────────────────────────────────
 

@@ -8,7 +8,8 @@ from config import (
     TARIFFS,
     PAYMENT_CHECK_INTERVAL,
     API_REQUEST_TIMEOUT,
-    WEBHOOK_USE_POLLING
+    WEBHOOK_USE_POLLING,
+    DEFAULT_SQUAD_UUID
 )
 import database as db
 from utils import retry_with_backoff, safe_api_call
@@ -17,6 +18,11 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url,
     remnawave_extend_subscription
+)
+from services.xui_panel import (
+    get_xui_session,
+    xui_create_or_extend_client,
+    xui_extend_client
 )
 
 
@@ -115,7 +121,7 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
     )
 
 
-async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:
+async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str, subscription_type: str = "normal") -> bool:
     """
     Обработать оплаченный счёт и активировать подписку
 
@@ -124,6 +130,7 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
         tg_id: ID пользователя Telegram
         invoice_id: ID счёта в CryptoBot
         tariff_code: Код тарифа
+        subscription_type: Тип подписки (normal или vip)
 
     Returns:
         True если успешно, False иначе
@@ -132,11 +139,12 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
         days = TARIFFS[tariff_code]["days"]
         uuid = None
         sub_url = None
+        price = TARIFFS[tariff_code]["price"]
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Создаём или получаем пользователя в Remnawave
+            # Создаём или получаем пользователя в Remnawave для обычной подписки
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days, extend_if_exists=True
             )
@@ -156,38 +164,65 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             if not sub_url:
                 logging.warning(f"Failed to get subscription URL for {uuid}")
 
-            # Обрабатываем реферальную программу
-            try:
-                referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    referrer_uuid_row = await db.get_user(referrer[0])
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
-                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
-                        if ref_extended:
-                            await db.increment_active_referrals(referrer[0])
-                            logging.info(f"Referral bonus given to {referrer[0]}")
-
-                    await db.mark_first_payment(tg_id)
-            except Exception as e:
-                logging.error(f"Error processing referral for user {tg_id}: {e}")
-                # Реферальная ошибка не должна блокировать основной платеж
-
-            # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
+            # Обновляем обычную подписку пользователя в БД
             new_until = datetime.utcnow() + timedelta(days=days)
-            await db.update_subscription(tg_id, uuid, username, new_until, None)
+            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-            # Только после успешных операций отмечаем платеж как paid
-            await db.update_payment_status_by_invoice(invoice_id, 'paid')
+        # Если выбрана VIP подписка, создаём её через XUI
+        if subscription_type == "vip":
+            xui_session = await get_xui_session()
+            if xui_session:
+                try:
+                    vip_uuid, vip_email = await xui_create_or_extend_client(xui_session, tg_id, days)
+                    if vip_uuid and vip_email:
+                        new_vip_until = datetime.utcnow() + timedelta(days=days)
+                        await db.update_vip_subscription(tg_id, vip_uuid, vip_email, new_vip_until)
+                except Exception as e:
+                    logging.warning(f"Failed to create/extend VIP subscription: {e}")
+                finally:
+                    await xui_session.close()
 
-            # Отправляем сообщение пользователю
-            text = (
-                "✅ <b>Оплата прошла успешно!</b>\n\n"
-                f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
-            )
-            await bot.send_message(tg_id, text)
+        # Обрабатываем реферальную программу (25% кешбэк вместо +7 дней)
+        try:
+            referrer = await db.get_referrer(tg_id)
+            if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
+                # Добавляем 25% от цены покупки на баланс рефералита
+                cashback = price * 0.25
+                await db.add_balance(referrer[0], cashback)
+                await db.increment_active_referrals(referrer[0])
+                logging.info(f"Referral cashback of {cashback}₽ (25% of {price}₽) given to {referrer[0]}")
 
-            return True
+                # Уведомляем рефералита о кешбэке
+                try:
+                    await bot.send_message(
+                        referrer[0],
+                        f"💰 <b>Кешбэк от реферала!</b>\n\n"
+                        f"Ваш реферал совершил покупку на {price} ₽\n"
+                        f"Вы получили 25% кешбэк: <b>{cashback:.2f} ₽</b>\n\n"
+                        f"Баланс пополнен! Используйте его для покупки подписки."
+                    )
+                except Exception as e:
+                    logging.warning(f"Failed to notify referrer {referrer[0]}: {e}")
+
+                await db.mark_first_payment(tg_id)
+        except Exception as e:
+            logging.error(f"Error processing referral for user {tg_id}: {e}")
+            # Реферальная ошибка не должна блокировать основной платеж
+
+        # Только после успешных операций отмечаем платеж как paid
+        await db.update_payment_status_by_invoice(invoice_id, 'paid')
+
+        # Отправляем сообщение пользователю
+        sub_type_text = "Обычная подписка + Обход глушилок (VIP)" if subscription_type == "vip" else "Обычная подписка"
+        text = (
+            "✅ <b>Оплата прошла успешно!</b>\n\n"
+            f"Тариф: {tariff_code} ({days} дней)\n"
+            f"Тип: {sub_type_text}\n"
+            f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
+        )
+        await bot.send_message(tg_id, text)
+
+        return True
 
     except Exception as e:
         logging.error(f"Process paid invoice exception: {e}")
@@ -226,6 +261,7 @@ async def check_cryptobot_invoices(bot):
                     tg_id = payment_record['tg_id']
                     invoice_id = payment_record['invoice_id']
                     tariff_code = payment_record['tariff_code']
+                    subscription_type = payment_record.get('subscription_type', 'normal')
 
                     if not await db.acquire_user_lock(tg_id):
                         continue
@@ -234,7 +270,7 @@ async def check_cryptobot_invoices(bot):
                         invoice = await get_invoice_status(invoice_id)
 
                         if invoice and invoice.get("status") == "paid":
-                            success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
+                            success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code, subscription_type)
                             if success:
                                 logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")
 

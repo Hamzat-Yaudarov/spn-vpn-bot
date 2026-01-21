@@ -41,6 +41,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
+        [InlineKeyboardButton(text="💰 Баланс", callback_data="check_balance")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="🎁 Получить подарок", callback_data="get_gift")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
@@ -70,6 +71,31 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         "👥 За каждого приглашённого пользователя,\n"
         "активировавшего доступ, вы получаете +7 дней"
         "</blockquote>"
+    )
+
+    await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "check_balance")
+async def process_check_balance(callback: CallbackQuery):
+    """Показать баланс пользователя"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} checking balance")
+
+    balance = await db.get_balance(tg_id)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+    ])
+
+    text = (
+        "<b>💰 Мой баланс</b>\n\n"
+        f"<blockquote>"
+        f"Доступные средства: <b>{balance:.2f} ₽</b>\n"
+        "</blockquote>\n\n"
+        "Баланс пополняется через реферальную программу.\n"
+        "За каждую покупку реферала вы получаете <b>25%</b> с суммы покупки.\n\n"
+        "Рекомендация: используйте баланс для покупки подписки и экономьте еще больше!"
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
