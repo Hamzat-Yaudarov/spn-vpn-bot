@@ -138,7 +138,7 @@ async def process_topup_amount(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     topup_amount = TOPUP_AMOUNTS.get(callback.data)
 
-    if not topup_amount:
+    if topup_amount is None:
         await callback.answer("❌ Неверная сумма", show_alert=True)
         return
 
@@ -173,8 +173,8 @@ async def process_topup_cryptobot(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Проверяем есть ли уже активный платёж
-    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(tg_id, f"topup_{amount}", "cryptobot")
+    # Проверяем есть ли уже активный платёж на пополнение баланса
+    existing_invoice_id = await db.get_active_topup_payment(tg_id, amount, "cryptobot")
 
     invoice = None
     invoice_id = None
@@ -230,8 +230,8 @@ async def process_topup_yookassa(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Проверяем есть ли уже активный платёж
-    existing_payment_id = await db.get_active_payment_for_user_and_tariff(tg_id, f"topup_{amount}", "yookassa")
+    # Проверяем есть ли уже активный платёж на пополнение баланса
+    existing_payment_id = await db.get_active_topup_payment(tg_id, amount, "yookassa")
 
     payment = None
     payment_id = None

@@ -10,6 +10,7 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
+from services import xui
 
 
 router = Router()
@@ -84,7 +85,7 @@ async def process_get_gift(callback: CallbackQuery):
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Создаём/продлеваем обе подписки на 3 дня
+            # Создаём/продлеваем обычную подписку через Remnawave на 3 дня
             uuid_regular, username_regular = await remnawave_get_or_create_user(
                 session,
                 tg_id,
@@ -92,35 +93,30 @@ async def process_get_gift(callback: CallbackQuery):
                 extend_if_exists=True,
                 sub_type="regular"
             )
-            uuid_vip, username_vip = await remnawave_get_or_create_user(
-                session,
-                tg_id,
-                days=3,
-                extend_if_exists=True,
-                sub_type="vip"
-            )
 
-            if not uuid_regular or not uuid_vip:
+            # Создаём/продлеваем VIP подписку через 3X-UI на 3 дня
+            email_vip, _ = await xui.xui_get_or_create_client(tg_id, days=3, extend_if_exists=True)
+
+            if not uuid_regular or not email_vip:
                 await callback.answer(
                     "Ошибка при выдаче подарка. Попробуй позже.",
                     show_alert=True
                 )
                 return
 
-            # Добавляем обе подписки в сквады
+            # Добавляем обычную подписку в сквад
             await remnawave_add_to_squad(session, uuid_regular)
-            await remnawave_add_to_squad(session, uuid_vip)
 
             # Получаем ссылки подписок
             sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
-            sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
+            sub_url_vip = await xui.xui_get_subscription_url(tg_id, email_vip)
 
         # Обновляем обе подписки в БД
         new_until = datetime.utcnow() + timedelta(days=3)
         await db.update_both_subscriptions(
             tg_id,
             uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
-            uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+            email_vip, email_vip, new_until, DEFAULT_SQUAD_UUID
         )
 
         # Отправляем сообщение пользователю
@@ -129,7 +125,7 @@ async def process_get_gift(callback: CallbackQuery):
             "Спасибо за подписку на канал!\n"
             "Тебе выданы обе подписки на 3 дня.\n\n"
             f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
-            f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
+            f"<b>🔒 Обход глушилок (3X-UI):</b>\n<code>{sub_url_vip}</code>"
         )
 
         await callback.message.edit_text(text)

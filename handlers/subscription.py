@@ -13,6 +13,7 @@ from services.remnawave import (
     remnawave_get_subscription_url,
     remnawave_get_user_info
 )
+from services import xui
 
 
 router = Router()
@@ -168,50 +169,50 @@ async def process_pay_from_balance(callback: CallbackQuery, state: FSMContext):
         tariff = tariffs[tariff_code]
         days = tariff["days"]
 
-        # Активируем подписку в Remnawave
+        # Активируем подписку
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             if subscription_type == "both":
                 # Создаём обе подписки
+                # Обычная подписка через Remnawave
                 uuid_regular, username_regular = await remnawave_get_or_create_user(
                     session, tg_id, days, extend_if_exists=True, sub_type="regular"
                 )
-                uuid_vip, username_vip = await remnawave_get_or_create_user(
-                    session, tg_id, days, extend_if_exists=True, sub_type="vip"
-                )
 
-                if not uuid_regular or not uuid_vip:
+                # VIP подписка через 3X-UI
+                email_vip, _ = await xui.xui_get_or_create_client(tg_id, days, extend_if_exists=True)
+
+                if not uuid_regular or not email_vip:
                     await db.add_balance(tg_id, amount)  # Возвращаем деньги
                     await callback.answer("❌ Ошибка активации подписки", show_alert=True)
                     return
 
-                # Добавляем обе подписки в сквады
+                # Добавляем обычную подписку в сквад Remnawave
                 await remnawave_add_to_squad(session, uuid_regular)
-                await remnawave_add_to_squad(session, uuid_vip)
 
                 # Получаем ссылки подписок
                 sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
-                sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
+                sub_url_vip = await xui.xui_get_subscription_url(tg_id, email_vip)
 
                 # Обновляем обе подписки в БД
                 new_until = datetime.utcnow() + timedelta(days=days)
                 await db.update_both_subscriptions(
                     tg_id,
                     uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
-                    uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+                    email_vip, email_vip, new_until, DEFAULT_SQUAD_UUID
                 )
 
                 text = (
                     "✅ <b>Подписка активирована!</b>\n\n"
                     f"Срок: {days} дней\n\n"
                     f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
-                    f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
+                    f"<b>🔒 Обход глушилок (3X-UI):</b>\n<code>{sub_url_vip}</code>"
                 )
-            else:
-                # Создаём только один тип подписки
+            elif subscription_type == "regular":
+                # Только обычная подписка
                 uuid, username = await remnawave_get_or_create_user(
-                    session, tg_id, days, extend_if_exists=True, sub_type=subscription_type
+                    session, tg_id, days, extend_if_exists=True, sub_type="regular"
                 )
 
                 if not uuid:
@@ -225,15 +226,33 @@ async def process_pay_from_balance(callback: CallbackQuery, state: FSMContext):
 
                 # Обновляем подписку в БД
                 new_until = datetime.utcnow() + timedelta(days=days)
-                if subscription_type == "regular":
-                    await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
-                else:  # vip
-                    await db.update_subscription_vip(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+                await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
                 text = (
                     "✅ <b>Подписка активирована!</b>\n\n"
                     f"Срок: {days} дней\n"
                     f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
+                )
+            else:  # vip
+                # Только VIP подписка через 3X-UI
+                email_vip, _ = await xui.xui_get_or_create_client(tg_id, days, extend_if_exists=True)
+
+                if not email_vip:
+                    await db.add_balance(tg_id, amount)  # Возвращаем деньги
+                    await callback.answer("❌ Ошибка активации VIP подписки", show_alert=True)
+                    return
+
+                # Получаем ссылку подписки VIP
+                sub_url_vip = await xui.xui_get_subscription_url(tg_id, email_vip)
+
+                # Обновляем VIP подписку в БД
+                new_until = datetime.utcnow() + timedelta(days=days)
+                await db.update_subscription_vip(tg_id, email_vip, email_vip, new_until, DEFAULT_SQUAD_UUID)
+
+                text = (
+                    "✅ <b>Подписка активирована!</b>\n\n"
+                    f"Срок: {days} дней\n"
+                    f"<b>🔒 Обход глушилок (3X-UI):</b>\n<code>{sub_url_vip}</code>"
                 )
 
             # Обрабатываем реферальную программу (25% от суммы)
@@ -323,14 +342,16 @@ async def process_my_subscription(callback: CallbackQuery):
                     logging.error(f"Error fetching regular subscription info: {e}")
                     sub_info_regular = "Ошибка загрузки"
 
-            # VIP подписка
+            # VIP подписка (из 3X-UI)
             if user['remnawave_uuid_vip']:
                 try:
-                    user_info = await remnawave_get_user_info(session, user['remnawave_uuid_vip'])
-                    if user_info and "expireAt" in user_info:
-                        expire_at = user_info["expireAt"]
-                        exp_date = datetime.fromisoformat(expire_at.replace('Z', '+00:00'))
-                        remaining = exp_date - datetime.now(timezone.utc)
+                    # remnawave_uuid_vip содержит email_vip для 3X-UI
+                    sub_url = await xui.xui_get_subscription_url(tg_id, user['remnawave_uuid_vip'])
+
+                    # Вычисляем оставшееся время
+                    if user['subscription_until_vip']:
+                        exp_date = user['subscription_until_vip']
+                        remaining = exp_date - datetime.utcnow()
 
                         if remaining.total_seconds() <= 0:
                             remaining_str = "истекла"
@@ -340,10 +361,11 @@ async def process_my_subscription(callback: CallbackQuery):
                             minutes = (remaining.seconds % 3600) // 60
                             remaining_str = f"{days}д {hours}ч {minutes}м"
 
-                        sub_url = await remnawave_get_subscription_url(session, user['remnawave_uuid_vip'])
                         sub_info_vip = f"Осталось: <b>{remaining_str}</b>\n<code>{sub_url or 'Ошибка'}</code>"
+                    else:
+                        sub_info_vip = f"<code>{sub_url or 'Ошибка'}</code>"
                 except Exception as e:
-                    logging.error(f"Error fetching VIP subscription info: {e}")
+                    logging.error(f"Error fetching VIP subscription info from 3X-UI: {e}")
                     sub_info_vip = "Ошибка загрузки"
 
     except Exception as e:

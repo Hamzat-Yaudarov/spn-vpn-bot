@@ -12,6 +12,7 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
+from services import xui
 from handlers.start import show_main_menu
 
 
@@ -72,31 +73,30 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         days = promo[0]
 
-        # Создаём или получаем пользователя в Remnawave (обе подписки)
+        # Промокоды всегда дают обе подписки
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Промокоды всегда дают обе подписки
+            # Создаём/продлеваем обычную подписку через Remnawave
             uuid_regular, username_regular = await remnawave_get_or_create_user(
                 session, tg_id, days=days, extend_if_exists=True, sub_type="regular"
             )
-            uuid_vip, username_vip = await remnawave_get_or_create_user(
-                session, tg_id, days=days, extend_if_exists=True, sub_type="vip"
-            )
 
-            if not uuid_regular or not uuid_vip:
+            # Создаём/продлеваем VIP подписку через 3X-UI
+            email_vip, _ = await xui.xui_get_or_create_client(tg_id, days=days, extend_if_exists=True)
+
+            if not uuid_regular or not email_vip:
                 await message.answer("❌ Ошибка при применении промокода")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-            # Добавляем в сквады
+            # Добавляем обычную подписку в сквад
             await remnawave_add_to_squad(session, uuid_regular)
-            await remnawave_add_to_squad(session, uuid_vip)
 
             # Получаем ссылки подписок
             sub_url_regular = await remnawave_get_subscription_url(session, uuid_regular)
-            sub_url_vip = await remnawave_get_subscription_url(session, uuid_vip)
+            sub_url_vip = await xui.xui_get_subscription_url(tg_id, email_vip)
 
             if not sub_url_regular or not sub_url_vip:
                 await message.answer("❌ Ошибка при получении ссылок подписок")
@@ -109,7 +109,7 @@ async def process_promo_input(message: Message, state: FSMContext):
         await db.update_both_subscriptions(
             tg_id,
             uuid_regular, username_regular, new_until, DEFAULT_SQUAD_UUID,
-            uuid_vip, username_vip, new_until, DEFAULT_SQUAD_UUID
+            email_vip, email_vip, new_until, DEFAULT_SQUAD_UUID
         )
 
         # Отправляем успешное сообщение
@@ -117,7 +117,7 @@ async def process_promo_input(message: Message, state: FSMContext):
             f"✅ <b>Промокод активирован!</b>\n\n"
             f"Добавлено {days} дней к обеим подпискам\n\n"
             f"<b>🌐 Обычная подписка:</b>\n<code>{sub_url_regular}</code>\n\n"
-            f"<b>🔒 Обход глушилок:</b>\n<code>{sub_url_vip}</code>"
+            f"<b>🔒 Обход глушилок (3X-UI):</b>\n<code>{sub_url_vip}</code>"
         )
 
         logging.info(f"Promo code {code} applied by user {tg_id}")

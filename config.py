@@ -28,6 +28,18 @@ REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")
 
 # ────────────────────────────────────────────────
+#              3X-UI PANEL CONFIG (для VIP подписок)
+# ────────────────────────────────────────────────
+
+XUI_PANEL_URL = os.getenv("XUI_PANEL_URL", "")
+XUI_PANEL_PATH = os.getenv("XUI_PANEL_PATH", "")
+XUI_USERNAME = os.getenv("XUI_USERNAME", "")
+XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
+XUI_SUB_PORT = int(os.getenv("XUI_SUB_PORT", "2096"))
+XUI_SUB_EXTERNAL_HOST = os.getenv("XUI_SUB_EXTERNAL_HOST", "")
+XUI_INBOUND_ID = int(os.getenv("XUI_INBOUND_ID", "1"))
+
+# ────────────────────────────────────────────────
 #            CRYPTOBOT PAYMENT CONFIG
 # ────────────────────────────────────────────────
 

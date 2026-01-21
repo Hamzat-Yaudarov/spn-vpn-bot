@@ -642,6 +642,46 @@ async def get_pending_balance_payments():
     )
 
 
+async def get_active_topup_payment(tg_id: int, amount: int, provider: str):
+    """
+    Получить активный платёж на пополнение баланса для конкретной суммы и провайдера
+
+    Args:
+        tg_id: ID пользователя
+        amount: Сумма в рублях
+        provider: Провайдер (cryptobot, yookassa)
+
+    Returns:
+        invoice_id или None если нет активного платежа
+    """
+    from datetime import datetime, timedelta, timezone
+
+    result = await db_execute(
+        """
+        SELECT id, invoice_id, created_at FROM balance_payments
+        WHERE tg_id = $1 AND amount = $2 AND status = 'pending' AND provider = $3
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (tg_id, amount, provider),
+        fetch_one=True
+    )
+
+    if not result:
+        return None
+
+    # Проверяем, не истёк ли платёж
+    created_at = result['created_at']
+    age = datetime.utcnow() - created_at
+
+    if age.total_seconds() > PAYMENT_EXPIRY_TIME:
+        # Платёж истёк, удаляем его
+        await db_execute("DELETE FROM balance_payments WHERE id = $1", (result['id'],))
+        return None
+
+    return result['invoice_id']
+
+
 # ────────────────────────────────────────────────
 #               REFERRAL MANAGEMENT
 # ────────────────────────────────────────────────
