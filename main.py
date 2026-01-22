@@ -10,7 +10,7 @@ from config import BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
 
 # Импортируем все роутеры обработчиков
-from handlers import start, callbacks, subscription, gift, referral, promo, admin, balance
+from handlers import start, callbacks, subscription, gift, referral, promo, admin
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 import webhooks
@@ -49,7 +49,6 @@ def setup_handlers():
     """Регистрируем все роутеры обработчиков"""
     dp.include_router(start.router)
     dp.include_router(callbacks.router)
-    dp.include_router(balance.router)
     dp.include_router(subscription.router)
     dp.include_router(gift.router)
     dp.include_router(referral.router)

@@ -12,7 +12,6 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
-from services import xui
 from handlers.start import show_main_menu
 
 
@@ -73,7 +72,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         days = promo[0]
 
-        # Создаём или получаем пользователя в Remnawave (обычная подписка)
+        # Создаём или получаем пользователя в Remnawave
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
@@ -103,37 +102,12 @@ async def process_promo_input(message: Message, state: FSMContext):
         new_until = datetime.utcnow() + timedelta(days=days)
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        # Выдаём VIP подписку (промокод даёт обе подписки)
-        vip_info = await db.get_vip_subscription_info(tg_id)
-        vip_sub_url = None
-
-        if vip_info and vip_info['xui_uuid']:
-            # Продляем существующего клиента
-            await xui.extend_vip_client(
-                tg_id,
-                vip_info['xui_email'],
-                vip_info['xui_uuid'],
-                vip_info['xui_subscription_id'],
-                days
-            )
-        else:
-            # Создаём нового VIP клиента
-            result = await xui.create_or_extend_vip_client(tg_id, days, is_new=True)
-            if result:
-                email, client_uuid, subscription_id, vip_sub_url = result
-                vip_until = datetime.utcnow() + timedelta(days=days)
-                await db.update_vip_subscription(tg_id, email, client_uuid, subscription_id, vip_until)
-
         # Отправляем успешное сообщение
-        text = (
+        await message.answer(
             f"✅ <b>Промокод активирован!</b>\n\n"
-            f"Добавлено {days} дней обеим подпискам:\n"
-            f"• 📱 Обычная подписка\n"
-            f"• 🛡️ Обход глушилок (VIP)\n\n"
-            f"<b>Ссылка обычной подписки:</b>\n<code>{sub_url}</code>\n\n"
-            "VIP ссылка доступна в разделе «Моя подписка»"
+            f"Добавлено {days} дней подписки\n\n"
+            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
         )
-        await message.answer(text)
 
         logging.info(f"Promo code {code} applied by user {tg_id}")
 

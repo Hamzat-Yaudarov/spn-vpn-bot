@@ -41,7 +41,6 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
-        [InlineKeyboardButton(text="💰 Мой баланс", callback_data="balance")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="🎁 Получить подарок", callback_data="get_gift")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],

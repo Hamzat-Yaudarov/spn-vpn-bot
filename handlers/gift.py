@@ -10,7 +10,6 @@ from services.remnawave import (
     remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
-from services import xui
 
 
 router = Router()
@@ -81,11 +80,10 @@ async def process_get_gift(callback: CallbackQuery):
             await callback.answer("Ты уже получал подарок", show_alert=True)
             return
 
-        # Выдаём подарок (3 дня обеих подписок)
+        # Выдаём подарок (3 дня подписки)
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Выдаём обычную подписку
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,
@@ -107,39 +105,16 @@ async def process_get_gift(callback: CallbackQuery):
         new_until = datetime.utcnow() + timedelta(days=3)
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        # Выдаём VIP подписку
-        vip_info = await db.get_vip_subscription_info(tg_id)
-
-        if vip_info and vip_info['xui_uuid']:
-            # Продляем существующего клиента
-            await xui.extend_vip_client(
-                tg_id,
-                vip_info['xui_email'],
-                vip_info['xui_uuid'],
-                vip_info['xui_subscription_id'],
-                3
-            )
-        else:
-            # Создаём нового VIP клиента
-            result = await xui.create_or_extend_vip_client(tg_id, 3, is_new=True)
-            if result:
-                email, client_uuid, subscription_id, vip_sub_url = result
-                vip_until = datetime.utcnow() + timedelta(days=3)
-                await db.update_vip_subscription(tg_id, email, client_uuid, subscription_id, vip_until)
-
         # Отправляем сообщение пользователю
         text = (
             "🎁 <b>Подарок получен!</b>\n\n"
             "Спасибо за подписку на канал!\n"
-            "Тебе выданы обе подписки на 3 дня:\n"
-            "• 📱 Обычная подписка\n"
-            "• 🛡️ Обход глушилок (VIP)\n\n"
-            f"<b>Ссылка обычной подписки:</b>\n<code>{sub_url}</code>\n\n"
-            "VIP ссылка доступна в разделе «Моя подписка»"
+            "Тебе выдана подписка на 3 дня.\n\n"
+            f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
         )
 
         await callback.message.edit_text(text)
-        logging.info(f"Gift (both subscriptions) given to user {tg_id}")
+        logging.info(f"Gift given to user {tg_id}")
 
     except Exception as e:
         logging.error(f"Get gift error: {e}")

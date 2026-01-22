@@ -57,47 +57,15 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # ────────────────────────────────────────────────
-#            3X-UI VIP CONFIGURATION
-# ────────────────────────────────────────────────
-
-XUI_PANEL_URL = os.getenv("XUI_PANEL_URL", "")
-XUI_PANEL_PATH = os.getenv("XUI_PANEL_PATH", "")
-XUI_USERNAME = os.getenv("XUI_USERNAME", "")
-XUI_PASSWORD = os.getenv("XUI_PASSWORD", "")
-SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
-SUB_EXTERNAL_HOST = os.getenv("SUB_EXTERNAL_HOST", "")
-INBOUND_ID = int(os.getenv("INBOUND_ID", "1"))
-
-# ────────────────────────────────────────────────
 #                TARIFFS CONFIG
 # ────────────────────────────────────────────────
 
-# Обычная подписка
 TARIFFS = {
     "1m": {"days": 30, "price": 100},
     "3m": {"days": 90, "price": 249},
     "6m": {"days": 180, "price": 449},
     "12m": {"days": 365, "price": 990}
 }
-
-# VIP подписка (Обход глушилок через 3X-UI)
-VIP_TARIFFS = {
-    "1m": {"days": 30, "price": 150},
-    "3m": {"days": 90, "price": 349},
-    "6m": {"days": 180, "price": 599},
-    "12m": {"days": 365, "price": 1090}
-}
-
-# Комбо подписка (Обычная + VIP)
-COMBO_TARIFFS = {
-    "1m": {"days": 30, "price": 200},
-    "3m": {"days": 90, "price": 450},
-    "6m": {"days": 180, "price": 750},
-    "12m": {"days": 365, "price": 1400}
-}
-
-# Реферальная комиссия (процент с каждой покупки)
-REFERRAL_COMMISSION_PERCENT = 25
 
 # ────────────────────────────────────────────────
 #             TASK CONFIGURATION
