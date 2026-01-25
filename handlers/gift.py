@@ -68,19 +68,21 @@ async def process_get_gift(callback: CallbackQuery):
 
         # Проверяем статус подписки
         if member.status not in ("member", "administrator", "creator"):
+            # Отправляем новое сообщение с просьбой подписаться
+            text = (
+                "❌ <b>Ты не подписан на новостной канал</b>\n\n"
+                "Чтобы получить подарок, необходимо подписаться на канал новостей.\n\n"
+                f"📢 <b>Канал:</b> @{NEWS_CHANNEL_USERNAME}\n\n"
+                "После подписки попробуй получить подарок ещё раз!"
+            )
+
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
+                [InlineKeyboardButton(text="📢 Перейти на канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
             ])
 
-            text = (
-                f"❌ <b>Подписка обязательна</b>\n\n"
-                f"Чтобы получить подарок, тебе нужно подписаться на новостной канал:\n"
-                f"<b>@{NEWS_CHANNEL_USERNAME}</b>\n\n"
-                "После подписки вернись и нажми на кнопку ещё раз."
-            )
-
             await callback.message.edit_text(text, reply_markup=kb)
+            logging.info(f"User {tg_id} is not subscribed to channel, prompted to subscribe")
             return
 
         # Атомарно проверяем и отмечаем подарок
