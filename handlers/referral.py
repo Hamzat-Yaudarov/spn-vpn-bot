@@ -23,6 +23,7 @@ async def process_referral(callback: CallbackQuery):
     active_count = stats[1] if stats else 0
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="copy_referral_link")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
@@ -41,3 +42,22 @@ async def process_referral(callback: CallbackQuery):
     )
 
     await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "copy_referral_link")
+async def copy_referral_link(callback: CallbackQuery):
+    """Отправить реферальную ссылку для копирования"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} copying referral link")
+
+    # Получаем реферальную ссылку
+    bot_username = (await callback.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{tg_id}"
+
+    # Отправляем сообщение с ссылкой в коде для удобного копирования
+    await callback.answer("✅ Ссылка скопирована!", show_alert=False)
+    await callback.message.answer(
+        "<b>Твоя реферальная ссылка:</b>\n\n"
+        f"<code>{referral_link}</code>\n\n"
+        "<i>Нажми на ссылку выше, она выделится — скопируй её!</i>"
+    )
