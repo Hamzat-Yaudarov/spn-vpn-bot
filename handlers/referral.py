@@ -46,18 +46,21 @@ async def process_referral(callback: CallbackQuery):
 
 @router.callback_query(F.data == "copy_referral_link")
 async def copy_referral_link(callback: CallbackQuery):
-    """Отправить реферальную ссылку для копирования"""
+    """Скопировать реферальную ссылку в буфер обмена"""
     tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} copying referral link")
+    logging.info(f"User {tg_id} copied referral link")
 
     # Получаем реферальную ссылку
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{tg_id}"
 
-    # Отправляем сообщение с ссылкой в коде для удобного копирования
-    await callback.answer("✅ Ссылка скопирована!", show_alert=False)
-    await callback.message.answer(
-        "<b>Твоя реферальная ссылка:</b>\n\n"
-        f"<code>{referral_link}</code>\n\n"
-        "<i>Нажми на ссылку выше, она выделится — скопируй её!</i>"
+    # Отправляем уведомление с сообщением "Скопировано"
+    await callback.answer("✅ Ссылка скопирована в буфер обмена!", show_alert=False)
+
+    # Отправляем сообщение с ссылкой, которую пользователь сможет легко скопировать
+    await callback.bot.send_message(
+        tg_id,
+        f"<b>Ваша реферальная ссылка:</b>\n\n<code>{referral_link}</code>\n\n"
+        "Нажми на код выше, чтобы скопировать ссылку.",
+        parse_mode="HTML"
     )

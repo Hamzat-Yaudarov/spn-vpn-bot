@@ -2,7 +2,7 @@ import logging
 import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery
 from config import NEWS_CHANNEL_USERNAME, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
@@ -70,17 +70,17 @@ async def process_get_gift(callback: CallbackQuery):
         if member.status not in ("member", "administrator", "creator"):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
-                [InlineKeyboardButton(text="✅ Я подписался", callback_data="get_gift")]
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
             ])
 
             text = (
-                "📢 <b>Нужна подписка на канал</b>\n\n"
-                f"Чтобы получить подарок, подпишись на новостной канал <b>@{NEWS_CHANNEL_USERNAME}</b>\n\n"
-                "После подписки нажми кнопку ниже 👇"
+                f"❌ <b>Подписка обязательна</b>\n\n"
+                f"Чтобы получить подарок, тебе нужно подписаться на новостной канал:\n"
+                f"<b>@{NEWS_CHANNEL_USERNAME}</b>\n\n"
+                "После подписки вернись и нажми на кнопку ещё раз."
             )
 
             await callback.message.edit_text(text, reply_markup=kb)
-            logging.info(f"User {tg_id} not subscribed to channel, sent subscription request")
             return
 
         # Атомарно проверяем и отмечаем подарок
