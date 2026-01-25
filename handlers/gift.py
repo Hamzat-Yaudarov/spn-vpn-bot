@@ -124,7 +124,12 @@ async def process_get_gift(callback: CallbackQuery):
             f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
         )
 
-        await callback.message.edit_text(text)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=kb)
         logging.info(f"Gift given to user {tg_id}")
 
     except Exception as e:
