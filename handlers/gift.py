@@ -2,7 +2,7 @@ import logging
 import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import NEWS_CHANNEL_USERNAME, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
