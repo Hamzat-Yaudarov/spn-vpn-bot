@@ -78,7 +78,17 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_media(media, reply_markup=kb)
     except Exception as e:
         logging.error(f"Error editing main menu photo: {e}")
-        await callback.message.edit_text(text, reply_markup=kb)
+        try:
+            await callback.message.delete()
+            await callback.bot.send_photo(
+                callback.message.chat.id,
+                FSInputFile("pictures/Main_menu.JPG"),
+                caption=text,
+                reply_markup=kb
+            )
+        except Exception as e2:
+            logging.error(f"Error deleting and resending photo: {e2}")
+            await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -117,4 +127,14 @@ async def process_how_to_connect(callback: CallbackQuery):
         await callback.message.edit_media(media, reply_markup=kb)
     except Exception as e:
         logging.error(f"Error editing connection photo: {e}")
-        await callback.message.edit_text(text, reply_markup=kb)
+        try:
+            await callback.message.delete()
+            await callback.bot.send_photo(
+                callback.message.chat.id,
+                FSInputFile("pictures/Connection.JPG"),
+                caption=text,
+                reply_markup=kb
+            )
+        except Exception as e2:
+            logging.error(f"Error deleting and resending photo: {e2}")
+            await callback.message.edit_text(text, reply_markup=kb)

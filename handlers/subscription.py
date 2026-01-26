@@ -37,7 +37,17 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_media(media, reply_markup=kb)
     except Exception as e:
         logging.error(f"Error editing subscription selection photo: {e}")
-        await callback.message.edit_text(text, reply_markup=kb)
+        try:
+            await callback.message.delete()
+            await callback.bot.send_photo(
+                callback.message.chat.id,
+                FSInputFile("pictures/Add_a_subscription.JPG"),
+                caption=text,
+                reply_markup=kb
+            )
+        except Exception as e2:
+            logging.error(f"Error deleting and resending photo: {e2}")
+            await callback.message.edit_text(text, reply_markup=kb)
 
     await state.set_state(UserStates.choosing_tariff)
 
@@ -401,4 +411,14 @@ async def process_my_subscription(callback: CallbackQuery):
         await callback.message.edit_media(media, reply_markup=kb)
     except Exception as e:
         logging.error(f"Error editing subscription info photo: {e}")
-        await callback.message.edit_text(text, reply_markup=kb)
+        try:
+            await callback.message.delete()
+            await callback.bot.send_photo(
+                callback.message.chat.id,
+                FSInputFile("pictures/My_subscription.jpg"),
+                caption=text,
+                reply_markup=kb
+            )
+        except Exception as e2:
+            logging.error(f"Error deleting and resending photo: {e2}")
+            await callback.message.edit_text(text, reply_markup=kb)
