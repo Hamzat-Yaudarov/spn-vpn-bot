@@ -24,7 +24,8 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} initiated promo code entry")
 
-    await callback.message.edit_text("Введи промокод:")
+    await callback.message.delete()
+    await callback.bot.send_message(callback.message.chat.id, "Введи промокод:")
     await state.set_state(UserStates.waiting_for_promo)
 
 

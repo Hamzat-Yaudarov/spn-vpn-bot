@@ -81,7 +81,8 @@ async def process_get_gift(callback: CallbackQuery):
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
             ])
 
-            await callback.message.edit_text(text, reply_markup=kb)
+            await callback.message.delete()
+            await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
             logging.info(f"User {tg_id} is not subscribed to channel, prompted to subscribe")
             return
 
@@ -129,7 +130,8 @@ async def process_get_gift(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
         ])
 
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.delete()
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
         logging.info(f"Gift given to user {tg_id}")
 
     except Exception as e:
