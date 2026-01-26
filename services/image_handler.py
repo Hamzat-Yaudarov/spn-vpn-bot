@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InputFile
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InputMediaPhoto, FSInputFile
 from aiogram.enums import ParseMode
 
 
@@ -52,7 +52,7 @@ async def edit_text_with_photo(
 ):
     """
     Отредактировать сообщение текстом и изображением (используется edit_media)
-    
+
     Args:
         callback: CallbackQuery объект
         text: Текст сообщения
@@ -61,27 +61,42 @@ async def edit_text_with_photo(
         parse_mode: Режим парсинга текста
     """
     image_path = get_image_path(message_key)
-    
+
     if image_path:
         try:
-            from aiogram.types import InputMediaPhoto
-            
-            # Отредактировать медиа (фото + текст + кнопки)
-            await callback.message.edit_media(
-                media=InputMediaPhoto(
-                    media=InputFile(image_path),
+            # Проверяем, содержит ли текущее сообщение медиа
+            if callback.message.photo:
+                # Сообщение уже содержит фото - редактируем медиа
+                await callback.message.edit_media(
+                    media=InputMediaPhoto(
+                        media=FSInputFile(image_path),
+                        caption=text,
+                        parse_mode=parse_mode
+                    ),
+                    reply_markup=reply_markup
+                )
+            else:
+                # Сообщение содержит только текст - удаляем и отправляем новое с фото
+                await callback.message.delete()
+                await callback.message.answer_photo(
+                    photo=FSInputFile(image_path),
                     caption=text,
+                    reply_markup=reply_markup,
                     parse_mode=parse_mode
-                ),
-                reply_markup=reply_markup
-            )
+                )
         except Exception as e:
             logging.error(f"Error editing media with photo: {e}")
             # Если ошибка, просто редактируем текст без фото
-            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            try:
+                await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            except Exception as e2:
+                logging.error(f"Error editing text fallback: {e2}")
     else:
         # Изображение не найдено, редактируем только текст
-        await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception as e:
+            logging.error(f"Error editing text: {e}")
 
 
 async def send_text_with_photo(
@@ -93,7 +108,7 @@ async def send_text_with_photo(
 ):
     """
     Отправить новое сообщение с текстом и изображением
-    
+
     Args:
         message: Message объект
         text: Текст сообщения
@@ -102,12 +117,12 @@ async def send_text_with_photo(
         parse_mode: Режим парсинга текста
     """
     image_path = get_image_path(message_key)
-    
+
     if image_path:
         try:
             # Отправить фото с подписью
             await message.answer_photo(
-                photo=InputFile(image_path),
+                photo=FSInputFile(image_path),
                 caption=text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode
@@ -130,7 +145,7 @@ async def send_text_with_photo_callback(
 ):
     """
     Отправить новое сообщение через callback с текстом и изображением
-    
+
     Args:
         callback: CallbackQuery объект
         text: Текст сообщения
@@ -139,12 +154,12 @@ async def send_text_with_photo_callback(
         parse_mode: Режим парсинга текста
     """
     image_path = get_image_path(message_key)
-    
+
     if image_path:
         try:
             # Отправить фото с подписью
             await callback.message.answer_photo(
-                photo=InputFile(image_path),
+                photo=FSInputFile(image_path),
                 caption=text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode

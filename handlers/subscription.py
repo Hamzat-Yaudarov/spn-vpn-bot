@@ -13,6 +13,8 @@ from services.yookassa import create_yookassa_payment, get_payment_status, proce
 from services.image_handler import edit_text_with_photo
 
 
+logger = logging.getLogger(__name__)
+
 router = Router()
 
 

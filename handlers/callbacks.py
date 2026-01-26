@@ -9,6 +9,9 @@ from handlers.start import show_main_menu
 from services.image_handler import edit_text_with_photo
 
 
+logger = logging.getLogger(__name__)
+
+
 router = Router()
 
 
