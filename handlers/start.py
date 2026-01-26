@@ -84,9 +84,5 @@ async def show_main_menu(message: Message):
         "</blockquote>"
     )
 
-    try:
-        photo = FSInputFile("pictures/Main_menu.JPG")
-        await message.answer_photo(photo, caption=text, reply_markup=kb)
-    except Exception as e:
-        logging.error(f"Error sending main menu photo: {e}")
-        await message.answer(text, reply_markup=kb)
+    photo = FSInputFile("pictures/Main_menu.JPG")
+    await message.answer_photo(photo=photo, caption=text, reply_markup=kb)

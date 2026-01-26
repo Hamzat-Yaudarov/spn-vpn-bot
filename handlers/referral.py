@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
 import database as db
 
 
@@ -41,20 +41,6 @@ async def process_referral(callback: CallbackQuery):
         "ℹ️ <i>Чем больше активных пользователей — тем дольше ваш доступ.</i>"
     )
 
-    try:
-        photo = FSInputFile("pictures/Referral_program.jpg")
-        media = InputMediaPhoto(media=photo, caption=text)
-        await callback.message.edit_media(media, reply_markup=kb)
-    except Exception as e:
-        logging.error(f"Error editing referral program photo: {e}")
-        try:
-            await callback.message.delete()
-            await callback.bot.send_photo(
-                callback.message.chat.id,
-                FSInputFile("pictures/Referral_program.jpg"),
-                caption=text,
-                reply_markup=kb
-            )
-        except Exception as e2:
-            logging.error(f"Error deleting and resending photo: {e2}")
-            await callback.message.edit_text(text, reply_markup=kb)
+    photo = FSInputFile("pictures/Referral_program.jpg")
+    media = InputMediaPhoto(media=photo, caption=text)
+    await callback.message.edit_media(media=media, reply_markup=kb)

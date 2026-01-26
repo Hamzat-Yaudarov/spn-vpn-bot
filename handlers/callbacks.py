@@ -1,7 +1,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
 from config import SUPPORT_URL
 from states import UserStates
 import database as db
@@ -72,23 +72,9 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         "</blockquote>"
     )
 
-    try:
-        photo = FSInputFile("pictures/Main_menu.JPG")
-        media = InputMediaPhoto(media=photo, caption=text)
-        await callback.message.edit_media(media, reply_markup=kb)
-    except Exception as e:
-        logging.error(f"Error editing main menu photo: {e}")
-        try:
-            await callback.message.delete()
-            await callback.bot.send_photo(
-                callback.message.chat.id,
-                FSInputFile("pictures/Main_menu.JPG"),
-                caption=text,
-                reply_markup=kb
-            )
-        except Exception as e2:
-            logging.error(f"Error deleting and resending photo: {e2}")
-            await callback.message.edit_text(text, reply_markup=kb)
+    photo = FSInputFile("pictures/Main_menu.JPG")
+    media = InputMediaPhoto(media=photo, caption=text)
+    await callback.message.edit_media(media=media, reply_markup=kb)
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -121,20 +107,6 @@ async def process_how_to_connect(callback: CallbackQuery):
         "ℹ️ <i>Никаких ручных настроек и сложных параметров — всё работает автоматически.</i>"
     )
 
-    try:
-        photo = FSInputFile("pictures/Connection.JPG")
-        media = InputMediaPhoto(media=photo, caption=text)
-        await callback.message.edit_media(media, reply_markup=kb)
-    except Exception as e:
-        logging.error(f"Error editing connection photo: {e}")
-        try:
-            await callback.message.delete()
-            await callback.bot.send_photo(
-                callback.message.chat.id,
-                FSInputFile("pictures/Connection.JPG"),
-                caption=text,
-                reply_markup=kb
-            )
-        except Exception as e2:
-            logging.error(f"Error deleting and resending photo: {e2}")
-            await callback.message.edit_text(text, reply_markup=kb)
+    photo = FSInputFile("pictures/Connection.JPG")
+    media = InputMediaPhoto(media=photo, caption=text)
+    await callback.message.edit_media(media=media, reply_markup=kb)
