@@ -2,10 +2,11 @@ import logging
 from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import TELEGRAPH_AGREEMENT_URL, SUPPORT_URL
 from states import UserStates
 import database as db
+from services.image_handler import send_text_with_photo
 
 
 router = Router()
@@ -84,5 +85,4 @@ async def show_main_menu(message: Message):
         "</blockquote>"
     )
 
-    photo = FSInputFile("pictures/Main_menu.JPG")
-    await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
+    await send_text_with_photo(message, text, kb, "Главное меню")

@@ -1,7 +1,11 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 import database as db
+from services.image_handler import edit_text_with_photo
+
+
+logger = logging.getLogger(__name__)
 
 
 router = Router()
@@ -41,6 +45,4 @@ async def process_referral(callback: CallbackQuery):
         "ℹ️ <i>Чем больше активных пользователей — тем дольше ваш доступ.</i>"
     )
 
-    photo = FSInputFile("pictures/Referral_program.jpg")
-    await callback.message.delete()
-    message = await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Реферальная программа")

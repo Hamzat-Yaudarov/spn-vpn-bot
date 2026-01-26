@@ -13,6 +13,7 @@ from services.remnawave import (
     remnawave_get_subscription_url
 )
 from handlers.start import show_main_menu
+from services.image_handler import send_text_with_photo
 
 
 router = Router()
@@ -24,8 +25,7 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} initiated promo code entry")
 
-    await callback.message.delete()
-    await callback.bot.send_message(callback.message.chat.id, "Введи промокод:")
+    await callback.message.edit_text("Введи промокод:")
     await state.set_state(UserStates.waiting_for_promo)
 
 
@@ -104,11 +104,17 @@ async def process_promo_input(message: Message, state: FSMContext):
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         # Отправляем успешное сообщение
-        await message.answer(
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        ])
+
+        text = (
             f"✅ <b>Промокод активирован!</b>\n\n"
             f"Добавлено {days} дней подписки\n\n"
             f"<b>Ссылка подписки:</b>\n<code>{sub_url}</code>"
         )
+
+        await send_text_with_photo(message, text, kb, "Add_a_subscription")
 
         logging.info(f"Promo code {code} applied by user {tg_id}")
 

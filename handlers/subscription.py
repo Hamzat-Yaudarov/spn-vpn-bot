@@ -3,13 +3,14 @@ import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import TARIFFS, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
+from services.image_handler import edit_text_with_photo
 
 
 router = Router()
@@ -29,9 +30,8 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
-    photo = FSInputFile("pictures/Add_a_subscription.JPG")
-    await callback.message.delete()
-    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption="Выбери срок подписки:", reply_markup=kb)
+    text = "Выбери срок подписки:"
+    await edit_text_with_photo(callback, text, kb, "Выбери срок подписки")
     await state.set_state(UserStates.choosing_tariff)
 
 
@@ -54,7 +54,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
 
-    await callback.message.edit_caption(caption=text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Выбери способ оплаты")
     await state.set_state(UserStates.choosing_payment)
 
 
@@ -67,7 +67,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.edit_caption(caption="Ошибка: тариф не выбран")
+        await callback.message.edit_text("Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -101,8 +101,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
                     "Если не активировалось — нажми «Проверить оплату»"
                 )
 
-                await callback.message.delete()
-                await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
+                await edit_text_with_photo(callback, text, kb, "Оплати")
                 await state.clear()
                 logging.info(f"Returned existing CryptoBot invoice {existing_invoice_id} for user {tg_id}")
                 return
@@ -111,7 +110,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
 
     if not invoice:
-        await callback.message.edit_caption(caption="Ошибка создания счёта в CryptoBot. Попробуй позже.")
+        await callback.message.edit_text("Ошибка создания счёта в CryptoBot. Попробуй позже.")
         await state.clear()
         return
 
@@ -141,8 +140,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         "Если не активировалось — нажми «Проверить оплату»"
     )
 
-    await callback.message.delete()
-    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Оплати")
     await state.clear()
 
 
@@ -155,7 +153,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.edit_caption(caption="Ошибка: тариф не выбран")
+        await callback.message.edit_text("Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -190,8 +188,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
                     "Если не активировалось — нажми «Проверить оплату»"
                 )
 
-                await callback.message.delete()
-                await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
+                await edit_text_with_photo(callback, text, kb, "Оплати")
                 await state.clear()
                 logging.info(f"Returned existing Yookassa payment {existing_payment_id} for user {tg_id}")
                 return
@@ -200,7 +197,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
 
     if not payment:
-        await callback.message.edit_caption(caption="Ошибка создания платежа в Yookassa. Попробуй позже.")
+        await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
         await state.clear()
         return
 
@@ -208,7 +205,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
 
     if not confirmation_url:
-        await callback.message.edit_caption(caption="Ошибка: не получена ссылка для оплаты")
+        await callback.message.edit_text("Ошибка: не получена ссылка для оплаты")
         await state.clear()
         return
 
@@ -236,8 +233,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         "Если не активировалось — нажми «Проверить оплату»"
     )
 
-    await callback.message.delete()
-    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Оплати")
     await state.clear()
 
 
@@ -339,14 +335,8 @@ async def process_my_subscription(callback: CallbackQuery):
             [InlineKeyboardButton(text="Оформить подписку", callback_data="buy_subscription")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
         ])
-        photo = FSInputFile("pictures/My-not_subscription.jpg")
-        await callback.message.delete()
-        await callback.bot.send_photo(
-            callback.message.chat.id,
-            photo=photo,
-            caption="У тебя пока нет активной подписки.\nОформи её сейчас!",
-            reply_markup=kb
-        )
+        text = "У тебя пока нет активной подписки.\nОформи её сейчас!"
+        await edit_text_with_photo(callback, text, kb, "My-not_subscription")
         return
 
     # Получаем актуальную информацию о подписке из Remnawave
@@ -396,6 +386,4 @@ async def process_my_subscription(callback: CallbackQuery):
         "🟢 <i>Статус: активен</i>"
     )
 
-    photo = FSInputFile("pictures/My_subscription.jpg")
-    await callback.message.delete()
-    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Моя подписка")

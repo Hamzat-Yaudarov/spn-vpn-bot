@@ -1,11 +1,12 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import SUPPORT_URL
 from states import UserStates
 import database as db
 from handlers.start import show_main_menu
+from services.image_handler import edit_text_with_photo
 
 
 router = Router()
@@ -72,9 +73,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         "</blockquote>"
     )
 
-    photo = FSInputFile("pictures/Main_menu.JPG")
-    await callback.message.delete()
-    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Главное меню")
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -107,6 +106,4 @@ async def process_how_to_connect(callback: CallbackQuery):
         "ℹ️ <i>Никаких ручных настроек и сложных параметров — всё работает автоматически.</i>"
     )
 
-    photo = FSInputFile("pictures/Connection.JPG")
-    await callback.message.delete()
-    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
+    await edit_text_with_photo(callback, text, kb, "Как подключиться")
