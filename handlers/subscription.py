@@ -54,8 +54,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
 
-    await callback.message.delete()
-    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=kb)
+    await callback.message.edit_caption(caption=text, reply_markup=kb)
     await state.set_state(UserStates.choosing_payment)
 
 
@@ -68,8 +67,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.delete()
-        await callback.bot.send_message(callback.message.chat.id, "Ошибка: тариф не выбран")
+        await callback.message.edit_caption(caption="Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -113,8 +111,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
 
     if not invoice:
-        await callback.message.delete()
-        await callback.bot.send_message(callback.message.chat.id, "Ошибка создания счёта в CryptoBot. Попробуй позже.")
+        await callback.message.edit_caption(caption="Ошибка создания счёта в CryptoBot. Попробуй позже.")
         await state.clear()
         return
 
@@ -158,8 +155,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.delete()
-        await callback.bot.send_message(callback.message.chat.id, "Ошибка: тариф не выбран")
+        await callback.message.edit_caption(caption="Ошибка: тариф не выбран")
         await state.clear()
         return
 
@@ -204,8 +200,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
 
     if not payment:
-        await callback.message.delete()
-        await callback.bot.send_message(callback.message.chat.id, "Ошибка создания платежа в Yookassa. Попробуй позже.")
+        await callback.message.edit_caption(caption="Ошибка создания платежа в Yookassa. Попробуй позже.")
         await state.clear()
         return
 
@@ -213,8 +208,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
 
     if not confirmation_url:
-        await callback.message.delete()
-        await callback.bot.send_message(callback.message.chat.id, "Ошибка: не получена ссылка для оплаты")
+        await callback.message.edit_caption(caption="Ошибка: не получена ссылка для оплаты")
         await state.clear()
         return
 

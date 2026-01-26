@@ -43,4 +43,4 @@ async def process_referral(callback: CallbackQuery):
 
     photo = FSInputFile("pictures/Referral_program.jpg")
     await callback.message.delete()
-    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
+    message = await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
