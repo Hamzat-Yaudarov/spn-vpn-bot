@@ -3,7 +3,7 @@ import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from config import TARIFFS, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
@@ -29,10 +29,9 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
-    text = "Выбери срок подписки:"
     photo = FSInputFile("pictures/Add_a_subscription.JPG")
-    media = InputMediaPhoto(media=photo, caption=text)
-    await callback.message.edit_media(media=media, reply_markup=kb)
+    await callback.message.delete()
+    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption="Выбери срок подписки:", reply_markup=kb)
     await state.set_state(UserStates.choosing_tariff)
 
 
@@ -336,10 +335,14 @@ async def process_my_subscription(callback: CallbackQuery):
             [InlineKeyboardButton(text="Оформить подписку", callback_data="buy_subscription")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
         ])
-        text = "У тебя пока нет активной подписки.\nОформи её сейчас!"
         photo = FSInputFile("pictures/My-not_subscription.jpg")
-        media = InputMediaPhoto(media=photo, caption=text)
-        await callback.message.edit_media(media=media, reply_markup=kb)
+        await callback.message.delete()
+        await callback.bot.send_photo(
+            callback.message.chat.id,
+            photo=photo,
+            caption="У тебя пока нет активной подписки.\nОформи её сейчас!",
+            reply_markup=kb
+        )
         return
 
     # Получаем актуальную информацию о подписке из Remnawave
@@ -390,5 +393,5 @@ async def process_my_subscription(callback: CallbackQuery):
     )
 
     photo = FSInputFile("pictures/My_subscription.jpg")
-    media = InputMediaPhoto(media=photo, caption=text)
-    await callback.message.edit_media(media=media, reply_markup=kb)
+    await callback.message.delete()
+    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)

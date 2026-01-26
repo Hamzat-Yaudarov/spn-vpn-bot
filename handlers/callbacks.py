@@ -1,7 +1,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from config import SUPPORT_URL
 from states import UserStates
 import database as db
@@ -73,8 +73,8 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     )
 
     photo = FSInputFile("pictures/Main_menu.JPG")
-    media = InputMediaPhoto(media=photo, caption=text)
-    await callback.message.edit_media(media=media, reply_markup=kb)
+    await callback.message.delete()
+    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -108,5 +108,5 @@ async def process_how_to_connect(callback: CallbackQuery):
     )
 
     photo = FSInputFile("pictures/Connection.JPG")
-    media = InputMediaPhoto(media=photo, caption=text)
-    await callback.message.edit_media(media=media, reply_markup=kb)
+    await callback.message.delete()
+    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)

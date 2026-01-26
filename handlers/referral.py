@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 import database as db
 
 
@@ -42,5 +42,5 @@ async def process_referral(callback: CallbackQuery):
     )
 
     photo = FSInputFile("pictures/Referral_program.jpg")
-    media = InputMediaPhoto(media=photo, caption=text)
-    await callback.message.edit_media(media=media, reply_markup=kb)
+    await callback.message.delete()
+    await callback.bot.send_photo(callback.message.chat.id, photo=photo, caption=text, reply_markup=kb)
