@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, FSInputFile
 import database as db
 
 
@@ -41,4 +41,10 @@ async def process_referral(callback: CallbackQuery):
         "ℹ️ <i>Чем больше активных пользователей — тем дольше ваш доступ.</i>"
     )
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    try:
+        photo = FSInputFile("pictures/Referral_program.jpg")
+        media = InputMediaPhoto(media=photo, caption=text)
+        await callback.message.edit_media(media, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error editing referral program photo: {e}")
+        await callback.message.edit_text(text, reply_markup=kb)

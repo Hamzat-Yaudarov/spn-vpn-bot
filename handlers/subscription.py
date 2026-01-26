@@ -3,7 +3,7 @@ import aiohttp
 from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, FSInputFile
 from config import TARIFFS, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
@@ -29,7 +29,16 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
-    await callback.message.edit_text("Выбери срок подписки:", reply_markup=kb)
+    text = "Выбери срок подписки:"
+
+    try:
+        photo = FSInputFile("pictures/Add_a_subscription.JPG")
+        media = InputMediaPhoto(media=photo, caption=text)
+        await callback.message.edit_media(media, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error editing subscription selection photo: {e}")
+        await callback.message.edit_text(text, reply_markup=kb)
+
     await state.set_state(UserStates.choosing_tariff)
 
 
@@ -386,4 +395,10 @@ async def process_my_subscription(callback: CallbackQuery):
         "🟢 <i>Статус: активен</i>"
     )
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    try:
+        photo = FSInputFile("pictures/My_subscription.jpg")
+        media = InputMediaPhoto(media=photo, caption=text)
+        await callback.message.edit_media(media, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error editing subscription info photo: {e}")
+        await callback.message.edit_text(text, reply_markup=kb)

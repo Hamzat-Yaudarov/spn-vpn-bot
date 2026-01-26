@@ -1,7 +1,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, FSInputFile
 from config import SUPPORT_URL
 from states import UserStates
 import database as db
@@ -72,7 +72,13 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         "</blockquote>"
     )
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    try:
+        photo = FSInputFile("pictures/Main_menu.JPG")
+        media = InputMediaPhoto(media=photo, caption=text)
+        await callback.message.edit_media(media, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error editing main menu photo: {e}")
+        await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -105,4 +111,10 @@ async def process_how_to_connect(callback: CallbackQuery):
         "ℹ️ <i>Никаких ручных настроек и сложных параметров — всё работает автоматически.</i>"
     )
 
-    await callback.message.edit_text(text, reply_markup=kb)
+    try:
+        photo = FSInputFile("pictures/Connection.JPG")
+        media = InputMediaPhoto(media=photo, caption=text)
+        await callback.message.edit_media(media, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error editing connection photo: {e}")
+        await callback.message.edit_text(text, reply_markup=kb)

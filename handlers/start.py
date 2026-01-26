@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from config import TELEGRAPH_AGREEMENT_URL, SUPPORT_URL
 from states import UserStates
 import database as db
@@ -84,4 +84,9 @@ async def show_main_menu(message: Message):
         "</blockquote>"
     )
 
-    await message.answer(text, reply_markup=kb)
+    try:
+        photo = FSInputFile("pictures/Main_menu.JPG")
+        await message.answer_photo(photo, caption=text, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error sending main menu photo: {e}")
+        await message.answer(text, reply_markup=kb)
