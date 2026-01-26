@@ -69,7 +69,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: cryptobot (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.edit_text("Ошибка: тариф не выбран")
+        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
         await state.clear()
         return
 
@@ -112,7 +112,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
 
     if not invoice:
-        await callback.message.edit_text("Ошибка создания счёта в CryptoBot. Попробуй позже.")
+        await callback.answer("Ошибка создания счёта в CryptoBot. Попробуй позже.", show_alert=True)
         await state.clear()
         return
 
@@ -155,7 +155,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} selected payment method: yookassa (tariff: {tariff_code})")
 
     if not tariff_code:
-        await callback.message.edit_text("Ошибка: тариф не выбран")
+        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
         await state.clear()
         return
 
@@ -199,7 +199,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
 
     if not payment:
-        await callback.message.edit_text("Ошибка создания платежа в Yookassa. Попробуй позже.")
+        await callback.answer("Ошибка создания платежа в Yookassa. Попробуй позже.", show_alert=True)
         await state.clear()
         return
 
@@ -207,7 +207,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
 
     if not confirmation_url:
-        await callback.message.edit_text("Ошибка: не получена ссылка для оплаты")
+        await callback.answer("Ошибка: не получена ссылка для оплаты", show_alert=True)
         await state.clear()
         return
 
@@ -288,10 +288,11 @@ async def process_check_payment(callback: CallbackQuery):
                 success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
 
                 if success:
-                    await callback.message.edit_text(
+                    await callback.answer(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
+                        "Ссылка подписки отправлена в сообщении выше.",
+                        show_alert=True
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)
@@ -306,10 +307,11 @@ async def process_check_payment(callback: CallbackQuery):
                 success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
 
                 if success:
-                    await callback.message.edit_text(
+                    await callback.answer(
                         "✅ <b>Оплата подтверждена!</b>\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше."
+                        "Ссылка подписки отправлена в сообщении выше.",
+                        show_alert=True
                     )
                 else:
                     await callback.answer("Ошибка при активации подписки", show_alert=True)
