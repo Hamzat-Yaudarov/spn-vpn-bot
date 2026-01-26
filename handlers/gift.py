@@ -68,7 +68,7 @@ async def process_get_gift(callback: CallbackQuery):
 
         # Проверяем статус подписки
         if member.status not in ("member", "administrator", "creator"):
-            # Отправляем новое сообщение с просьбой подписаться
+            # Отправляем новое сообщение с просьбой подписаться (без удаления старого)
             text = (
                 "❌ <b>Ты не подписан на новостной канал</b>\n\n"
                 "Чтобы получить подарок, необходимо подписаться на канал новостей.\n\n"
@@ -81,9 +81,6 @@ async def process_get_gift(callback: CallbackQuery):
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
             ])
 
-            # Delete the photo message and send a new text message
-            # (can't use edit_text on a message with photo)
-            await callback.message.delete()
             await callback.message.answer(text, reply_markup=kb)
             logging.info(f"User {tg_id} is not subscribed to channel, prompted to subscribe")
             return
@@ -119,7 +116,7 @@ async def process_get_gift(callback: CallbackQuery):
         new_until = datetime.utcnow() + timedelta(days=3)
         await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
-        # Отправляем сообщение пользователю
+        # Отправляем сообщение пользователю (без удаления старого)
         text = (
             "🎁 <b>Подарок получен!</b>\n\n"
             "Спасибо за подписку на канал!\n"
@@ -132,9 +129,6 @@ async def process_get_gift(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
         ])
 
-        # Delete the photo message and send a new text message
-        # (can't use edit_text on a message with photo)
-        await callback.message.delete()
         await callback.message.answer(text, reply_markup=kb)
         logging.info(f"Gift given to user {tg_id}")
 

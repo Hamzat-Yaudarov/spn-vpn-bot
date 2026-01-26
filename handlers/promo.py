@@ -27,9 +27,7 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} initiated promo code entry")
 
-    # Delete the photo message and send a new text message
-    # (can't use edit_text on a message with photo)
-    await callback.message.delete()
+    # Send a new message without deleting the old one
     await callback.message.answer("Введи промокод:")
     await state.set_state(UserStates.waiting_for_promo)
 
