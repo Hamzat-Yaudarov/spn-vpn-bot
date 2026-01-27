@@ -171,3 +171,36 @@ async def send_text_with_photo_callback(
     else:
         # Изображение не найдено, отправляем только текст
         await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
+async def edit_media_to_video(
+    callback: CallbackQuery,
+    video_path: Path | str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+    parse_mode: ParseMode = ParseMode.HTML
+):
+    """
+    Заменить медиа-сообщение на видео (удаляет старое и отправляет новое)
+    Используется когда нужно заменить изображение на видео
+
+    Args:
+        callback: CallbackQuery объект
+        video_path: Путь к видео файлу
+        text: Подпись к видео
+        reply_markup: Клавиатура с кнопками
+        parse_mode: Режим парсинга текста
+    """
+    try:
+        # Удаляем старое сообщение и отправляем видео
+        await callback.message.delete()
+        await callback.message.answer_video(
+            video=FSInputFile(video_path),
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    except Exception as e:
+        logging.error(f"Error editing to video: {e}")
+        # Если ошибка, отправляем просто текст
+        await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
