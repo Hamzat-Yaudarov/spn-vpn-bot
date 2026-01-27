@@ -1,7 +1,8 @@
 import logging
+from pathlib import Path
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from config import SUPPORT_URL
 from states import UserStates
 import database as db
@@ -81,32 +82,109 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "how_to_connect")
 async def process_how_to_connect(callback: CallbackQuery):
-    """Показать инструкцию по подключению"""
+    """Показать выбор устройства для инструкции"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} clicked: how_to_connect")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="📱 iPhone", callback_data="instruction_ios")],
+        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_android")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+    ])
+
+    text = "Выберите устройство, для которого нужна инструкция:"
+
+    await callback.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "instruction_ios")
+async def process_instruction_ios(callback: CallbackQuery):
+    """Показать инструкцию для iPhone с видео"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} selected: iPhone instruction")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад к выбору устройства", callback_data="back_to_device_selection")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
     ])
 
     text = (
-        "<b>Как подключиться</b>\n\n"
-
-        "<b>Способ 1 — v2RayTun</b>\n"
-        "<blockquote>"
-        "1️⃣ Установите приложение:\n"
-        "• <a href=\"https://play.google.com/store/apps/details?id=com.v2raytun.android\">Android</a>\n"
-        "• <a href=\"https://apps.apple.com/app/id6446114838\">iOS</a>\n\n"
-        "2️⃣ Откройте приложение и добавьте новую конфигурацию\n"
-        "3️⃣ Вставьте персональную ссылку доступа\n"
-        "4️⃣ Активируйте соединение\n"
-        "</blockquote>\n\n"
-
-        "<b>Способ 2 — Happ</b>\n"
-        "<blockquote>"
-        "1️⃣ Установите приложение Happ из магазина приложений\n"
-        "2️⃣ Откройте приложение и вставьте ссылку доступа\n"
-        "3️⃣ Подтвердите подключение\n"
-        "</blockquote>\n\n"
-
-        "ℹ️ <i>Никаких ручных настроек и сложных параметров — всё работает автоматически.</i>"
+        "📱 <b>Инструкция для iPhone</b>\n\n"
+        "Следуйте инструкциям на видео для установки VPN.\n\n"
+        "<b>Ссылки:</b>\n"
+        "• <a href=\"https://apps.apple.com/app/id6446114838\">V2rayTUN</a>\n"
+        "• <a href=\"https://apps.apple.com/app/happ\">Happ</a>"
     )
 
-    await edit_text_with_photo(callback, text, kb, "Как подключиться")
+    video_path = Path(__file__).parent.parent / "video_instructions" / "ios.mp4"
+
+    try:
+        if video_path.exists():
+            await callback.message.answer_video(
+                video=FSInputFile(video_path),
+                caption=text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        else:
+            # Если видео не найдено, отправляем просто текст
+            logging.warning(f"Video not found: {video_path}")
+            await callback.message.answer(text, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error sending iOS instruction video: {e}")
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "instruction_android")
+async def process_instruction_android(callback: CallbackQuery):
+    """Показать инструкцию для Android с видео"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} selected: Android instruction")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад к выбору устройства", callback_data="back_to_device_selection")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+    ])
+
+    text = (
+        "🤖 <b>Инструкция для Android</b>\n\n"
+        "Следуйте инструкциям на изображении/видео ниже для установки VPN.\n\n"
+        "<b>Ссылки:</b>\n"
+        "• <a href=\"https://play.google.com/store/apps/details?id=com.v2raytun.android\">V2rayTUN</a>\n"
+        "• <a href=\"https://play.google.com/store/apps/details?id=com.happ.app\">Happ</a>"
+    )
+
+    video_path = Path(__file__).parent.parent / "video_instructions" / "android.mp4"
+
+    try:
+        if video_path.exists():
+            await callback.message.answer_video(
+                video=FSInputFile(video_path),
+                caption=text,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+        else:
+            # Если видео не найдено, отправляем просто текст
+            logging.warning(f"Video not found: {video_path}")
+            await callback.message.answer(text, reply_markup=kb)
+    except Exception as e:
+        logging.error(f"Error sending Android instruction video: {e}")
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "back_to_device_selection")
+async def back_to_device_selection(callback: CallbackQuery):
+    """Вернуться к выбору устройства"""
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} returned to device selection")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 iPhone", callback_data="instruction_ios")],
+        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_android")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+    ])
+
+    text = "Выберите устройство, для которого нужна инструкция:"
+
+    await callback.message.answer(text, reply_markup=kb)
