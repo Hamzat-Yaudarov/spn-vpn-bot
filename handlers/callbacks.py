@@ -117,7 +117,7 @@ async def process_device_iphone(callback: CallbackQuery, state: FSMContext):
         "• <a href=\"https://apps.apple.com/app/id6446114838\">Happ</a>"
     )
 
-    video_path = Path(__file__).parent.parent / "video_instructions2" / "ios.mp4"
+    video_path = Path(__file__).parent.parent / "video_instructions3" / "ios.mp4"
 
     await edit_media_to_video(callback, video_path, text, kb)
     await state.set_state(UserStates.choosing_device)
@@ -142,7 +142,7 @@ async def process_device_android(callback: CallbackQuery, state: FSMContext):
         "• <a href=\"https://apps.apple.com/app/id6446114838\">Happ</a>"
     )
 
-    video_path = Path(__file__).parent.parent / "video_instructions2" / "android.mp4"
+    video_path = Path(__file__).parent.parent / "video_instructions3" / "android.mp4"
 
     await edit_media_to_video(callback, video_path, text, kb)
     await state.set_state(UserStates.choosing_device)
