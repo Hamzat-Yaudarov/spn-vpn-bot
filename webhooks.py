@@ -26,73 +26,92 @@ def set_bot(bot):
     """Установить экземпляр бота для отправки уведомлений"""
     global _bot
     _bot = bot
+    logger.info(f"✅ Bot instance set for webhook processing: {bot.token[:20]}...")
+    if _bot is None:
+        logger.error("⚠️ Bot instance is None! Webhooks will not work!")
 
 
 async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:
     """
     Обработать оплаченный счёт и активировать подписку
-    
+
     Args:
         bot: Экземпляр Bot
         tg_id: ID пользователя Telegram
-        invoice_id: ID счёта в CryptoBot
+        invoice_id: ID счёта в CryptoBot или Yookassa
         tariff_code: Код тарифа
-        
+
     Returns:
         True если успешно, False иначе
     """
+    logger.info(f"🔄 Starting payment processing for user {tg_id}, invoice {invoice_id}, tariff {tariff_code}")
+
     if not await db.acquire_user_lock(tg_id):
-        logger.warning(f"Could not acquire lock for user {tg_id}")
+        logger.warning(f"⚠️ Could not acquire lock for user {tg_id} - payment may be processing by another task")
         return False
-    
+
     try:
+        if tariff_code not in TARIFFS:
+            logger.error(f"❌ Invalid tariff code: {tariff_code}")
+            return False
+
         days = TARIFFS[tariff_code]["days"]
         uuid = None
         sub_url = None
+
+        logger.info(f"📋 Processing tariff {tariff_code}: {days} days")
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             # Создаём или получаем пользователя в Remnawave
+            logger.info(f"🔗 Creating/getting Remnawave user for {tg_id}")
             uuid, username = await remnawave_get_or_create_user(
                 session, tg_id, days, extend_if_exists=True
             )
 
             if not uuid:
-                logger.error(f"Failed to create/get Remnawave user for {tg_id}")
+                logger.error(f"❌ Failed to create/get Remnawave user for {tg_id}")
                 return False
+
+            logger.info(f"✅ Remnawave user created/updated: {uuid}")
 
             # Добавляем в сквад
             squad_added = await remnawave_add_to_squad(session, uuid)
             if not squad_added:
-                logger.warning(f"Failed to add user {uuid} to squad")
+                logger.warning(f"⚠️ Failed to add user {uuid} to squad")
 
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
             if not sub_url:
-                logger.warning(f"Failed to get subscription URL for {uuid}")
+                logger.warning(f"⚠️ Failed to get subscription URL for {uuid}")
+            else:
+                logger.info(f"🔗 Got subscription URL for {uuid}")
 
             # Обрабатываем реферальную программу
             try:
                 referrer = await db.get_referrer(tg_id)
                 if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
+                    logger.info(f"🎁 Processing referral bonus for referrer {referrer[0]}")
                     referrer_uuid_row = await db.get_user(referrer[0])
                     if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
                         ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
                         if ref_extended:
                             await db.increment_active_referrals(referrer[0])
-                            logger.info(f"Referral bonus given to {referrer[0]}")
+                            logger.info(f"✅ Referral bonus given to {referrer[0]} (+7 days)")
 
                     await db.mark_first_payment(tg_id)
             except Exception as e:
-                logger.error(f"Error processing referral for user {tg_id}: {e}")
+                logger.error(f"❌ Error processing referral for user {tg_id}: {e}")
 
-            # Обновляем подписку пользователя
+            # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
+            logger.info(f"✅ Subscription updated for user {tg_id} until {new_until}")
 
-            # Отмечаем платеж как paid
+            # Только после успешных операций отмечаем платеж как paid
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
+            logger.info(f"✅ Payment marked as paid in database: {invoice_id}")
 
             # Отправляем сообщение пользователю
             text = (
@@ -100,19 +119,20 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
                 f"Тариф: {tariff_code} ({days} дней)\n"
                 f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
             )
-            
-            if bot:
-                try:
-                    await bot.send_message(tg_id, text)
-                except Exception as e:
-                    logger.error(f"Failed to send message to user {tg_id}: {e}")
 
+            try:
+                await bot.send_message(tg_id, text)
+                logger.info(f"✅ Confirmation message sent to user {tg_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send message to user {tg_id}: {e}")
+
+            logger.info(f"✅ Payment processing completed successfully for user {tg_id}")
             return True
 
     except Exception as e:
-        logger.error(f"Process paid invoice exception: {e}")
+        logger.error(f"❌ Process paid invoice exception: {e}", exc_info=True)
         return False
-    
+
     finally:
         await db.release_user_lock(tg_id)
 
@@ -121,7 +141,7 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
 async def webhook_cryptobot(request: Request):
     """
     Webhook endpoint для CryptoBot платежей
-    
+
     CryptoBot отправляет JSON с информацией об оплате:
     {
         "update_id": 123,
@@ -130,58 +150,80 @@ async def webhook_cryptobot(request: Request):
         "paid_at": "2024-01-16T12:00:00Z"
     }
     """
+    logger.info("🔔 CryptoBot webhook endpoint called")
+
     try:
         payload = await request.json()
-        logger.info(f"CryptoBot webhook received: {payload}")
-        
+        logger.info(f"📦 CryptoBot webhook payload received: {payload}")
+
         invoice_id = payload.get("invoice_id")
         status = payload.get("status")
-        
+
         if not invoice_id or not status:
-            logger.warning(f"Invalid CryptoBot webhook payload: {payload}")
-            raise HTTPException(status_code=400, detail="Missing required fields")
-        
+            logger.warning(f"❌ Invalid CryptoBot webhook payload (missing fields): {payload}")
+            return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
+
+        logger.info(f"📊 CryptoBot invoice {invoice_id} status: {status}")
+
         if status != "paid":
-            logger.info(f"Ignoring CryptoBot webhook with status: {status}")
+            logger.info(f"⏭️ Ignoring CryptoBot webhook with status: {status}")
             return JSONResponse({"ok": True})
-        
+
         # Получаем информацию о платеже из БД
+        logger.info(f"🔍 Looking up payment for invoice {invoice_id} in database")
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code 
-            FROM payments 
+            SELECT tg_id, tariff_code
+            FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'cryptobot'
             LIMIT 1
             """,
             (invoice_id,),
             fetch_one=True
         )
-        
+
         if not result:
-            logger.warning(f"Payment not found for invoice {invoice_id}")
+            logger.warning(f"❌ Payment record not found for invoice {invoice_id} (may already be processed)")
             return JSONResponse({"ok": True})
-        
+
         tg_id = result['tg_id']
         tariff_code = result['tariff_code']
-        
+
+        logger.info(f"✅ Found payment: user {tg_id}, tariff {tariff_code}")
+
+        # Проверяем доступность бота
+        if not _bot:
+            logger.error("❌ CRITICAL: Bot instance not available! Webhooks cannot process payments.")
+            logger.error("⚠️ This usually means set_bot() was not called during initialization")
+            return JSONResponse({"ok": False, "error": "Bot not available"}, status_code=500)
+
         # Обрабатываем платеж асинхронно
-        if _bot:
-            asyncio.create_task(_process_paid_invoice(_bot, tg_id, invoice_id, tariff_code))
-        else:
-            logger.error("Bot not available for webhook processing")
-        
+        logger.info(f"🚀 Creating async task to process payment for user {tg_id}")
+        task = asyncio.create_task(_process_paid_invoice(_bot, tg_id, invoice_id, tariff_code))
+
+        # Добавляем callback для отслеживания ошибок в фоновой задаче
+        def task_done_callback(t):
+            if t.cancelled():
+                logger.warning(f"⚠️ Payment processing task cancelled for invoice {invoice_id}")
+            elif t.exception():
+                logger.error(f"❌ Payment processing task failed for invoice {invoice_id}: {t.exception()}")
+            else:
+                logger.info(f"✅ Payment processing task completed for invoice {invoice_id}")
+
+        task.add_done_callback(task_done_callback)
+
         return JSONResponse({"ok": True})
-    
+
     except Exception as e:
-        logger.error(f"CryptoBot webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"❌ CryptoBot webhook error: {e}", exc_info=True)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 @app.post("/webhook/yookassa")
 async def webhook_yookassa(request: Request):
     """
     Webhook endpoint для Yookassa платежей
-    
+
     Yookassa отправляет JSON с информацией об оплате:
     {
         "type": "notification",
@@ -196,74 +238,134 @@ async def webhook_yookassa(request: Request):
         }
     }
     """
+    logger.info("🔔 Yookassa webhook endpoint called")
+
     try:
         payload = await request.json()
-        logger.info(f"Yookassa webhook received: {payload.get('type')} / {payload.get('event')}")
-        
         event = payload.get("event")
-        obj = payload.get("object", {})
-        
+        webhook_type = payload.get("type")
+        logger.info(f"📦 Yookassa webhook payload: type={webhook_type}, event={event}")
+
         if event != "payment.succeeded":
-            logger.info(f"Ignoring Yookassa event: {event}")
+            logger.info(f"⏭️ Ignoring Yookassa event (not payment.succeeded): {event}")
             return JSONResponse({"ok": True})
-        
+
+        obj = payload.get("object", {})
         payment_id = obj.get("id")
         metadata = obj.get("metadata", {})
-        
+
         tg_id_str = metadata.get("tg_id")
         tariff_code = metadata.get("tariff_code")
-        
+
         if not all([payment_id, tg_id_str, tariff_code]):
-            logger.warning(f"Invalid Yookassa webhook payload: {payload}")
-            raise HTTPException(status_code=400, detail="Missing required fields")
-        
-        tg_id = int(tg_id_str)
-        
+            logger.warning(f"❌ Invalid Yookassa webhook payload (missing fields): {payload}")
+            return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
+
+        try:
+            tg_id = int(tg_id_str)
+        except (ValueError, TypeError):
+            logger.warning(f"❌ Invalid tg_id format in Yookassa webhook: {tg_id_str}")
+            return JSONResponse({"ok": False, "error": "Invalid tg_id"}, status_code=400)
+
+        logger.info(f"📊 Yookassa payment {payment_id} succeeded: user {tg_id}, tariff {tariff_code}")
+
         # Получаем информацию о платеже из БД
+        logger.info(f"🔍 Looking up payment for ID {payment_id} in database")
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code 
-            FROM payments 
+            SELECT tg_id, tariff_code
+            FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'yookassa'
             LIMIT 1
             """,
             (payment_id,),
             fetch_one=True
         )
-        
+
         if not result:
-            logger.warning(f"Payment not found for payment ID {payment_id}")
+            logger.warning(f"❌ Payment record not found for payment ID {payment_id} (may already be processed)")
             return JSONResponse({"ok": True})
-        
+
+        logger.info(f"✅ Found payment in database: user {tg_id}, tariff {tariff_code}")
+
+        # Проверяем доступность бота
+        if not _bot:
+            logger.error("❌ CRITICAL: Bot instance not available! Webhooks cannot process payments.")
+            logger.error("⚠️ This usually means set_bot() was not called during initialization")
+            return JSONResponse({"ok": False, "error": "Bot not available"}, status_code=500)
+
         # Обрабатываем платеж асинхронно
-        if _bot:
-            asyncio.create_task(_process_paid_invoice(_bot, tg_id, payment_id, tariff_code))
-        else:
-            logger.error("Bot not available for webhook processing")
-        
+        logger.info(f"🚀 Creating async task to process payment for user {tg_id}")
+        task = asyncio.create_task(_process_paid_invoice(_bot, tg_id, payment_id, tariff_code))
+
+        # Добавляем callback для отслеживания ошибок в фоновой задаче
+        def task_done_callback(t):
+            if t.cancelled():
+                logger.warning(f"⚠️ Payment processing task cancelled for payment {payment_id}")
+            elif t.exception():
+                logger.error(f"❌ Payment processing task failed for payment {payment_id}: {t.exception()}")
+            else:
+                logger.info(f"✅ Payment processing task completed for payment {payment_id}")
+
+        task.add_done_callback(task_done_callback)
+
         return JSONResponse({"ok": True})
-    
+
     except Exception as e:
-        logger.error(f"Yookassa webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"❌ Yookassa webhook error: {e}", exc_info=True)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return JSONResponse({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
+    bot_available = "✅ Yes" if _bot else "❌ No"
+    return JSONResponse({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "bot_available": bot_available,
+        "webhook_endpoints": [
+            "/webhook/cryptobot - CryptoBot payment notifications",
+            "/webhook/yookassa - Yookassa payment notifications"
+        ]
+    })
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Called when the server starts"""
+    logger.info("=" * 60)
+    logger.info("🚀 Webhook Server Starting")
+    logger.info("=" * 60)
+    logger.info(f"📍 Listening on {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+    logger.info("📞 Webhook endpoints:")
+    logger.info("  - POST /webhook/cryptobot")
+    logger.info("  - POST /webhook/yookassa")
+    logger.info("  - GET /health")
+    logger.info(f"🤖 Bot instance available: {'✅ Yes' if _bot else '❌ No (will be set after connection)'}")
+    logger.info("=" * 60)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Called when the server shuts down"""
+    logger.info("=" * 60)
+    logger.info("🛑 Webhook Server Shutting Down")
+    logger.info("=" * 60)
 
 
 async def run_webhook_server():
     """
     Запустить FastAPI сервер для webhook'ов
-    
+
     Используется uvicorn для асинхронного запуска
     """
     import uvicorn
-    
-    logger.info(f"Starting webhook server on {WEBHOOK_HOST}:{WEBHOOK_PORT}")
-    
+
+    logger.info("=" * 60)
+    logger.info(f"🚀 Starting webhook server on {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+    logger.info("=" * 60)
+
     config = uvicorn.Config(
         app,
         host=WEBHOOK_HOST,
@@ -271,6 +373,6 @@ async def run_webhook_server():
         log_level="info",
         access_log=True
     )
-    
+
     server = uvicorn.Server(config)
     await server.serve()
