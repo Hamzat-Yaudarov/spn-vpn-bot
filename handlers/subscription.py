@@ -25,10 +25,10 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} clicked: buy_subscription")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 месяц — 100₽", callback_data="tariff_1m")],
-        [InlineKeyboardButton(text="3 месяца — 249₽", callback_data="tariff_3m")],
-        [InlineKeyboardButton(text="6 месяцев — 449₽", callback_data="tariff_6m")],
-        [InlineKeyboardButton(text="12 месяцев — 990₽", callback_data="tariff_12m")],
+        [InlineKeyboardButton(text="1 месяц — 200₽", callback_data="tariff_1m")],
+        [InlineKeyboardButton(text="3 месяца — 449₽", callback_data="tariff_3m")],
+        [InlineKeyboardButton(text="6 месяцев — 790₽", callback_data="tariff_6m")],
+        [InlineKeyboardButton(text="12 месяцев — 1200₽", callback_data="tariff_12m")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
 
