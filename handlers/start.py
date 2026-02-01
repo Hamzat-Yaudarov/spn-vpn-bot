@@ -3,7 +3,7 @@ from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from config import TELEGRAPH_AGREEMENT_URL, SUPPORT_URL
+from config import TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
@@ -57,7 +57,7 @@ async def show_main_menu(message: Message):
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
-        [InlineKeyboardButton(text="🎁 Получить подарок", callback_data="get_gift")],
+        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
         [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]

@@ -3,7 +3,7 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import SUPPORT_URL
+from config import SUPPORT_URL, NEWS_CHANNEL_USERNAME
 from states import UserStates
 import database as db
 from handlers.start import show_main_menu
@@ -39,8 +39,6 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню"""
-    from config import NEWS_CHANNEL_USERNAME
-
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} returned to main menu")
 
