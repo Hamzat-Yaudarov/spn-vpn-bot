@@ -39,6 +39,8 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню"""
+    from config import NEWS_CHANNEL_USERNAME
+
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} returned to main menu")
 
@@ -47,7 +49,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
-        [InlineKeyboardButton(text="🎁 Получить подарок", callback_data="get_gift")],
+        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
         [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]

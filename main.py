@@ -13,6 +13,7 @@ import database as db
 from handlers import start, callbacks, subscription, gift, referral, promo, admin
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
+from services.subscription_notifications import check_and_send_notifications
 import webhooks
 
 
@@ -120,6 +121,9 @@ async def main():
 
     # Запускаем задачу очистки истёкших платежей
     tasks.append(asyncio.create_task(cleanup_expired_payments()))
+
+    # Запускаем задачу отправки уведомлений о заканчивающихся подписках
+    tasks.append(asyncio.create_task(check_and_send_notifications(bot)))
     logger.info("✅ Background tasks started")
 
     # Запускаем webhook сервер (асинхронно)

@@ -49,6 +49,10 @@ async def run_migrations():
                     -- Подарки
                     gift_received BOOLEAN DEFAULT FALSE,
 
+                    -- Уведомления о подписке
+                    next_notification_time TIMESTAMP,
+                    notification_type TEXT,
+
                     -- Anti-spam тайм-стемпы
                     last_gift_attempt TIMESTAMP,
                     last_promo_attempt TIMESTAMP,
@@ -96,6 +100,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);",
                 "CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);",
                 "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
 
                 # payments индексы
                 "CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);",
@@ -312,18 +317,35 @@ async def has_accepted_terms(tg_id: int) -> bool:
 #             SUBSCRIPTION MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until: str, squad_uuid: str):
-    """Обновить подписку пользователя"""
+async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until, squad_uuid: str):
+    """
+    Обновить подписку пользователя
+
+    Также автоматически устанавливает время для уведомления о заканчивающейся подписке
+    (1.5 дня до окончания)
+    """
+    from datetime import datetime, timedelta
+
+    # Рассчитываем время следующего уведомления (1.5 дня до окончания подписки)
+    if subscription_until:
+        next_notification = subscription_until - timedelta(days=1.5)
+        notification_type = "1day_left"
+    else:
+        next_notification = None
+        notification_type = None
+
     await db_execute(
         """
-        UPDATE users 
-        SET remnawave_uuid = $1, 
-            remnawave_username = $2, 
-            subscription_until = $3, 
-            squad_uuid = $4 
+        UPDATE users
+        SET remnawave_uuid = $1,
+            remnawave_username = $2,
+            subscription_until = $3,
+            squad_uuid = $4,
+            next_notification_time = $6,
+            notification_type = $7
         WHERE tg_id = $5
         """,
-        (uuid, username, subscription_until, squad_uuid, tg_id)
+        (uuid, username, subscription_until, squad_uuid, tg_id, next_notification, notification_type)
     )
 
 
@@ -709,4 +731,91 @@ async def update_last_payment_check(tg_id: int):
     await db_execute(
         "UPDATE users SET last_payment_check = $1 WHERE tg_id = $2",
         (datetime.utcnow(), tg_id)
+    )
+
+
+# ────────────────────────────────────────────────
+#        SUBSCRIPTION NOTIFICATION MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def get_users_needing_notification():
+    """
+    Получить пользователей которым нужно отправить уведомление о заканчивающейся подписке
+
+    Returns:
+        Список пользователей у которых next_notification_time <= now и есть активная подписка
+    """
+    from datetime import datetime
+
+    return await db_execute(
+        """
+        SELECT tg_id, remnawave_uuid, subscription_until, notification_type
+        FROM users
+        WHERE next_notification_time IS NOT NULL
+        AND next_notification_time <= $1
+        AND subscription_until IS NOT NULL
+        ORDER BY next_notification_time ASC
+        """,
+        (datetime.utcnow(),),
+        fetch_all=True
+    )
+
+
+async def mark_notification_sent(tg_id: int):
+    """Отметить что уведомление было отправлено пользователю"""
+    from datetime import datetime, timedelta
+
+    # Получаем текущую подписку пользователя
+    user = await get_user(tg_id)
+    if not user or not user.get('subscription_until'):
+        # Если подписки нет, очищаем поле уведомления
+        await db_execute(
+            """
+            UPDATE users
+            SET next_notification_time = NULL, notification_type = NULL
+            WHERE tg_id = $1
+            """,
+            (tg_id,)
+        )
+        return
+
+    subscription_until = user['subscription_until']
+
+    # Определяем следующее уведомление в зависимости от текущего типа
+    current_type = user.get('notification_type')
+
+    if current_type == "1day_left":
+        # Если было уведомление "1.5 дня осталось", следующее будет "1 день осталось"
+        # это происходит за 1 день до окончания
+        next_notification = subscription_until - timedelta(days=1)
+        next_type = "below1day"
+    elif current_type == "below1day":
+        # Если было уведомление "меньше дня осталось", следующее будет "подписка истекла"
+        # это происходит в момент окончания подписки
+        next_notification = subscription_until
+        next_type = "expired"
+    else:
+        # Если это первое уведомление или что-то странное, просто очищаем
+        next_notification = None
+        next_type = None
+
+    await db_execute(
+        """
+        UPDATE users
+        SET next_notification_time = $1, notification_type = $2
+        WHERE tg_id = $3
+        """,
+        (next_notification, next_type, tg_id)
+    )
+
+
+async def clear_notification(tg_id: int):
+    """Очистить уведомление для пользователя"""
+    await db_execute(
+        """
+        UPDATE users
+        SET next_notification_time = NULL, notification_type = NULL
+        WHERE tg_id = $1
+        """,
+        (tg_id,)
     )
