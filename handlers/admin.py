@@ -513,7 +513,7 @@ async def admin_take_sub(message: Message):
             try:
                 # Обновляем expireAt на новое время через PATCH запрос
                 payload = {
-                    "uuid": remnawave_uuid,
+                    "uuid": str(remnawave_uuid),
                     "expireAt": new_subscription_until.isoformat()
                 }
 
