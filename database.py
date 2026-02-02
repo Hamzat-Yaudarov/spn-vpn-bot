@@ -883,8 +883,9 @@ async def mark_notification_sent(tg_id: int):
             next_notification = next_notification_time
             next_type = "below1day"
         else:
-            # Если время уже прошло, отправляем сейчас
-            next_notification = now
+            # Если время уже прошло, отправляем "below1day" в следующем цикле (через 30 минут + 1 секунда)
+            # Это предотвращает множественные отправки в цикле
+            next_notification = now + timedelta(seconds=1)
             next_type = "below1day"
 
     elif current_type == "below1day":
@@ -895,12 +896,13 @@ async def mark_notification_sent(tg_id: int):
             next_notification = next_notification_time
             next_type = "expired"
         else:
-            # Если время уже прошло, отправляем сейчас
-            next_notification = now
+            # Если время уже прошло, отправляем "expired" в следующем цикле
+            next_notification = now + timedelta(seconds=1)
             next_type = "expired"
 
     elif current_type == "expired":
-        # После уведомления об истечении, очищаем
+        # После уведомления об истечении, очищаем полностью
+        # Это гарантирует, что "expired" отправляется только один раз
         next_notification = None
         next_type = None
 

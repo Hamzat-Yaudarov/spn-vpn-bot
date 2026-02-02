@@ -490,17 +490,17 @@ async def admin_take_sub(message: Message):
         subscription_until = user['subscription_until']
         now = datetime.utcnow()
 
-        # Время осталось в подписке
+        # Время осталось в подписке (рассчитываем в днях более точно)
         time_left = subscription_until - now
-        days_left = time_left.days if time_left.total_seconds() > 0 else 0
+        days_left = time_left.total_seconds() / 86400  # Количество дней (с учётом часов/минут/секунд)
 
-        # Если ДНЕЙ больше чем осталось, сбрасываем до 1 минуты
+        # Если ДНЕЙ больше или равно чем осталось, сбрасываем до 1 минуты
         if days >= days_left:
             new_subscription_until = now + timedelta(minutes=1)
         else:
             new_subscription_until = subscription_until - timedelta(days=days)
 
-        # Обновляем подписку
+        # Обновляем подписку в БД
         await db.db_execute(
             """
             UPDATE users
@@ -512,7 +512,45 @@ async def admin_take_sub(message: Message):
             (new_subscription_until, tg_id)
         )
 
-        new_days_left = (new_subscription_until - now).days
+        # Обновляем подписку в Remnawave API
+        remnawave_uuid = user.get('remnawave_uuid')
+        if remnawave_uuid:
+            try:
+                connector = aiohttp.TCPConnector(ssl=False)
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    # Берём текущего пользователя из Remnawave
+                    from services.remnawave import remnawave_get_user_info
+                    user_info = await remnawave_get_user_info(session, remnawave_uuid)
+
+                    if user_info:
+                        # Обновляем expireAt на новое время
+                        from config import REMNAWAVE_BASE_URL, REMNAWAVE_API_TOKEN
+
+                        payload = {
+                            "uuid": remnawave_uuid,
+                            "expireAt": new_subscription_until.isoformat()
+                        }
+
+                        headers = {
+                            "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                            "Content-Type": "application/json"
+                        }
+
+                        async with session.patch(
+                            f"{REMNAWAVE_BASE_URL}/users",
+                            headers=headers,
+                            json=payload
+                        ) as resp:
+                            if resp.status == 200:
+                                logger.info(f"Updated Remnawave subscription for user {tg_id}")
+                            else:
+                                logger.warning(f"Failed to update Remnawave subscription: {resp.status}")
+            except Exception as e:
+                logger.warning(f"Could not update Remnawave subscription for user {tg_id}: {e}")
+                # Не блокируем процесс если Remnawave недоступен
+
+        new_days_left = max(0, int((new_subscription_until - now).total_seconds() / 86400))
 
         await message.answer(
             f"✅ <b>Подписка отозвана успешно!</b>\n\n"
@@ -546,7 +584,7 @@ async def admin_take_sub(message: Message):
                 f"(Ошибка: {str(e)[:50]})"
             )
 
-        logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, {days_left} days were remaining")
+        logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, {int(days_left)} days were remaining")
 
     except Exception as e:
         logger.error(f"Take subscription error: {e}")
