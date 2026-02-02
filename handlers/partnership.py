@@ -63,7 +63,7 @@ async def show_partnership_agreement(callback: CallbackQuery, state: FSMContext,
 
     text += "Нажми кнопку выше, чтобы прочитать полный текст соглашения."
 
-    await edit_text_with_photo(callback, text, kb, "Партнёрское соглашение")
+    await send_text_with_photo(callback.message, text, kb, "Партнёрское соглашение")
     await state.set_state(UserStates.partnership_viewing_agreement)
 
 
@@ -143,7 +143,7 @@ async def show_partnership_cabinet(callback: CallbackQuery, tg_id: int):
         ])
         text += "\n\n⚠️ <i>Баланс меньше минимальной суммы вывода (5000 ₽)</i>"
 
-    await edit_text_with_photo(callback, text, kb, "Личный кабинет партнёра")
+    await send_text_with_photo(callback.message, text, kb, "Личный кабинет партнёра")
 
 
 # ────────────────────────────────────────────────
@@ -170,7 +170,7 @@ async def process_withdraw_sbp_start(callback: CallbackQuery, state: FSMContext)
 
     text = "💳 <b>Вывод на карту по СБП</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
 
-    await edit_text_with_photo(callback, text, kb, "Введите сумму вывода")
+    await send_text_with_photo(callback.message, text, kb, "Введите сумму вывода")
     await state.set_state(UserStates.partnership_waiting_sbp_amount)
 
 
@@ -306,7 +306,7 @@ async def process_withdraw_usdt_start(callback: CallbackQuery, state: FSMContext
 
     text = "💎 <b>Вывод в USDT</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
 
-    await edit_text_with_photo(callback, text, kb, "Введите сумму вывода")
+    await send_text_with_photo(callback.message, text, kb, "Введите сумму вывода")
     await state.set_state(UserStates.partnership_waiting_usdt_amount)
 
 
