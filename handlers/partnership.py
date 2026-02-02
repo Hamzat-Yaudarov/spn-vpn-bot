@@ -301,7 +301,7 @@ async def process_withdrawal_amount(message: Message, state: FSMContext):
             text = (
                 f"💰 <b>Вывод в USDT</b>\n\n"
                 f"Сумма вывода: <b>{amount:.2f} ₽</b>\n\n"
-                f"<i>Введите адрес вашего USDT кошелька (TRC-20):</i>"
+                f"<i>Введите адрес вашего USDT кошелька:</i>"
             )
             await state.set_state(PartnershipStates.awaiting_usdt_address)
         
@@ -374,7 +374,7 @@ async def process_usdt_address(message: Message, state: FSMContext):
     
     # Базовая валидация USDT адреса (TRC-20 начинается с T)
     if not usdt_address.startswith('T') or len(usdt_address) != 34:
-        await message.answer("❌ Пожалуйста, введите корректный USDT адрес (TRC-20)")
+        await message.answer("❌ Пожалуйста, введите корректный USDT адрес")
         return
     
     state_data = await state.get_data()
@@ -385,7 +385,7 @@ async def process_usdt_address(message: Message, state: FSMContext):
     
     text = (
         f"✅ <b>Запрос на вывод отправлен!</b>\n\n"
-        f"💰 Способ: USDT (TRC-20)\n"
+        f"💰 Способ: USDT\n"
         f"💵 Сумма: {amount:.2f} ₽\n"
         f"🔗 Адрес: <code>{usdt_address}</code>\n\n"
         f"Администратор обработает ваш запрос в течение 24 часов."

@@ -412,6 +412,150 @@ async def admin_extend_collab(message: Message):
         await message.answer(f"❌ Ошибка: {str(e)[:100]}")
 
 
+@router.message(Command("take_sub"))
+async def admin_take_sub(message: Message):
+    """Админ команда: отозвать подписку пользователя по ИД"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning(f"Unauthorized /take_sub attempt from user {admin_id}")
+        return
+
+    parts = message.text.split()
+
+    # Валидация количества аргументов
+    if len(parts) < 3:
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /take_sub ТГ_ИД ДНЕЙ\n\n"
+            "<b>Параметры:</b>\n"
+            "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
+            "• <code>ДНЕЙ</code> - количество дней для отзыва (число > 0)\n\n"
+            "<b>Пример:</b> /take_sub 123456789 30\n\n"
+            "<i>Если ДНЕЙ больше чем осталось в подписке, время сбрасывается до 1 минуты</i>"
+        )
+        logger.warning(f"Admin {admin_id} /take_sub - wrong number of arguments: {len(parts)-1}")
+        return
+
+    try:
+        tg_id = int(parts[1])
+        days = int(parts[2])
+
+        # Валидация значений
+        if tg_id <= 0:
+            await message.answer("❌ ID пользователя должен быть положительным числом")
+            return
+
+        if days <= 0:
+            await message.answer("❌ Количество дней должно быть больше 0")
+            return
+
+        if tg_id == admin_id:
+            await message.answer("❌ Нельзя отозвать подписку у самого себя")
+            logger.warning(f"Admin {admin_id} tried to take subscription from themselves")
+            return
+
+    except ValueError:
+        await message.answer(
+            "❌ <b>Ошибка валидации</b>\n\n"
+            "Убедитесь, что:\n"
+            "• ТГ_ИД и ДНЕЙ - целые числа\n"
+            "• Оба числа больше 0\n\n"
+            "<b>Пример:</b> /take_sub 123456789 30"
+        )
+        logger.warning(f"Admin {admin_id} /take_sub - parsing error for arguments: {parts[1:]}")
+        return
+
+    if not await db.acquire_user_lock(tg_id):
+        await message.answer(f"❌ Пользователь {tg_id} занят, попробуй позже")
+        logger.info(f"Admin {admin_id} /take_sub - could not acquire lock for user {tg_id}")
+        return
+
+    try:
+        # Получаем пользователя
+        user = await db.get_user(tg_id)
+        if not user:
+            await message.answer(f"❌ Пользователь {tg_id} не найден в системе")
+            logger.warning(f"Admin {admin_id} tried to take subscription from non-existent user {tg_id}")
+            return
+
+        # Проверяем есть ли подписка
+        if not user.get('subscription_until'):
+            await message.answer(f"❌ У пользователя {tg_id} нет активной подписки")
+            logger.warning(f"Admin {admin_id} tried to take subscription from user {tg_id} with no subscription")
+            return
+
+        # Рассчитываем новое время подписки
+        subscription_until = user['subscription_until']
+        now = datetime.utcnow()
+
+        # Время осталось в подписке
+        time_left = subscription_until - now
+        days_left = time_left.days if time_left.total_seconds() > 0 else 0
+
+        # Если ДНЕЙ больше чем осталось, сбрасываем до 1 минуты
+        if days >= days_left:
+            new_subscription_until = now + timedelta(minutes=1)
+        else:
+            new_subscription_until = subscription_until - timedelta(days=days)
+
+        # Обновляем подписку
+        await db.db_execute(
+            """
+            UPDATE users
+            SET subscription_until = $1,
+                next_notification_time = NULL,
+                notification_type = NULL
+            WHERE tg_id = $2
+            """,
+            (new_subscription_until, tg_id)
+        )
+
+        new_days_left = (new_subscription_until - now).days
+
+        await message.answer(
+            f"✅ <b>Подписка отозвана успешно!</b>\n\n"
+            f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+            f"📅 <b>Отозвано дней:</b> {days}\n"
+            f"⏰ <b>Осталось дней:</b> {new_days_left}\n"
+            f"🔔 <b>Уведомления:</b> очищены"
+        )
+
+        # Уведомляем пользователя
+        try:
+            if new_days_left <= 0:
+                await message.bot.send_message(
+                    tg_id,
+                    f"⚠️ <b>Ваша подписка отозвана!</b>\n\n"
+                    f"Администратор отозвал вашу подписку на {days} дней\n\n"
+                    f"Чтобы восстановить доступ, продлите подписку в меню 'Купить подписку'"
+                )
+            else:
+                await message.bot.send_message(
+                    tg_id,
+                    f"⚠️ <b>Подписка сокращена</b>\n\n"
+                    f"Администратор отозвал {days} дней вашей подписки\n\n"
+                    f"Осталось дней: <b>{new_days_left}</b>"
+                )
+            logger.info(f"User {tg_id} notified about subscription removal by admin {admin_id}")
+        except Exception as e:
+            logger.warning(f"Failed to notify user {tg_id}: {e}")
+            await message.answer(
+                f"⚠️ Подписка отозвана, но не удалось отправить уведомление пользователю\n"
+                f"(Ошибка: {str(e)[:50]})"
+            )
+
+        logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, {days_left} days were remaining")
+
+    except Exception as e:
+        logger.error(f"Take subscription error: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)[:100]}")
+
+    finally:
+        await db.release_user_lock(tg_id)
+
+
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     """Админ команда: получить статистику"""

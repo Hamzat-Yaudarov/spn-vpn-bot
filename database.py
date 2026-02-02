@@ -397,17 +397,30 @@ async def update_subscription(tg_id: int, uuid: str, username: str, subscription
     Обновить подписку пользователя
 
     Также автоматически устанавливает время для уведомления о заканчивающейся подписке
-    (1.5 дня до окончания)
     """
     from datetime import datetime, timedelta
 
-    # Рассчитываем время следующего уведомления (1.5 дня до окончания подписки)
+    # Рассчитываем время следующего уведомления
+    next_notification = None
+    notification_type = None
+
     if subscription_until:
-        next_notification = subscription_until - timedelta(days=1.5)
-        notification_type = "1day_left"
-    else:
-        next_notification = None
-        notification_type = None
+        now = datetime.utcnow()
+        time_left = subscription_until - now
+        total_hours = time_left.total_seconds() / 3600
+
+        if total_hours > 36:  # Больше чем 1.5 дня
+            # Первое уведомление за 1.5 дня до конца
+            next_notification = subscription_until - timedelta(days=1.5)
+            notification_type = "1day_left"
+        elif total_hours > 0:
+            # Подписка в пределах 36 часов, отправляем уведомление "below1day" сейчас
+            next_notification = now
+            notification_type = "below1day"
+        else:
+            # Подписка уже истекла
+            next_notification = now
+            notification_type = "expired"
 
     await db_execute(
         """
@@ -837,7 +850,7 @@ async def get_users_needing_notification():
 
 
 async def mark_notification_sent(tg_id: int):
-    """Отметить что уведомление было отправлено пользователю"""
+    """Отметить что уведомление было отправлено пользователю и установить следующее"""
     from datetime import datetime, timedelta
 
     # Получаем текущую подписку пользователя
@@ -855,22 +868,39 @@ async def mark_notification_sent(tg_id: int):
         return
 
     subscription_until = user['subscription_until']
-
-    # Определяем следующее уведомление в зависимости от текущего типа
+    now = datetime.utcnow()
     current_type = user.get('notification_type')
 
+    # Определяем следующее уведомление в зависимости от текущего типа
+    next_notification = None
+    next_type = None
+
     if current_type == "1day_left":
-        # Если было уведомление "1.5 дня осталось", следующее будет "1 день осталось"
-        # это происходит за 1 день до окончания
-        next_notification = subscription_until - timedelta(days=1)
-        next_type = "below1day"
+        # Переходим к уведомлению "below1day" (за 1 день до конца)
+        next_notification_time = subscription_until - timedelta(days=1)
+        # Но проверяем, не прошло ли это время уже
+        if next_notification_time > now:
+            next_notification = next_notification_time
+            next_type = "below1day"
+        else:
+            # Если время уже прошло, отправляем сейчас
+            next_notification = now
+            next_type = "below1day"
+
     elif current_type == "below1day":
-        # Если было уведомление "меньше дня осталось", следующее будет "подписка истекла"
-        # это происходит в момент окончания подписки
-        next_notification = subscription_until
-        next_type = "expired"
-    else:
-        # Если это первое уведомление или что-то странное, просто очищаем
+        # Переходим к уведомлению "expired" (в момент окончания подписки)
+        next_notification_time = subscription_until
+        # Но проверяем, не прошло ли это время уже
+        if next_notification_time > now:
+            next_notification = next_notification_time
+            next_type = "expired"
+        else:
+            # Если время уже прошло, отправляем сейчас
+            next_notification = now
+            next_type = "expired"
+
+    elif current_type == "expired":
+        # После уведомления об истечении, очищаем
         next_notification = None
         next_type = None
 
