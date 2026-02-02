@@ -53,6 +53,16 @@ async def run_migrations():
                     next_notification_time TIMESTAMP,
                     notification_type TEXT,
 
+                    -- Партнёрская программа
+                    is_partner BOOLEAN DEFAULT FALSE,
+                    partnership_percent INT,
+                    partnership_started TIMESTAMP,
+                    partnership_until TIMESTAMP,
+                    partnership_accepted BOOLEAN DEFAULT FALSE,
+                    partner_balance NUMERIC DEFAULT 0,
+                    partner_earned_total NUMERIC DEFAULT 0,
+                    partner_withdrawn_total NUMERIC DEFAULT 0,
+
                     -- Anti-spam тайм-стемпы
                     last_gift_attempt TIMESTAMP,
                     last_promo_attempt TIMESTAMP,
@@ -91,6 +101,52 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'promo_codes' создана или уже существует")
 
+            # Таблица партнёрских ссылок и трафика
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS partnership_links (
+                    id BIGSERIAL PRIMARY KEY,
+                    partner_tg_id BIGINT NOT NULL UNIQUE,
+                    referred_tg_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    FOREIGN KEY (partner_tg_id) REFERENCES users(tg_id) ON DELETE CASCADE,
+                    FOREIGN KEY (referred_tg_id) REFERENCES users(tg_id) ON DELETE CASCADE
+                )
+            """)
+            logging.info("✅ Таблица 'partnership_links' создана или уже существует")
+
+            # Таблица партнёрских доходов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS partnership_earnings (
+                    id BIGSERIAL PRIMARY KEY,
+                    partner_tg_id BIGINT NOT NULL,
+                    referred_tg_id BIGINT NOT NULL,
+                    tariff_code TEXT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    commission NUMERIC NOT NULL,
+                    payment_invoice_id TEXT,
+                    created_at TIMESTAMP DEFAULT now(),
+                    FOREIGN KEY (partner_tg_id) REFERENCES users(tg_id) ON DELETE CASCADE,
+                    FOREIGN KEY (referred_tg_id) REFERENCES users(tg_id) ON DELETE CASCADE
+                )
+            """)
+            logging.info("✅ Таблица 'partnership_earnings' создана или уже существует")
+
+            # Таблица партнёрских выводов
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS partnership_withdrawals (
+                    id BIGSERIAL PRIMARY KEY,
+                    partner_tg_id BIGINT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    withdrawal_type TEXT NOT NULL,
+                    bank_name TEXT,
+                    usdt_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT now(),
+                    FOREIGN KEY (partner_tg_id) REFERENCES users(tg_id) ON DELETE CASCADE
+                )
+            """)
+            logging.info("✅ Таблица 'partnership_withdrawals' создана или уже существует")
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 2: СОЗДАНИЕ ИНДЕКСОВ (для быстрого поиска)
             # ═══════════════════════════════════════════════════════════
@@ -101,6 +157,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);",
                 "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS idx_users_is_partner ON users(is_partner) WHERE is_partner = TRUE;",
 
                 # payments индексы
                 "CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);",
@@ -110,6 +167,14 @@ async def run_migrations():
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
+
+                # partnership indixes
+                "CREATE INDEX IF NOT EXISTS idx_partnership_links_partner ON partnership_links(partner_tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_partnership_links_referred ON partnership_links(referred_tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_partnership_earnings_partner ON partnership_earnings(partner_tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_partnership_earnings_referred ON partnership_earnings(referred_tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_partnership_withdrawals_partner ON partnership_withdrawals(partner_tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_partnership_withdrawals_status ON partnership_withdrawals(status);",
             ]
 
             for query in index_queries:
@@ -131,6 +196,16 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS next_notification_time TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_type TEXT;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_partner BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partnership_percent INT;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partnership_started TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partnership_until TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partnership_accepted BOOLEAN DEFAULT FALSE;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_balance NUMERIC DEFAULT 0;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_earned_total NUMERIC DEFAULT 0;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_withdrawn_total NUMERIC DEFAULT 0;",
             ]
 
             for query in alter_queries:
@@ -818,4 +893,174 @@ async def clear_notification(tg_id: int):
         WHERE tg_id = $1
         """,
         (tg_id,)
+    )
+
+
+# ────────────────────────────────────────────────
+#           PARTNERSHIP MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def enable_partnership(tg_id: int, percent: int, days: int = 90):
+    """
+    Включить партнёрство для пользователя
+
+    Args:
+        tg_id: ID пользователя
+        percent: % доля партнёра
+        days: Количество дней на которое включить партнёрство (по умолчанию 90 дней)
+    """
+    from datetime import datetime, timedelta
+
+    started = datetime.utcnow()
+    until = started + timedelta(days=days)
+
+    await db_execute(
+        """
+        UPDATE users
+        SET is_partner = TRUE,
+            partnership_percent = $1,
+            partnership_started = $2,
+            partnership_until = $3,
+            partnership_accepted = FALSE
+        WHERE tg_id = $4
+        """,
+        (percent, started, until, tg_id)
+    )
+
+
+async def extend_partnership(tg_id: int, days: int):
+    """Продлить партнёрство на указанное количество дней"""
+    from datetime import timedelta
+
+    await db_execute(
+        """
+        UPDATE users
+        SET partnership_until = partnership_until + INTERVAL '1 day' * $1
+        WHERE tg_id = $2 AND is_partner = TRUE
+        """,
+        (days, tg_id)
+    )
+
+
+async def get_partner_info(tg_id: int):
+    """Получить информацию о партнёре"""
+    return await db_execute(
+        """
+        SELECT
+            tg_id, partnership_percent, partnership_started, partnership_until,
+            partnership_accepted, partner_balance, partner_earned_total, partner_withdrawn_total
+        FROM users
+        WHERE tg_id = $1 AND is_partner = TRUE
+        """,
+        (tg_id,),
+        fetch_one=True
+    )
+
+
+async def accept_partnership_agreement(tg_id: int):
+    """Отметить что партнёр принял соглашение"""
+    await db_execute(
+        """
+        UPDATE users
+        SET partnership_accepted = TRUE
+        WHERE tg_id = $1
+        """,
+        (tg_id,)
+    )
+
+
+async def register_partnership_link(partner_tg_id: int, referred_tg_id: int):
+    """Зарегистрировать партнёрскую ссылку (новый пользователь пришёл от партнёра)"""
+    await db_execute(
+        """
+        INSERT INTO partnership_links (partner_tg_id, referred_tg_id)
+        VALUES ($1, $2)
+        ON CONFLICT (referred_tg_id) DO NOTHING
+        """,
+        (partner_tg_id, referred_tg_id)
+    )
+
+
+async def get_partnership_stats(partner_tg_id: int):
+    """Получить статистику партнёра по привлечённым пользователям и покупкам"""
+    from datetime import datetime
+
+    stats = await db_execute(
+        """
+        SELECT
+            COUNT(DISTINCT pl.referred_tg_id)::INT as total_users,
+            COUNT(CASE WHEN pe.tariff_code = '1m' THEN 1 END)::INT as purchases_1m,
+            COUNT(CASE WHEN pe.tariff_code = '3m' THEN 1 END)::INT as purchases_3m,
+            COUNT(CASE WHEN pe.tariff_code = '6m' THEN 1 END)::INT as purchases_6m,
+            COUNT(CASE WHEN pe.tariff_code = '12m' THEN 1 END)::INT as purchases_12m,
+            COALESCE(SUM(pe.commission), 0)::NUMERIC as total_earned
+        FROM partnership_links pl
+        LEFT JOIN partnership_earnings pe ON pl.partner_tg_id = pe.partner_tg_id AND pl.referred_tg_id = pe.referred_tg_id
+        WHERE pl.partner_tg_id = $1
+        """,
+        (partner_tg_id,),
+        fetch_one=True
+    )
+
+    return stats
+
+
+async def add_partnership_earnings(partner_tg_id: int, referred_tg_id: int, tariff_code: str, amount: float, commission: float, payment_invoice_id: str):
+    """Добавить заработок партнёру за покупку привлечённого им пользователя"""
+    from datetime import datetime
+
+    await db_execute(
+        """
+        INSERT INTO partnership_earnings (partner_tg_id, referred_tg_id, tariff_code, amount, commission, payment_invoice_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        (partner_tg_id, referred_tg_id, tariff_code, amount, commission, payment_invoice_id)
+    )
+
+    # Обновляем баланс партнёра
+    await db_execute(
+        """
+        UPDATE users
+        SET partner_balance = partner_balance + $1,
+            partner_earned_total = partner_earned_total + $1
+        WHERE tg_id = $2
+        """,
+        (commission, partner_tg_id)
+    )
+
+
+async def create_withdrawal_request(partner_tg_id: int, amount: float, withdrawal_type: str, bank_name: str = None, usdt_address: str = None):
+    """Создать запрос на вывод средств"""
+    from datetime import datetime
+
+    await db_execute(
+        """
+        INSERT INTO partnership_withdrawals (partner_tg_id, amount, withdrawal_type, bank_name, usdt_address)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        (partner_tg_id, amount, withdrawal_type, bank_name, usdt_address)
+    )
+
+    # Вычитаем из баланса
+    await db_execute(
+        """
+        UPDATE users
+        SET partner_balance = partner_balance - $1,
+            partner_withdrawn_total = partner_withdrawn_total + $1
+        WHERE tg_id = $2
+        """,
+        (amount, partner_tg_id)
+    )
+
+
+async def get_pending_withdrawals():
+    """Получить все ожидающие выводы"""
+    return await db_execute(
+        """
+        SELECT id, partner_tg_id, amount, withdrawal_type, bank_name, usdt_address, created_at
+        FROM partnership_withdrawals
+        WHERE status = 'pending'
+        ORDER BY created_at
+        """,
+        fetch_all=True
     )
