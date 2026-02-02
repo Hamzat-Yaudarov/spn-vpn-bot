@@ -99,8 +99,10 @@ async def accept_partnership(callback: CallbackQuery):
 
     await db.accept_partnership_agreement(tg_id)
 
-    # Генерируем партнёрскую ссылку
-    partner_link = f"https://t.me/WaySPN_robot?start=partner_{tg_id}"
+    # Генерируем партнёрскую ссылку (используем динамическое имя бота, как в реферальной программе)
+    bot_username = (await callback.bot.get_me()).username
+    partner_link = f"https://t.me/{bot_username}?start=partner_{tg_id}"
+    logger.info(f"Generated partner link for {tg_id}: {partner_link}")
 
     text = (
         "✅ <b>Соглашение принято!</b>\n\n"
@@ -152,8 +154,9 @@ async def show_partner_cabinet(callback_or_message, tg_id: int, state: FSMContex
     else:
         time_str = "⚠️ Истекло"
 
-    # Генерируем партнёрскую ссылку
-    partner_link = f"https://t.me/WaySPN_robot?start=partner_{tg_id}"
+    # Генерируем партнёрскую ссылку (используем динамическое имя бота, как в реферальной программе)
+    bot_username = (await callback_or_message.bot.get_me()).username
+    partner_link = f"https://t.me/{bot_username}?start=partner_{tg_id}"
 
     text = (
         f"🤝 <b>Личный кабинет партнёра</b>\n\n"
