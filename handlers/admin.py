@@ -185,7 +185,9 @@ async def admin_give_sub(message: Message):
 
             # Обновляем подписку в БД
             new_until = datetime.utcnow() + timedelta(days=days)
+            logger.info(f"📊 GIVE_SUB: Setting subscription_until to {new_until} (now + {days} days)")
             await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            logger.info(f"✅ GIVE_SUB: subscription_until updated in database to {new_until}")
 
         await message.answer(
             f"✅ <b>Подписка выдана успешно!</b>\n\n"
@@ -519,7 +521,13 @@ async def admin_take_sub(message: Message):
         logger.info(f"📊 Calling db.update_subscription with: uuid={remnawave_uuid}, subscription_until={new_subscription_until}")
 
         # Используем встроенную функцию которая обновляет всё правильно
-        await db.update_subscription(tg_id, remnawave_uuid, remnawave_username, new_subscription_until, squad_uuid)
+        # Это также установит правильные notification_type и next_notification_time
+        try:
+            await db.update_subscription(tg_id, str(remnawave_uuid) if remnawave_uuid else None, remnawave_username, new_subscription_until, squad_uuid)
+            logger.info(f"✅ Database updated successfully with new subscription_until={new_subscription_until}")
+        except Exception as e:
+            logger.error(f"❌ Failed to update subscription in database: {e}", exc_info=True)
+            raise
 
         # Дополнительно обновляем Remnawave API напрямую чтобы убедиться
         if remnawave_uuid:
