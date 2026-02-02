@@ -13,12 +13,169 @@ from config import (
 _pool = None
 
 
+async def get_table_columns(conn, table_name: str) -> dict:
+    """Получить информацию о столбцах таблицы"""
+    result = await conn.fetch("""
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = $1
+        ORDER BY ordinal_position
+    """, table_name)
+
+    return {row['column_name']: {
+        'type': row['data_type'],
+        'nullable': row['is_nullable']
+    } for row in result}
+
+
+def normalize_pg_type(pg_type: str) -> str:
+    """Нормализировать тип данных PostgreSQL для сравнения"""
+    pg_type = pg_type.lower().strip()
+
+    # Нормализируем варианты типов
+    type_mapping = {
+        'integer': 'integer',
+        'int': 'integer',
+        'int4': 'integer',
+        'bigint': 'bigint',
+        'int8': 'bigint',
+        'text': 'text',
+        'varchar': 'text',
+        'boolean': 'boolean',
+        'bool': 'boolean',
+        'uuid': 'uuid',
+        'numeric': 'numeric',
+        'decimal': 'numeric',
+        'timestamp': 'timestamp',
+        'timestamp without time zone': 'timestamp',
+        'timestamp with time zone': 'timestamp',
+    }
+
+    for key, normalized in type_mapping.items():
+        if key in pg_type:
+            return normalized
+
+    return pg_type
+
+
+async def sync_table_schema(conn, table_name: str, expected_columns: dict):
+    """Синхронизировать схему таблицы: добавить недостающие, удалить лишние столбцы"""
+    try:
+        current_columns = await get_table_columns(conn, table_name)
+    except Exception as e:
+        logging.debug(f"Таблица {table_name} не существует или ошибка доступа: {e}")
+        return
+
+    # Добавляем недостающие столбцы
+    for col_name, col_def in expected_columns.items():
+        if col_name not in current_columns:
+            data_type = col_def.get('type', 'TEXT')
+            nullable = col_def.get('nullable', True)
+            default = col_def.get('default', '')
+
+            alter_query = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {data_type}"
+
+            if default:
+                alter_query += f" DEFAULT {default}"
+
+            if not nullable:
+                alter_query += " NOT NULL"
+
+            try:
+                await conn.execute(alter_query)
+                logging.info(f"✅ Добавлен столбец {table_name}.{col_name}")
+            except Exception as e:
+                logging.warning(f"⚠️ Ошибка при добавлении столбца {table_name}.{col_name}: {e}")
+
+    # Удаляем лишние столбцы (которые есть в таблице но не в expected_columns)
+    system_columns = {'id', 'created_at', 'updated_at'}  # Системные столбцы не трогаем
+
+    for col_name in current_columns:
+        if col_name not in expected_columns and col_name not in system_columns:
+            try:
+                await conn.execute(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS {col_name} CASCADE")
+                logging.info(f"✅ Удалён лишний столбец {table_name}.{col_name}")
+            except Exception as e:
+                logging.warning(f"⚠️ Ошибка при удалении столбца {table_name}.{col_name}: {e}")
+
+
 async def run_migrations():
     """Запустить автоматические миграции при старте бота"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
             logging.info("Running migrations...")
+
+            # ═══════════════════════════════════════════════════════════
+            # ОПРЕДЕЛЯЕМ ОЖИДАЕМУЮ СТРУКТУРУ ТАБЛИЦ
+            # ═══════════════════════════════════════════════════════════
+
+            expected_users_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'username': {'type': 'TEXT', 'nullable': True},
+                'accepted_terms': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'remnawave_uuid': {'type': 'UUID', 'nullable': True},
+                'remnawave_username': {'type': 'TEXT', 'nullable': True},
+                'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
+                'squad_uuid': {'type': 'UUID', 'nullable': True},
+                'referrer_id': {'type': 'BIGINT', 'nullable': True},
+                'first_payment': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'referral_count': {'type': 'INT', 'nullable': False, 'default': '0'},
+                'active_referrals': {'type': 'INT', 'nullable': False, 'default': '0'},
+                'gift_received': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
+                'notification_type': {'type': 'TEXT', 'nullable': True},
+                'last_gift_attempt': {'type': 'TIMESTAMP', 'nullable': True},
+                'last_promo_attempt': {'type': 'TIMESTAMP', 'nullable': True},
+                'last_payment_check': {'type': 'TIMESTAMP', 'nullable': True},
+            }
+
+            expected_payments_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'tariff_code': {'type': 'TEXT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'provider': {'type': 'TEXT', 'nullable': False},
+                'invoice_id': {'type': 'TEXT', 'nullable': False},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+            }
+
+            expected_promo_columns = {
+                'code': {'type': 'TEXT', 'nullable': False},
+                'days': {'type': 'INT', 'nullable': False},
+                'max_uses': {'type': 'INT', 'nullable': False},
+                'used_count': {'type': 'INT', 'nullable': False, 'default': '0'},
+                'active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
+            }
+
+            expected_partnerships_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'percentage': {'type': 'INT', 'nullable': False},
+                'agreement_accepted': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'active'"},
+            }
+
+            expected_partner_referrals_columns = {
+                'partner_id': {'type': 'BIGINT', 'nullable': False},
+                'referred_user_id': {'type': 'BIGINT', 'nullable': False},
+            }
+
+            expected_partner_earnings_columns = {
+                'partner_id': {'type': 'BIGINT', 'nullable': False},
+                'user_id': {'type': 'BIGINT', 'nullable': False},
+                'tariff_code': {'type': 'TEXT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'partner_share': {'type': 'NUMERIC', 'nullable': False},
+            }
+
+            expected_partner_withdrawals_columns = {
+                'partner_id': {'type': 'BIGINT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'withdrawal_type': {'type': 'TEXT', 'nullable': False},
+                'bank_name': {'type': 'TEXT', 'nullable': True},
+                'phone_number': {'type': 'TEXT', 'nullable': True},
+                'usdt_address': {'type': 'TEXT', 'nullable': True},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+            }
 
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
@@ -205,6 +362,23 @@ async def run_migrations():
                         logging.debug(f"Столбец уже существует, пропускаем: {query.strip()}")
                     else:
                         logging.warning(f"⚠️ Ошибка миграции: {e}")
+
+            # ═══════════════════════════════════════════════════════════
+            # ЭТАП 4: СИНХРОНИЗАЦИЯ СХЕМЫ ТАБЛИЦ
+            # ═══════════════════════════════════════════════════════════
+
+            logging.info("Syncing table schemas...")
+
+            # Синхронизируем таблицы
+            await sync_table_schema(conn, 'users', expected_users_columns)
+            await sync_table_schema(conn, 'payments', expected_payments_columns)
+            await sync_table_schema(conn, 'promo_codes', expected_promo_columns)
+            await sync_table_schema(conn, 'partnerships', expected_partnerships_columns)
+            await sync_table_schema(conn, 'partner_referrals', expected_partner_referrals_columns)
+            await sync_table_schema(conn, 'partner_earnings', expected_partner_earnings_columns)
+            await sync_table_schema(conn, 'partner_withdrawals', expected_partner_withdrawals_columns)
+
+            logging.info("✅ Синхронизация схемы завершена")
 
             logging.info("━" * 60)
             logging.info("✨ ВСЕ МИГРАЦИИ УСПЕШНО ЗАВЕРШЕНЫ ✨")
@@ -912,12 +1086,16 @@ async def get_partnership(tg_id: int):
 
 async def is_partner(tg_id: int) -> bool:
     """Проверить является ли пользователь партнёром"""
-    result = await db_execute(
-        "SELECT 1 FROM partnerships WHERE tg_id = $1 AND status = 'active'",
-        (tg_id,),
-        fetch_one=True
-    )
-    return result is not None
+    try:
+        result = await db_execute(
+            "SELECT 1 FROM partnerships WHERE tg_id = $1",
+            (tg_id,),
+            fetch_one=True
+        )
+        return result is not None
+    except Exception as e:
+        logging.debug(f"Error checking partnership status for {tg_id}: {e}")
+        return False
 
 
 async def accept_partnership_agreement(tg_id: int):
