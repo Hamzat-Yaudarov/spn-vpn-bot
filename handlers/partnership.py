@@ -20,6 +20,7 @@ class PartnershipStates(StatesGroup):
     """Состояния для партнёрства"""
     awaiting_withdrawal_amount = State()
     awaiting_bank_name = State()
+    awaiting_phone_number = State()
     awaiting_usdt_address = State()
 
 
@@ -319,32 +320,65 @@ async def process_bank_name(message: Message, state: FSMContext):
     """Обработать ввод названия банка"""
     tg_id = message.from_user.id
     bank_name = message.text.strip()
-    
+
     if len(bank_name) < 2:
         await message.answer("❌ Пожалуйста, введите корректное название банка")
         return
-    
+
     state_data = await state.get_data()
     amount = state_data.get('amount')
-    
+
+    # Сохраняем название банка и переходим к запросу номера телефона
+    state_data['bank_name'] = bank_name
+    await state.update_data(state_data)
+
+    text = (
+        f"💳 <b>Вывод на карту по СБП</b>\n\n"
+        f"Сумма вывода: <b>{amount:.2f} ₽</b>\n"
+        f"🏦 Банк: <b>{bank_name}</b>\n\n"
+        f"<i>Укажите номер телефона, к которому привязана карта (например: +7 (900) 123-45-67 или 89001234567):</i>"
+    )
+
+    await message.answer(text)
+    await state.set_state(PartnershipStates.awaiting_phone_number)
+    logger.info(f"User {tg_id} entered bank name: {bank_name}")
+
+
+@router.message(PartnershipStates.awaiting_phone_number)
+async def process_phone_number(message: Message, state: FSMContext):
+    """Обработать ввод номера телефона"""
+    tg_id = message.from_user.id
+    phone_number = message.text.strip()
+
+    # Базовая валидация номера (минимум 10 цифр)
+    phone_digits = ''.join(filter(str.isdigit, phone_number))
+    if len(phone_digits) < 10:
+        await message.answer("❌ Пожалуйста, введите корректный номер телефона")
+        return
+
+    state_data = await state.get_data()
+    amount = state_data.get('amount')
+    bank_name = state_data.get('bank_name')
+
     # Создаём запрос на вывод
-    await db.create_withdrawal_request(tg_id, amount, 'sbp', bank_name=bank_name)
-    
+    await db.create_withdrawal_request(tg_id, amount, 'sbp', bank_name=bank_name, phone_number=phone_number)
+
     text = (
         f"✅ <b>Запрос на вывод отправлен!</b>\n\n"
         f"💳 Способ: Карта по СБП\n"
         f"💰 Сумма: {amount:.2f} ₽\n"
-        f"🏦 Банк: {bank_name}\n\n"
+        f"🏦 Банк: {bank_name}\n"
+        f"📱 Номер телефона: {phone_number}\n\n"
         f"Администратор обработает ваш запрос в течение 24 часов."
     )
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤝 Вернуться в кабинет", callback_data="show_partner_cabinet")],
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
     ])
-    
+
     await message.answer(text, reply_markup=kb)
-    
+
     # Уведомляем администратора
     user = await db.get_user(tg_id)
     admin_text = (
@@ -352,18 +386,19 @@ async def process_bank_name(message: Message, state: FSMContext):
         f"👤 Пользователь: <code>{tg_id}</code>\n"
         f"📝 Юзернейм: @{user.get('username', 'N/A')}\n"
         f"💰 Сумма: {amount:.2f} ₽\n"
-        f"🏦 Банк: {bank_name}\n\n"
+        f"🏦 Банк: {bank_name}\n"
+        f"📱 Номер телефона: {phone_number}\n\n"
         f"⏱ Время запроса: {datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S UTC')}"
     )
-    
+
     try:
         await message.bot.send_message(ADMIN_ID, admin_text)
         logger.info(f"Admin notified about withdrawal request from user {tg_id}")
     except Exception as e:
         logger.error(f"Failed to notify admin: {e}")
-    
+
     await state.clear()
-    logger.info(f"User {tg_id} created SBP withdrawal request: {amount} ₽ to {bank_name}")
+    logger.info(f"User {tg_id} created SBP withdrawal request: {amount} ₽ to {bank_name} ({phone_number})")
 
 
 @router.message(PartnershipStates.awaiting_usdt_address)

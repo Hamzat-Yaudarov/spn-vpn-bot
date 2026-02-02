@@ -139,6 +139,7 @@ async def run_migrations():
                     amount NUMERIC NOT NULL,
                     withdrawal_type TEXT NOT NULL,
                     bank_name TEXT,
+                    phone_number TEXT,
                     usdt_address TEXT,
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT now(),
@@ -206,6 +207,7 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_balance NUMERIC DEFAULT 0;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_earned_total NUMERIC DEFAULT 0;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_withdrawn_total NUMERIC DEFAULT 0;",
+                "ALTER TABLE partnership_withdrawals ADD COLUMN IF NOT EXISTS phone_number TEXT;",
             ]
 
             for query in alter_queries:
@@ -1061,16 +1063,16 @@ async def add_partnership_earnings(partner_tg_id: int, referred_tg_id: int, tari
     )
 
 
-async def create_withdrawal_request(partner_tg_id: int, amount: float, withdrawal_type: str, bank_name: str = None, usdt_address: str = None):
+async def create_withdrawal_request(partner_tg_id: int, amount: float, withdrawal_type: str, bank_name: str = None, phone_number: str = None, usdt_address: str = None):
     """Создать запрос на вывод средств"""
     from datetime import datetime
 
     await db_execute(
         """
-        INSERT INTO partnership_withdrawals (partner_tg_id, amount, withdrawal_type, bank_name, usdt_address)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO partnership_withdrawals (partner_tg_id, amount, withdrawal_type, bank_name, phone_number, usdt_address)
+        VALUES ($1, $2, $3, $4, $5, $6)
         """,
-        (partner_tg_id, amount, withdrawal_type, bank_name, usdt_address)
+        (partner_tg_id, amount, withdrawal_type, bank_name, phone_number, usdt_address)
     )
 
     # Вычитаем из баланса
