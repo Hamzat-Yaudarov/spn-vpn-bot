@@ -30,6 +30,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     args = message.text.split()
     referrer_id = None
     partner_id = None
+    is_partner_link = False
 
     logger.info(f"User {tg_id} triggered /start. Full message: '{message.text}', Args: {args}")
 
@@ -50,28 +51,42 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 referrer_id = None
 
         elif param.startswith("partner_"):
-            # Партнёрская ссылка
+            # Партнёрская ссылка (НЕ используем referrer_id для партнёрской программы!)
             logger.info(f"🤝 Processing partner link: {param}")
+            is_partner_link = True
             try:
                 partner_id = int(param.split("_")[1])
                 logger.info(f"Extracted partner_id: {partner_id}")
 
                 # Регистрируем партнёрскую ссылку
                 partner = await db.get_partner_info(partner_id)
-                logger.info(f"Partner info lookup result: {partner}")
+                logger.info(f"Partner info lookup: is_partner={partner is not None}, data={partner}")
 
                 if partner:
-                    if partner.get('is_partner'):
-                        await db.register_partnership_link(partner_id, tg_id)
-                        logger.info(f"✅ User {tg_id} joined via partner link from {partner_id}")
-                        logger.info(f"✅ Partnership link registered in database")
+                    is_partner_active = partner.get('is_partner', False)
+                    partnership_until = partner.get('partnership_until')
+                    logger.info(f"Partner status: is_partner={is_partner_active}, until={partnership_until}")
+
+                    if is_partner_active:
+                        from datetime import datetime
+                        # Проверяем, что партнёрство ещё активно
+                        if partnership_until and partnership_until > datetime.utcnow():
+                            await db.register_partnership_link(partner_id, tg_id)
+                            logger.info(f"✅ User {tg_id} joined via partner link from {partner_id}")
+                            logger.info(f"✅ Partnership link registered in database (partner_id={partner_id}, referred_id={tg_id})")
+                            # ВАЖНО: Не устанавливаем referrer_id для партнёрской программы!
+                            referrer_id = None
+                        else:
+                            logger.warning(f"⚠️ Partnership for {partner_id} is expired or no end date set")
                     else:
-                        logger.warning(f"⚠️ Partner {partner_id} exists but is_partner=False")
+                        logger.warning(f"⚠️ Partner {partner_id} is_partner flag is False")
                 else:
-                    logger.warning(f"⚠️ Partner {partner_id} not found in database")
+                    # Partner не найден в таблице или not is_partner
+                    logger.warning(f"⚠️ Partner {partner_id} not found or is not active partner (get_partner_info returned None)")
             except (ValueError, IndexError) as e:
                 logger.warning(f"❌ Failed to parse partner link: {param}, error: {e}")
                 partner_id = None
+                is_partner_link = False
         else:
             logger.warning(f"⚠️ Unknown parameter format: {param}")
     else:
@@ -79,6 +94,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     try:
         # Создаём пользователя если его нет
+        # ВАЖНО: Для партнёрской ссылки передаём referrer_id=None, чтобы не сработала реферальная логика!
         await db.create_user(tg_id, username, referrer_id)
 
         # Проверяем принял ли пользователь условия
