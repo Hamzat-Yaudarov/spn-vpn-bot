@@ -51,19 +51,19 @@ async def show_partnership_menu(callback: CallbackQuery, state: FSMContext):
     """Показать меню партнёрства или соглашение если это первый раз"""
     tg_id = callback.from_user.id
     logger.info(f"User {tg_id} clicked partnership button")
-    
+
     partner_info = await db.get_partner_info(tg_id)
-    
+
     if not partner_info:
         await callback.answer("❌ Вы не являетесь партнёром", show_alert=True)
         return
-    
+
     # Если соглашение ещё не принято, показываем его
     if not partner_info['partnership_accepted']:
         percent = partner_info['partnership_percent']
         agreement_url = get_agreement_url(percent)
         percent_label = get_percent_label(percent)
-        
+
         text = (
             f"📋 <b>Партнёрское соглашение</b>\n\n"
             f"{percent_label}\n\n"
@@ -72,14 +72,18 @@ async def show_partnership_menu(callback: CallbackQuery, state: FSMContext):
             f"📅 <b>Срок партнёрства:</b> до {partner_info['partnership_until'].strftime('%d.%m.%Y')}\n\n"
             f"<i>Нажмите кнопку ниже, чтобы прочитать и принять соглашение</i>"
         )
-        
+
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📄 Прочитать соглашение", url=agreement_url)],
             [InlineKeyboardButton(text="✅ Я принимаю соглашение", callback_data="accept_partnership")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
         ])
-        
-        await callback.message.edit_text(text, reply_markup=kb)
+
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception as e:
+            logger.warning(f"Could not edit message: {e}, sending new message instead")
+            await callback.message.answer(text, reply_markup=kb)
         logger.info(f"User {tg_id} shown partnership agreement")
     else:
         # Показываем личный кабинет
@@ -91,12 +95,12 @@ async def accept_partnership(callback: CallbackQuery):
     """Принять партнёрское соглашение"""
     tg_id = callback.from_user.id
     logger.info(f"User {tg_id} accepted partnership agreement")
-    
+
     await db.accept_partnership_agreement(tg_id)
-    
+
     # Генерируем партнёрскую ссылку
     partner_link = f"https://t.me/WaySPN_robot?start=partner_{tg_id}"
-    
+
     text = (
         "✅ <b>Соглашение принято!</b>\n\n"
         "🎉 Добро пожаловать в программу партнёрства SPN VPN!\n\n"
@@ -104,13 +108,17 @@ async def accept_partnership(callback: CallbackQuery):
         f"<code>{partner_link}</code>\n\n"
         "<i>Делитесь этой ссылкой, и получайте комиссию от каждого платежа приведённых вами пользователей!</i>"
     )
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤝 Открыть личный кабинет", callback_data="show_partner_cabinet")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
-    
-    await callback.message.edit_text(text, reply_markup=kb)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}, sending new message instead")
+        await callback.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "show_partner_cabinet")
@@ -123,29 +131,29 @@ async def show_partner_cabinet_callback(callback: CallbackQuery, state: FSMConte
 async def show_partner_cabinet(callback_or_message, tg_id: int, state: FSMContext):
     """Показать личный кабинет партнёра"""
     partner_info = await db.get_partner_info(tg_id)
-    
+
     if not partner_info:
         await callback_or_message.answer("❌ Вы не являетесь партнёром", show_alert=True)
         return
-    
+
     # Получаем статистику
     stats = await db.get_partnership_stats(tg_id)
-    
+
     # Рассчитываем оставшееся время
     now = datetime.utcnow()
     partnership_until = partner_info['partnership_until']
     time_left = partnership_until - now
-    
+
     if time_left.total_seconds() > 0:
         days_left = time_left.days
         hours_left = time_left.seconds // 3600
         time_str = f"{days_left} дн. {hours_left} ч."
     else:
         time_str = "⚠️ Истекло"
-    
+
     # Генерируем партнёрскую ссылку
     partner_link = f"https://t.me/WaySPN_robot?start=partner_{tg_id}"
-    
+
     text = (
         f"🤝 <b>Личный кабинет партнёра</b>\n\n"
         f"<b>📊 Статистика:</b>\n"
@@ -165,10 +173,10 @@ async def show_partner_cabinet(callback_or_message, tg_id: int, state: FSMContex
         f"<b>🔗 Ваша партнёрская ссылка:</b>\n"
         f"<code>{partner_link}</code>"
     )
-    
+
     # Проверяем может ли партнёр выводить (минимум 5000 рублей)
     can_withdraw = partner_info['partner_balance'] >= 5000
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="💳 Вывод на карту по СБП",
@@ -180,12 +188,21 @@ async def show_partner_cabinet(callback_or_message, tg_id: int, state: FSMContex
         )],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
     ])
-    
-    if hasattr(callback_or_message, 'message'):
-        await callback_or_message.message.edit_text(text, reply_markup=kb)
-    else:
-        await callback_or_message.edit_text(text, reply_markup=kb)
-    
+
+    try:
+        if hasattr(callback_or_message, 'message'):
+            await callback_or_message.message.edit_text(text, reply_markup=kb)
+        else:
+            await callback_or_message.edit_text(text, reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}, sending new message instead")
+        if hasattr(callback_or_message, 'message'):
+            # It's a CallbackQuery
+            await callback_or_message.message.answer(text, reply_markup=kb)
+        else:
+            # Shouldn't happen, but fallback
+            await callback_or_message.answer(text, reply_markup=kb)
+
     await state.clear()
     logger.info(f"User {tg_id} opened partner cabinet")
 
@@ -206,16 +223,21 @@ async def withdraw_sbp_start(callback: CallbackQuery, state: FSMContext):
     """Начать процесс вывода на СБП"""
     tg_id = callback.from_user.id
     logger.info(f"User {tg_id} started SBP withdrawal")
-    
+
     user = await db.get_user(tg_id)
-    
+
     text = (
         f"💳 <b>Вывод на карту по СБП</b>\n\n"
         f"💰 Доступный баланс: <b>{float(user['partner_balance']):.2f} ₽</b>\n\n"
         f"<i>Введите сумму вывода (минимум 5000 ₽):</i>"
     )
-    
-    await callback.message.edit_text(text)
+
+    try:
+        await callback.message.edit_text(text)
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}, sending new message instead")
+        await callback.message.answer(text)
+
     await state.set_state(PartnershipStates.awaiting_withdrawal_amount)
     state_data = await state.get_data()
     state_data['withdrawal_type'] = 'sbp'
@@ -227,16 +249,21 @@ async def withdraw_usdt_start(callback: CallbackQuery, state: FSMContext):
     """Начать процесс вывода в USDT"""
     tg_id = callback.from_user.id
     logger.info(f"User {tg_id} started USDT withdrawal")
-    
+
     user = await db.get_user(tg_id)
-    
+
     text = (
         f"💰 <b>Вывод в USDT</b>\n\n"
         f"💵 Доступный баланс: <b>{float(user['partner_balance']):.2f} ₽</b>\n\n"
         f"<i>Введите сумму вывода (минимум 5000 ₽):</i>"
     )
-    
-    await callback.message.edit_text(text)
+
+    try:
+        await callback.message.edit_text(text)
+    except Exception as e:
+        logger.warning(f"Could not edit message: {e}, sending new message instead")
+        await callback.message.answer(text)
+
     await state.set_state(PartnershipStates.awaiting_withdrawal_amount)
     state_data = await state.get_data()
     state_data['withdrawal_type'] = 'usdt'
