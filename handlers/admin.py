@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from config import ADMIN_ID, DEFAULT_SQUAD_UUID
+from config import ADMIN_ID, DEFAULT_SQUAD_UUID, REMNAWAVE_BASE_URL, REMNAWAVE_API_TOKEN
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
@@ -500,54 +500,43 @@ async def admin_take_sub(message: Message):
         else:
             new_subscription_until = subscription_until - timedelta(days=days)
 
-        # Обновляем подписку в БД
-        await db.db_execute(
-            """
-            UPDATE users
-            SET subscription_until = $1,
-                next_notification_time = NULL,
-                notification_type = NULL
-            WHERE tg_id = $2
-            """,
-            (new_subscription_until, tg_id)
-        )
-
-        # Обновляем подписку в Remnawave API
+        # Обновляем подписку в БД И в Remnawave API
         remnawave_uuid = user.get('remnawave_uuid')
+        remnawave_username = user.get('remnawave_username')
+        squad_uuid = user.get('squad_uuid')
+
+        # Используем встроенную функцию которая обновляет всё правильно
+        await db.update_subscription(tg_id, remnawave_uuid, remnawave_username, new_subscription_until, squad_uuid)
+
+        # Дополнительно обновляем Remnawave API напрямую чтобы убедиться
         if remnawave_uuid:
             try:
+                # Обновляем expireAt на новое время через PATCH запрос
+                payload = {
+                    "uuid": remnawave_uuid,
+                    "expireAt": new_subscription_until.isoformat()
+                }
+
+                headers = {
+                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+
                 connector = aiohttp.TCPConnector(ssl=False)
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                    # Берём текущего пользователя из Remnawave
-                    from services.remnawave import remnawave_get_user_info
-                    user_info = await remnawave_get_user_info(session, remnawave_uuid)
-
-                    if user_info:
-                        # Обновляем expireAt на новое время
-                        from config import REMNAWAVE_BASE_URL, REMNAWAVE_API_TOKEN
-
-                        payload = {
-                            "uuid": remnawave_uuid,
-                            "expireAt": new_subscription_until.isoformat()
-                        }
-
-                        headers = {
-                            "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
-                            "Content-Type": "application/json"
-                        }
-
-                        async with session.patch(
-                            f"{REMNAWAVE_BASE_URL}/users",
-                            headers=headers,
-                            json=payload
-                        ) as resp:
-                            if resp.status == 200:
-                                logger.info(f"Updated Remnawave subscription for user {tg_id}")
-                            else:
-                                logger.warning(f"Failed to update Remnawave subscription: {resp.status}")
+                    async with session.patch(
+                        f"{REMNAWAVE_BASE_URL}/users",
+                        headers=headers,
+                        json=payload
+                    ) as resp:
+                        if resp.status == 200:
+                            logger.info(f"✅ Updated Remnawave subscription for user {tg_id} to {new_subscription_until}")
+                        else:
+                            error_text = await resp.text()
+                            logger.warning(f"❌ Failed to update Remnawave subscription for {tg_id}: {resp.status} - {error_text}")
             except Exception as e:
-                logger.warning(f"Could not update Remnawave subscription for user {tg_id}: {e}")
+                logger.error(f"❌ Could not update Remnawave subscription for user {tg_id}: {e}", exc_info=True)
                 # Не блокируем процесс если Remnawave недоступен
 
         new_days_left = max(0, int((new_subscription_until - now).total_seconds() / 86400))
