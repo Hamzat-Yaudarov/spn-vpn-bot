@@ -172,6 +172,37 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
                 logging.error(f"Error processing referral for user {tg_id}: {e}")
                 # Реферальная ошибка не должна блокировать основной платеж
 
+            # Обрабатываем партнёрскую программу
+            try:
+                # Ищем партнёра для этого пользователя через partnership_referrals
+                partner_referral = await db.db_execute(
+                    "SELECT partner_tg_id FROM partnership_referrals WHERE user_tg_id = $1 LIMIT 1",
+                    (tg_id,),
+                    fetch_one=True
+                )
+
+                if partner_referral:
+                    partner_tg_id = partner_referral['partner_tg_id']
+                    partnership = await db.get_partnership(partner_tg_id)
+
+                    if partnership and partnership.get('agreement_accepted'):
+                        # Записываем заработок партнёра
+                        amount = TARIFFS[tariff_code]["price"]
+                        percentage = partnership.get('percentage', 0)
+                        commission = (amount * percentage) / 100
+
+                        await db.record_partnership_earning(
+                            partner_tg_id,
+                            tg_id,
+                            tariff_code,
+                            amount,
+                            commission
+                        )
+                        logging.info(f"Partnership earning recorded for partner {partner_tg_id}: {commission}₽")
+            except Exception as e:
+                logging.error(f"Error processing partnership for user {tg_id}: {e}")
+                # Партнёрская ошибка не должна блокировать основной платеж
+
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
