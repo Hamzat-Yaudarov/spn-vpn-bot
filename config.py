@@ -20,6 +20,17 @@ NEWS_CHANNEL_USERNAME = os.getenv("NEWS_CHANNEL_USERNAME", "")
 TELEGRAPH_AGREEMENT_URL = os.getenv("TELEGRAPH_AGREEMENT_URL", "")
 
 # ────────────────────────────────────────────────
+#           PARTNERSHIP AGREEMENT URLs
+# ────────────────────────────────────────────────
+
+PARTNERSHIP_AGREEMENTS = {
+    15: os.getenv("PARTNERSHIP_AGREEMENT_15", ""),
+    20: os.getenv("PARTNERSHIP_AGREEMENT_20", ""),
+    25: os.getenv("PARTNERSHIP_AGREEMENT_25", ""),
+    30: os.getenv("PARTNERSHIP_AGREEMENT_30", "")
+}
+
+# ────────────────────────────────────────────────
 #              REMNAWAVE API CONFIG
 # ────────────────────────────────────────────────
 

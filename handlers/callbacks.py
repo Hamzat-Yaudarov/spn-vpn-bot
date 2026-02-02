@@ -43,15 +43,24 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} returned to main menu")
 
     await state.clear()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    is_partner = await db.is_partner(tg_id)
+
+    keyboard = [
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)]
-    ])
+    ]
+
+    # Добавляем кнопку партнёрства если пользователь партнёр
+    if is_partner:
+        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership")])
+
+    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
         "<b>SPN — стабильное и быстрое интернет-соединение</b>\n\n"

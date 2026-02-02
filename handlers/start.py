@@ -21,34 +21,26 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     tg_id = message.from_user.id
     username = message.from_user.username
 
-    # Проверяем наличие реферальной или партнёрской ссылки
+    # Проверяем наличие реферальной ссылки или партнёрской ссылки
     args = message.text.split()
     referrer_id = None
-    partner_referrer_id = None
+    partner_id = None
 
     if len(args) > 1:
-        link_param = args[1]
-
-        # Проверяем реферальную ссылку
-        if link_param.startswith("ref_"):
+        if args[1].startswith("ref_"):
             try:
-                referrer_id = int(link_param.split("_")[1])
+                referrer_id = int(args[1].split("_")[1])
                 await db.update_referral_count(referrer_id)
                 logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
             except (ValueError, IndexError):
                 referrer_id = None
-
-        # Проверяем партнёрскую ссылку
-        elif link_param.startswith("partner_"):
+        elif args[1].startswith("partner_"):
             try:
-                partner_link_id = link_param.split("_", 1)[1]
-                partnership = await db.get_partnership_by_link(partner_link_id)
-                if partnership:
-                    partner_referrer_id = partnership['tg_id']
-                    await db.record_partnership_referral(partner_referrer_id, tg_id)
-                    logging.info(f"User {tg_id} joined via partnership link from {partner_referrer_id}")
+                partner_id = int(args[1].split("_")[1])
+                await db.add_partner_referral(partner_id, tg_id)
+                logging.info(f"User {tg_id} joined via partner link from {partner_id}")
             except (ValueError, IndexError):
-                partner_referrer_id = None
+                partner_id = None
 
     # Создаём пользователя если его нет
     await db.create_user(tg_id, username, referrer_id)
@@ -68,19 +60,12 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         await show_main_menu(message)
 
 
-async def show_main_menu(message: Message, bot: Bot = None):
+async def show_main_menu(message: Message):
     """Показать главное меню"""
     tg_id = message.from_user.id
+    is_partner = await db.is_partner(tg_id)
 
-    # Проверяем есть ли партнёрская программа
-    is_partner = False
-    try:
-        partnership = await db.get_partnership(tg_id)
-        is_partner = partnership is not None
-    except:
-        pass
-
-    buttons = [
+    keyboard = [
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
@@ -91,11 +76,11 @@ async def show_main_menu(message: Message, bot: Bot = None):
 
     # Добавляем кнопку партнёрства если пользователь партнёр
     if is_partner:
-        buttons.insert(5, [InlineKeyboardButton(text="💼 Партнёрство", callback_data="partnership")])
+        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership")])
 
-    buttons.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)])
+    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)])
 
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
         "<b>SPN — стабильное и быстрое интернет-соединение</b>\n\n"

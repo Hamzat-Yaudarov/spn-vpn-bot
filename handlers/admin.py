@@ -1,6 +1,5 @@
 import logging
 import aiohttp
-import uuid
 from datetime import datetime, timedelta, timezone
 from aiogram import Router
 from aiogram.filters import Command
@@ -221,6 +220,95 @@ async def admin_give_sub(message: Message):
         await db.release_user_lock(tg_id)
 
 
+@router.message(Command("enable_collab"))
+async def admin_enable_collab(message: Message):
+    """Админ команда: активировать партнёрство"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning(f"Unauthorized /enable_collab attempt from user {admin_id}")
+        return
+
+    parts = message.text.split()
+
+    # Валидация количества аргументов
+    if len(parts) < 3:
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /enable_collab ТГ_ИД %\n\n"
+            "<b>Параметры:</b>\n"
+            "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
+            "• <code>%</code> - процент дохода (15, 20, 25 или 30)\n\n"
+            "<b>Пример:</b> /enable_collab 123456789 20"
+        )
+        logger.warning(f"Admin {admin_id} /enable_collab - wrong number of arguments: {len(parts)-1}")
+        return
+
+    try:
+        tg_id = int(parts[1])
+        percentage = int(parts[2])
+
+        # Валидация значений
+        if tg_id <= 0:
+            await message.answer("❌ ID пользователя должен быть положительным числом")
+            return
+
+        if percentage not in [15, 20, 25, 30]:
+            await message.answer("❌ Процент должен быть одним из: 15, 20, 25, 30")
+            return
+
+        if tg_id == admin_id:
+            await message.answer("❌ Нельзя активировать партнёрство самому себе")
+            logger.warning(f"Admin {admin_id} tried to enable collab for themselves")
+            return
+
+    except ValueError:
+        await message.answer(
+            "❌ <b>Ошибка валидации</b>\n\n"
+            "Убедитесь, что:\n"
+            "• ТГ_ИД и % - целые числа\n"
+            "• % - одно из: 15, 20, 25, 30\n\n"
+            "<b>Пример:</b> /enable_collab 123456789 20"
+        )
+        logger.warning(f"Admin {admin_id} /enable_collab - parsing error for arguments: {parts[1:]}")
+        return
+
+    # Убедимся что пользователь существует в БД
+    if not await db.user_exists(tg_id):
+        await db.create_user(tg_id, f"user_{tg_id}")
+        logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
+
+    # Создаём партнёрство
+    await db.create_partnership(tg_id, percentage)
+
+    await message.answer(
+        f"✅ <b>Партнёрство активировано!</b>\n\n"
+        f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+        f"💯 <b>Процент дохода:</b> {percentage}%\n"
+        f"<b>Статус:</b> активно"
+    )
+
+    # Уведомляем пользователя
+    try:
+        await message.bot.send_message(
+            tg_id,
+            f"🎉 <b>Поздравляем!</b>\n\n"
+            f"Вы активированы как партнёр нашего сервиса!\n\n"
+            f"💯 <b>Ваш процент дохода:</b> <b>{percentage}%</b>\n\n"
+            f"В главном меню появилась новая кнопка 'Партнёрство' — нажмите на неё, чтобы начать зарабатывать! 💰"
+        )
+        logger.info(f"User {tg_id} notified about partnership activation by admin {admin_id}")
+    except Exception as e:
+        logger.warning(f"Failed to notify user {tg_id}: {e}")
+        await message.answer(
+            f"⚠️ Партнёрство активировано, но не удалось отправить уведомление пользователю\n"
+            f"(Ошибка: {str(e)[:50]})"
+        )
+
+    logger.info(f"Admin {admin_id} enabled collab for user {tg_id} with percentage {percentage}")
+
+
 @router.message(Command("stats"))
 async def admin_stats(message: Message):
     """Админ команда: получить статистику"""
@@ -247,100 +335,3 @@ async def admin_stats(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при получении статистики: {str(e)[:100]}")
         logger.error(f"Error getting stats for admin {admin_id}: {e}")
-
-
-@router.message(Command("enable_collab"))
-async def admin_enable_collab(message: Message):
-    """Админ команда: включить партнёрскую программу для пользователя"""
-    admin_id = message.from_user.id
-
-    if not is_admin(admin_id):
-        await message.answer("❌ Эта команда доступна только администратору")
-        logger.warning(f"Unauthorized /enable_collab attempt from user {admin_id}")
-        return
-
-    parts = message.text.split()
-
-    # Валидация количества аргументов
-    if len(parts) < 3:
-        await message.answer(
-            "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /enable_collab ТГ_ИД ПРОЦЕНТ\n\n"
-            "<b>Параметры:</b>\n"
-            "• <code>ТГ_ИД</code> - ID пользователя Telegram\n"
-            "• <code>ПРОЦЕНТ</code> - процент комиссии (15, 20, 25 или 30)\n\n"
-            "<b>Пример:</b> /enable_collab 123456789 20"
-        )
-        logger.warning(f"Admin {admin_id} /enable_collab - wrong number of arguments: {len(parts)-1}")
-        return
-
-    try:
-        tg_id = int(parts[1])
-        percentage = int(parts[2])
-
-        # Валидация значений
-        if tg_id <= 0:
-            await message.answer("❌ ID пользователя должен быть положительным числом")
-            return
-
-        if percentage not in [15, 20, 25, 30]:
-            await message.answer("❌ Процент должен быть одним из: 15, 20, 25, 30")
-            return
-
-        if tg_id == admin_id:
-            await message.answer("❌ Нельзя включить партнёрскую программу самому себе")
-            logger.warning(f"Admin {admin_id} tried to enable partnership for themselves")
-            return
-
-    except ValueError:
-        await message.answer(
-            "❌ <b>Ошибка валидации</b>\n\n"
-            "Убедитесь, что:\n"
-            "• ТГ_ИД и ПРОЦЕНТ - целые числа\n"
-            "• ПРОЦЕНТ входит в набор: 15, 20, 25, 30\n\n"
-            "<b>Пример:</b> /enable_collab 123456789 20"
-        )
-        logger.warning(f"Admin {admin_id} /enable_collab - parsing error for arguments: {parts[1:]}")
-        return
-
-    # Проверяем существует ли пользователь
-    if not await db.user_exists(tg_id):
-        await message.answer(f"❌ Пользователь с ID {tg_id} не найден в системе")
-        logger.warning(f"Admin {admin_id} tried to enable partnership for non-existent user {tg_id}")
-        return
-
-    try:
-        # Создаём уникальный ID партнёрской ссылки
-        partner_link_id = str(uuid.uuid4())[:8]
-
-        # Включаем партнёрскую программу
-        await db.enable_partnership(tg_id, percentage, partner_link_id)
-
-        await message.answer(
-            f"✅ <b>Партнёрская программа включена!</b>\n\n"
-            f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
-            f"📊 <b>Процент комиссии:</b> {percentage}%\n"
-            f"🔗 <b>ID партнёрской ссылки:</b> <code>{partner_link_id}</code>"
-        )
-
-        # Уведомляем пользователя
-        try:
-            await message.bot.send_message(
-                tg_id,
-                f"🎉 <b>Поздравляем!</b>\n\n"
-                f"Вы включены в <b>партнёрскую программу</b> с комиссией <b>{percentage}%</b>\n\n"
-                f"Посетите главное меню и нажмите на кнопку <b>«Партнёрство»</b> чтобы начать!"
-            )
-            logger.info(f"User {tg_id} notified about partnership enabled by admin {admin_id}")
-        except Exception as e:
-            logger.warning(f"Failed to notify user {tg_id}: {e}")
-            await message.answer(
-                f"⚠️ Программа включена, но не удалось отправить уведомление пользователю\n"
-                f"(Ошибка: {str(e)[:50]})"
-            )
-
-        logger.info(f"Admin {admin_id} enabled partnership for user {tg_id} with {percentage}% commission")
-
-    except Exception as e:
-        logger.error(f"Enable partnership error: {e}")
-        await message.answer(f"❌ Ошибка: {str(e)[:100]}")

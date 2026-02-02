@@ -174,33 +174,33 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
 
             # Обрабатываем партнёрскую программу
             try:
-                # Ищем партнёра для этого пользователя через partnership_referrals
-                partner_referral = await db.db_execute(
-                    "SELECT partner_tg_id FROM partnership_referrals WHERE user_tg_id = $1 LIMIT 1",
+                amount = TARIFFS[tariff_code]["price"]
+                # Проверяем, был ли пользователь приведён партнёром
+                partner_result = await db.db_execute(
+                    """
+                    SELECT DISTINCT partner_id FROM partner_referrals
+                    WHERE referred_user_id = $1
+                    LIMIT 1
+                    """,
                     (tg_id,),
                     fetch_one=True
                 )
 
-                if partner_referral:
-                    partner_tg_id = partner_referral['partner_tg_id']
-                    partnership = await db.get_partnership(partner_tg_id)
-
-                    if partnership and partnership.get('agreement_accepted'):
-                        # Записываем заработок партнёра
-                        amount = TARIFFS[tariff_code]["price"]
-                        percentage = partnership.get('percentage', 0)
-                        commission = (amount * percentage) / 100
-
-                        await db.record_partnership_earning(
-                            partner_tg_id,
+                if partner_result:
+                    partner_id = partner_result['partner_id']
+                    partnership = await db.get_partnership(partner_id)
+                    if partnership:
+                        # Добавляем заработок партнёру
+                        await db.add_partner_earning(
+                            partner_id,
                             tg_id,
                             tariff_code,
                             amount,
-                            commission
+                            partnership['percentage']
                         )
-                        logging.info(f"Partnership earning recorded for partner {partner_tg_id}: {commission}₽")
+                        logging.info(f"Partner earning recorded: {partner_id} earned from {tg_id} ({amount}₽, {partnership['percentage']}%)")
             except Exception as e:
-                logging.error(f"Error processing partnership for user {tg_id}: {e}")
+                logging.error(f"Error processing partner earnings for user {tg_id}: {e}")
                 # Партнёрская ошибка не должна блокировать основной платеж
 
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
