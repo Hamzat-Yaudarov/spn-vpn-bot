@@ -176,36 +176,6 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
 
-            # Обрабатываем партнёрскую программу
-            try:
-                from datetime import datetime as dt
-                # Проверяем есть ли партнёрская ссылка для этого пользователя
-                partnership_link = await db.db_execute(
-                    "SELECT partner_tg_id FROM partnership_links WHERE referred_tg_id = $1",
-                    (tg_id,),
-                    fetch_one=True
-                )
-
-                if partnership_link:
-                    partner_tg_id = partnership_link['partner_tg_id']
-                    partner_info = await db.get_partner_info(partner_tg_id)
-
-                    # Проверяем активно ли партнёрство
-                    if partner_info and partner_info['partnership_until'] > dt.utcnow():
-                        commission_percent = partner_info['partnership_percent']
-                        commission_amount = (amount * commission_percent) / 100
-
-                        # Начисляем комиссию партнёру
-                        await db.add_partnership_earnings(
-                            partner_tg_id, tg_id, tariff_code, amount, commission_amount, invoice_id
-                        )
-                        logging.info(f"Partnership commission added to {partner_tg_id}: {commission_amount:.2f} ₽ ({commission_percent}%)")
-                    else:
-                        logging.info(f"Partnership for user {partner_tg_id} is not active")
-            except Exception as e:
-                logging.error(f"Error processing partnership for user {tg_id}: {e}")
-                # Партнёрская ошибка не должна блокировать основной платеж
-
             # Только после успешных операций отмечаем платеж как paid
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
 

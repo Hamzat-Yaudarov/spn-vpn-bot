@@ -99,12 +99,3 @@ API_REQUEST_TIMEOUT = 30  # timeout для HTTP запросов в секунд
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8000"))
 WEBHOOK_USE_POLLING = os.getenv("WEBHOOK_USE_POLLING", "False").lower() == "true"  # Fallback на polling
-
-# ────────────────────────────────────────────────
-#         PARTNERSHIP AGREEMENTS URLS
-# ────────────────────────────────────────────────
-
-PARTNERSHIP_AGREEMENT_15 = os.getenv("PARTNERSHIP_AGREEMENT_15", "")
-PARTNERSHIP_AGREEMENT_20 = os.getenv("PARTNERSHIP_AGREEMENT_20", "")
-PARTNERSHIP_AGREEMENT_25 = os.getenv("PARTNERSHIP_AGREEMENT_25", "")
-PARTNERSHIP_AGREEMENT_30 = os.getenv("PARTNERSHIP_AGREEMENT_30", "")

@@ -109,40 +109,6 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             await db.update_subscription(tg_id, uuid, username, new_until, None)
             logger.info(f"✅ Subscription updated for user {tg_id} until {new_until}")
 
-            # Обрабатываем партнёрские комиссии если пользователь пришёл от партнёра
-            try:
-                from config import TARIFFS
-                payment_amount = TARIFFS[tariff_code]["price"]
-
-                # Проверяем есть ли партнёр для этого пользователя
-                from database import db_execute
-                partner_link = await db_execute(
-                    "SELECT partner_tg_id FROM partnership_links WHERE referred_tg_id = $1",
-                    (tg_id,),
-                    fetch_one=True
-                )
-
-                if partner_link:
-                    partner_tg_id = partner_link['partner_tg_id']
-                    partner = await db.get_partner_info(partner_tg_id)
-
-                    if partner and partner['is_partner'] and partner['partnership_percent']:
-                        # Вычисляем комиссию
-                        commission = (payment_amount * partner['partnership_percent']) / 100
-
-                        # Добавляем доход партнёру
-                        await db.add_partnership_earnings(
-                            partner_tg_id=partner_tg_id,
-                            referred_tg_id=tg_id,
-                            tariff_code=tariff_code,
-                            amount=payment_amount,
-                            commission=commission,
-                            payment_invoice_id=invoice_id
-                        )
-                        logger.info(f"✅ Partner commission added: {partner_tg_id} earned {commission:.2f} ₽ from user {tg_id}")
-            except Exception as e:
-                logger.error(f"❌ Error processing partner commission: {e}")
-
             # Только после успешных операций отмечаем платеж как paid
             await db.update_payment_status_by_invoice(invoice_id, 'paid')
             logger.info(f"✅ Payment marked as paid in database: {invoice_id}")
