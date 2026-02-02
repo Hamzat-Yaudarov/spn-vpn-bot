@@ -490,20 +490,33 @@ async def admin_take_sub(message: Message):
         subscription_until = user['subscription_until']
         now = datetime.utcnow()
 
-        # Время осталось в подписке (рассчитываем в днях более точно)
+        # Время осталось в подписке (в целых днях)
         time_left = subscription_until - now
-        days_left = time_left.total_seconds() / 86400  # Количество дней (с учётом часов/минут/секунд)
+        days_left = time_left.days  # Только полные дни
 
-        # Если ДНЕЙ больше или равно чем осталось, сбрасываем до 1 минуты
-        if days >= days_left:
+        logger.info(f"📊 TAKE_SUB CALC: subscription_until={subscription_until}, now={now}, days_to_remove={days}, days_left={days_left}")
+
+        # Если осталось отрицательное время (подписка уже истекла), сбрасываем на 1 минуту
+        if time_left.total_seconds() <= 0:
             new_subscription_until = now + timedelta(minutes=1)
+            logger.info(f"📊 Case 1: Subscription already expired, resetting to 1 minute")
+        # Если ДНЕЙ больше или равно чем осталось, сбрасываем до 1 минуты
+        elif days >= days_left:
+            new_subscription_until = now + timedelta(minutes=1)
+            logger.info(f"📊 Case 2: days_to_remove ({days}) >= days_left ({days_left}), resetting to 1 minute")
         else:
+            # Иначе вычитаем дни из текущего времени окончания подписки
             new_subscription_until = subscription_until - timedelta(days=days)
+            logger.info(f"📊 Case 3: Normal case, subtracting {days} days from {subscription_until}")
+
+        logger.info(f"📊 NEW subscription_until will be: {new_subscription_until}")
 
         # Обновляем подписку в БД И в Remnawave API
         remnawave_uuid = user.get('remnawave_uuid')
         remnawave_username = user.get('remnawave_username')
         squad_uuid = user.get('squad_uuid')
+
+        logger.info(f"📊 Calling db.update_subscription with: uuid={remnawave_uuid}, subscription_until={new_subscription_until}")
 
         # Используем встроенную функцию которая обновляет всё правильно
         await db.update_subscription(tg_id, remnawave_uuid, remnawave_username, new_subscription_until, squad_uuid)
