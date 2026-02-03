@@ -189,6 +189,8 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             # Обрабатываем партнёрскую программу
             try:
                 amount = TARIFFS[tariff_code]["price"]
+                logging.info(f"Checking for partner referral for user {tg_id}")
+
                 # Проверяем, был ли пользователь приведён партнёром
                 partner_result = await db.db_execute(
                     """
@@ -202,8 +204,12 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
 
                 if partner_result:
                     partner_id = partner_result['partner_id']
+                    logging.info(f"Found partner {partner_id} for referred user {tg_id}")
+
                     partnership = await db.get_partnership(partner_id)
                     if partnership:
+                        logging.info(f"Partnership found: partner_id={partner_id}, percentage={partnership['percentage']}")
+
                         # Добавляем заработок партнёру
                         await db.add_partner_earning(
                             partner_id,
@@ -212,9 +218,13 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
                             amount,
                             partnership['percentage']
                         )
-                        logging.info(f"Partner earning recorded: {partner_id} earned from {tg_id} ({amount}₽, {partnership['percentage']}%)")
+                        logging.info(f"✅ Partner earning recorded: {partner_id} earned {amount * partnership['percentage'] / 100}₽ from {tg_id} ({amount}₽ × {partnership['percentage']}%)")
+                    else:
+                        logging.warning(f"Partnership not found for partner_id {partner_id}")
+                else:
+                    logging.debug(f"No partner referral found for user {tg_id}")
             except Exception as e:
-                logging.error(f"Error processing partner earnings for user {tg_id}: {e}")
+                logging.error(f"Error processing partner earnings for user {tg_id}: {e}", exc_info=True)
                 # Партнёрская ошибка не должна блокировать основной платеж
 
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)

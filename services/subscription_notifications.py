@@ -34,12 +34,16 @@ async def check_and_send_notifications(bot):
 async def _send_notifications_batch(bot):
     """Отправить уведомления пользователям у которых скоро закончится подписка"""
     try:
+        now = datetime.utcnow()
+        logger.debug(f"Checking notifications at {now}")
+
         users = await db.get_users_needing_notification()
-        
+
         if not users:
+            logger.debug("No users needing notification")
             return
-        
-        logger.info(f"📤 Found {len(users)} users to notify")
+
+        logger.info(f"📤 Found {len(users)} users to notify at {now}")
         
         for user in users:
             try:

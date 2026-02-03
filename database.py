@@ -984,7 +984,27 @@ async def get_users_needing_notification():
     """
     from datetime import datetime
 
-    return await db_execute(
+    now = datetime.utcnow()
+
+    # Сначала получаем всех с установленным временем уведомления для логирования
+    all_with_notifications = await db_execute(
+        """
+        SELECT tg_id, next_notification_time, subscription_until, notification_type
+        FROM users
+        WHERE next_notification_time IS NOT NULL
+        AND subscription_until IS NOT NULL
+        ORDER BY next_notification_time ASC
+        """,
+        fetch_all=True
+    )
+
+    if all_with_notifications:
+        logging.debug(f"Total users with notifications set: {len(all_with_notifications)}")
+        for user in all_with_notifications[:5]:  # Показываем первых 5
+            logging.debug(f"  User {user['tg_id']}: notification_time={user['next_notification_time']}, subscription_until={user['subscription_until']}, type={user['notification_type']}")
+
+    # Теперь получаем только тех кому нужно отправить уведомление
+    result = await db_execute(
         """
         SELECT tg_id, remnawave_uuid, subscription_until, notification_type
         FROM users
@@ -993,9 +1013,14 @@ async def get_users_needing_notification():
         AND subscription_until IS NOT NULL
         ORDER BY next_notification_time ASC
         """,
-        (datetime.utcnow(),),
+        (now,),
         fetch_all=True
     )
+
+    if result:
+        logging.info(f"Users needing notification (now={now}): {len(result)}")
+
+    return result
 
 
 async def mark_notification_sent(tg_id: int):
@@ -1006,6 +1031,7 @@ async def mark_notification_sent(tg_id: int):
     user = await get_user(tg_id)
     if not user or not user.get('subscription_until'):
         # Если подписки нет, очищаем поле уведомления
+        logging.info(f"No subscription for user {tg_id}, clearing notifications")
         await db_execute(
             """
             UPDATE users
@@ -1020,6 +1046,7 @@ async def mark_notification_sent(tg_id: int):
 
     # Определяем следующее уведомление в зависимости от текущего типа
     current_type = user.get('notification_type')
+    logging.info(f"User {tg_id} notification sent, current_type={current_type}, subscription_until={subscription_until}")
 
     if current_type == "1day_left":
         # Если было уведомление "1.5 дня осталось", следующее будет "1 день осталось"
@@ -1035,6 +1062,8 @@ async def mark_notification_sent(tg_id: int):
         # Если это первое уведомление или что-то странное, просто очищаем
         next_notification = None
         next_type = None
+
+    logging.info(f"User {tg_id} next notification will be at {next_notification}, type={next_type}")
 
     await db_execute(
         """
