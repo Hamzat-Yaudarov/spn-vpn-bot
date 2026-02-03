@@ -104,6 +104,47 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             except Exception as e:
                 logger.error(f"❌ Error processing referral for user {tg_id}: {e}")
 
+            # Обрабатываем партнёрскую программу
+            try:
+                amount = TARIFFS[tariff_code]["price"]
+                logger.info(f"🔍 Checking for partner referral for user {tg_id}")
+
+                # Проверяем, был ли пользователь приведён партнёром
+                partner_result = await db.db_execute(
+                    """
+                    SELECT DISTINCT partner_id FROM partner_referrals
+                    WHERE referred_user_id = $1
+                    LIMIT 1
+                    """,
+                    (tg_id,),
+                    fetch_one=True
+                )
+
+                if partner_result:
+                    partner_id = partner_result['partner_id']
+                    logger.info(f"👥 Found partner {partner_id} for referred user {tg_id}")
+
+                    partnership = await db.get_partnership(partner_id)
+                    if partnership:
+                        logger.info(f"📊 Partnership found: partner_id={partner_id}, percentage={partnership['percentage']}")
+
+                        # Добавляем заработок партнёру
+                        await db.add_partner_earning(
+                            partner_id,
+                            tg_id,
+                            tariff_code,
+                            amount,
+                            partnership['percentage']
+                        )
+                        earned = amount * partnership['percentage'] / 100
+                        logger.info(f"💰 Partner earning recorded: {partner_id} earned {earned}₽ from {tg_id} ({amount}₽ × {partnership['percentage']}%)")
+                    else:
+                        logger.warning(f"⚠️ Partnership not found for partner_id {partner_id}")
+                else:
+                    logger.debug(f"ℹ️ No partner referral found for user {tg_id}")
+            except Exception as e:
+                logger.error(f"❌ Error processing partner earnings for user {tg_id}: {e}", exc_info=True)
+
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
             new_until = datetime.utcnow() + timedelta(days=days)
             await db.update_subscription(tg_id, uuid, username, new_until, None)
