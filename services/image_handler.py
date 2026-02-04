@@ -136,6 +136,43 @@ async def send_text_with_photo(
         await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 
+async def send_text_with_photo_callback(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+    message_key: str,
+    parse_mode: ParseMode = ParseMode.HTML
+):
+    """
+    Отправить новое сообщение через callback с текстом и изображением
+
+    Args:
+        callback: CallbackQuery объект
+        text: Текст сообщения
+        reply_markup: Клавиатура с кнопками
+        message_key: Ключ для получения пути к изображению
+        parse_mode: Режим парсинга текста
+    """
+    image_path = get_image_path(message_key)
+
+    if image_path:
+        try:
+            # Отправить фото с подписью
+            await callback.message.answer_photo(
+                photo=FSInputFile(image_path),
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logging.error(f"Error sending photo via callback: {e}")
+            # Если ошибка с фото, отправляем просто текст
+            await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    else:
+        # Изображение не найдено, отправляем только текст
+        await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
 async def edit_media_to_video(
     callback: CallbackQuery,
     video_path: Path | str,

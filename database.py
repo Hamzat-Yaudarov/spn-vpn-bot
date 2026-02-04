@@ -28,6 +28,35 @@ async def get_table_columns(conn, table_name: str) -> dict:
     } for row in result}
 
 
+def normalize_pg_type(pg_type: str) -> str:
+    """Нормализировать тип данных PostgreSQL для сравнения"""
+    pg_type = pg_type.lower().strip()
+
+    # Нормализируем варианты типов
+    type_mapping = {
+        'integer': 'integer',
+        'int': 'integer',
+        'int4': 'integer',
+        'bigint': 'bigint',
+        'int8': 'bigint',
+        'text': 'text',
+        'varchar': 'text',
+        'boolean': 'boolean',
+        'bool': 'boolean',
+        'uuid': 'uuid',
+        'numeric': 'numeric',
+        'decimal': 'numeric',
+        'timestamp': 'timestamp',
+        'timestamp without time zone': 'timestamp',
+        'timestamp with time zone': 'timestamp',
+    }
+
+    for key, normalized in type_mapping.items():
+        if key in pg_type:
+            return normalized
+
+    return pg_type
+
 
 async def sync_table_schema(conn, table_name: str, expected_columns: dict):
     """Синхронизировать схему таблицы: добавить недостающие, удалить лишние столбцы"""
@@ -706,6 +735,21 @@ async def delete_expired_payments(seconds: int = None):
     )
 
 
+async def get_last_pending_payment(tg_id: int):
+    """Получить последний ожидающий платеж пользователя"""
+    result = await db_execute(
+        """
+        SELECT invoice_id, tariff_code 
+        FROM payments 
+        WHERE tg_id = $1 AND status = 'pending' AND provider = 'cryptobot' 
+        ORDER BY id DESC 
+        LIMIT 1
+        """,
+        (tg_id,),
+        fetch_one=True
+    )
+    return (result['invoice_id'], result['tariff_code']) if result else None
+
 
 async def update_payment_status(payment_id: int, status: str):
     """Обновить статус платежа"""
@@ -789,6 +833,26 @@ async def mark_gift_received(tg_id: int):
     )
 
 
+async def mark_gift_received_atomic(tg_id: int) -> bool:
+    """
+    Атомарно проверить и отметить что пользователь получил подарок.
+    Возвращает True если удалось отметить (подарок не был получен), False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Атомарно получить статус и обновить
+            result = await conn.fetchval(
+                """
+                UPDATE users
+                SET gift_received = TRUE
+                WHERE tg_id = $1 AND gift_received = FALSE
+                RETURNING 1
+                """,
+                tg_id
+            )
+            return result is not None
+
 
 async def can_request_gift(tg_id: int) -> tuple[bool, str]:
     """
@@ -845,6 +909,13 @@ async def create_promo_code(code: str, days: int, max_uses: int):
         (code.upper(), days, max_uses)
     )
 
+
+async def increment_promo_usage(code: str):
+    """Увеличить счётчик использования промокода"""
+    await db_execute(
+        "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1",
+        (code,)
+    )
 
 
 async def increment_promo_usage_atomic(code: str, tg_id: int) -> tuple[bool, str]:
@@ -1089,6 +1160,17 @@ async def mark_notification_sent(tg_id: int):
         (next_notification, next_type, tg_id)
     )
 
+
+async def clear_notification(tg_id: int):
+    """Очистить уведомление для пользователя"""
+    await db_execute(
+        """
+        UPDATE users
+        SET next_notification_time = NULL, notification_type = NULL
+        WHERE tg_id = $1
+        """,
+        (tg_id,)
+    )
 
 
 # ────────────────────────────────────────────────

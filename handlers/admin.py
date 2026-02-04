@@ -439,10 +439,7 @@ async def admin_take_sub(message: Message):
                             notification_type = $3
                         WHERE tg_id = $4
                         """,
-                        new_subscription_until,
-                        next_notification if next_notification > now else None,
-                        notification_type,
-                        tg_id
+                        (new_subscription_until, next_notification if next_notification > now else None, notification_type, tg_id)
                     )
 
             remaining_days = (new_subscription_until - now).days
