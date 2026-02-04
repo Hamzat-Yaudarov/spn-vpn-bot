@@ -135,7 +135,7 @@ async def remnawave_set_subscription_expiry(
         expire_iso = expire_at.isoformat() if not expire_at.isoformat().endswith('Z') else expire_at.isoformat()
 
         payload = {
-            "uuid": user_uuid,
+            "uuid": str(user_uuid),
             "expireAt": expire_iso
         }
 
