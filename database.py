@@ -147,6 +147,11 @@ async def run_migrations():
                 'active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
             }
 
+            expected_promo_usage_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'promo_code': {'type': 'TEXT', 'nullable': False},
+            }
+
             expected_partnerships_columns = {
                 'tg_id': {'type': 'BIGINT', 'nullable': False},
                 'percentage': {'type': 'INT', 'nullable': False},
@@ -305,6 +310,19 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'promo_codes' создана или уже существует")
 
+            # Таблица использования промокодов пользователями
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS promo_code_users (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    promo_code TEXT NOT NULL,
+                    used_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(tg_id, promo_code),
+                    FOREIGN KEY (promo_code) REFERENCES promo_codes(code) ON DELETE CASCADE
+                )
+            """)
+            logging.info("✅ Таблица 'promo_code_users' создана или уже существует")
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 2: СОЗДАНИЕ ИНДЕКСОВ (для быстрого поиска)
             # ═══════════════════════════════════════════════════════════
@@ -324,6 +342,8 @@ async def run_migrations():
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
+                "CREATE INDEX IF NOT EXISTS idx_promo_code_users_tg_id ON promo_code_users(tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_promo_code_users_code ON promo_code_users(promo_code);",
 
                 # partnership индексы
                 "CREATE INDEX IF NOT EXISTS idx_partnerships_tg_id ON partnerships(tg_id);",
@@ -373,6 +393,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'users', expected_users_columns)
             await sync_table_schema(conn, 'payments', expected_payments_columns)
             await sync_table_schema(conn, 'promo_codes', expected_promo_columns)
+            await sync_table_schema(conn, 'promo_code_users', expected_promo_usage_columns)
             await sync_table_schema(conn, 'partnerships', expected_partnerships_columns)
             await sync_table_schema(conn, 'partner_referrals', expected_partner_referrals_columns)
             await sync_table_schema(conn, 'partner_earnings', expected_partner_earnings_columns)
@@ -897,9 +918,14 @@ async def increment_promo_usage(code: str):
     )
 
 
-async def increment_promo_usage_atomic(code: str) -> tuple[bool, str]:
+async def increment_promo_usage_atomic(code: str, tg_id: int) -> tuple[bool, str]:
     """
     Атомарно проверить и увеличить счётчик использования промокода.
+    Проверяет что:
+    1. Промокод существует и активен
+    2. Не исчерпан лимит использований
+    3. Пользователь не использовал этот промокод раньше
+
     Возвращает (True, "") если удалось, (False, ошибка) иначе
     """
     pool = await get_pool()
@@ -920,10 +946,25 @@ async def increment_promo_usage_atomic(code: str) -> tuple[bool, str]:
             if promo['used_count'] >= promo['max_uses']:
                 return False, "Промокод исчерпан"
 
-            # Увеличиваем счётчик использования
+            # Проверяем что пользователь не использовал этот промокод раньше
+            existing_usage = await conn.fetchval(
+                "SELECT 1 FROM promo_code_users WHERE tg_id = $1 AND promo_code = $2",
+                tg_id, code
+            )
+
+            if existing_usage is not None:
+                return False, "Ты уже использовал этот промокод"
+
+            # Увеличиваем счётчик использования промокода
             await conn.execute(
                 "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1",
                 code
+            )
+
+            # Записываем что пользователь использовал этот промокод
+            await conn.execute(
+                "INSERT INTO promo_code_users (tg_id, promo_code) VALUES ($1, $2)",
+                tg_id, code
             )
 
             return True, ""

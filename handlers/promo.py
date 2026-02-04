@@ -58,7 +58,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
     try:
         # Атомарно проверяем и увеличиваем счётчик использования промокода
-        success, error_msg = await db.increment_promo_usage_atomic(code)
+        success, error_msg = await db.increment_promo_usage_atomic(code, tg_id)
 
         if not success:
             await message.answer(f"❌ {error_msg}")
