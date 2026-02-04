@@ -114,6 +114,59 @@ async def remnawave_get_or_create_user(
     return None, None
 
 
+async def remnawave_set_subscription_expiry(
+    session: aiohttp.ClientSession,
+    user_uuid: str,
+    expire_at: datetime
+) -> bool:
+    """
+    Установить точную дату окончания подписки в Remnawave с retry логикой
+
+    Args:
+        session: aiohttp сессия
+        user_uuid: UUID пользователя в Remnawave
+        expire_at: Дата и время окончания подписки (datetime object)
+
+    Returns:
+        True если успешно, False иначе
+    """
+    async def _set_expiry():
+        # Конвертируем datetime в ISO формат
+        expire_iso = expire_at.isoformat() if not expire_at.isoformat().endswith('Z') else expire_at.isoformat()
+
+        payload = {
+            "uuid": user_uuid,
+            "expireAt": expire_iso
+        }
+
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.patch(
+                f"{REMNAWAVE_BASE_URL}/users",
+                headers={
+                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            ) as resp:
+                if resp.status == 200:
+                    logging.info(f"Set subscription expiry for {user_uuid} to {expire_iso}")
+                    return True
+                else:
+                    error_text = await resp.text()
+                    raise RuntimeError(f"Set expiry failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(
+            _set_expiry,
+            error_message=f"Failed to set subscription expiry for {user_uuid}"
+        )
+        return result is not None
+    except Exception as e:
+        logging.error(f"Set subscription expiry error: {e}")
+        return False
+
+
 async def remnawave_extend_subscription(
     session: aiohttp.ClientSession,
     user_uuid: str,

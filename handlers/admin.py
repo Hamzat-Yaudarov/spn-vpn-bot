@@ -8,7 +8,9 @@ from config import ADMIN_ID, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
-    remnawave_add_to_squad
+    remnawave_add_to_squad,
+    remnawave_set_subscription_expiry,
+    remnawave_get_user_info
 )
 
 logger = logging.getLogger(__name__)
@@ -158,30 +160,43 @@ async def admin_give_sub(message: Message):
     try:
         # Получаем существующего пользователя или создаём нового
         user = await db.get_user(tg_id)
-
-        if not user:
-            await db.create_user(tg_id, f"user_{tg_id}")
-            logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
-            # Для нового пользователя подписка должна быть N дней от сейчас
-            new_until = datetime.utcnow() + timedelta(days=days)
-        else:
-            # Для существующего пользователя добавляем дни к текущей подписке
-            current_until = user.get('subscription_until')
-            if current_until:
-                # Есть активная подписка - добавляем дни к ней
-                new_until = current_until + timedelta(days=days)
-                logger.info(f"User {tg_id} has existing subscription until {current_until}, extending by {days} days to {new_until}")
-            else:
-                # Нет активной подписки - устанавливаем на N дней от сейчас
-                new_until = datetime.utcnow() + timedelta(days=days)
-                logger.info(f"User {tg_id} has no active subscription, setting to {new_until}")
+        new_until = None
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Создаём или получаем пользователя в Remnawave
+            # Проверяем есть ли у пользователя UUID в Remnawave
+            remnawave_uuid = user.get('remnawave_uuid') if user else None
+
+            if remnawave_uuid:
+                # Пользователь существует в Remnawave - получаем актуальную дату окончания
+                user_info = await remnawave_get_user_info(session, remnawave_uuid)
+                if user_info and 'expireAt' in user_info:
+                    # Парсим дату окончания подписки
+                    expire_at_str = user_info['expireAt']
+                    current_until = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
+                    # Конвертируем в naive UTC
+                    current_until = current_until.replace(tzinfo=None)
+                    # Добавляем дни к существующей подписке
+                    new_until = current_until + timedelta(days=days)
+                    logger.info(f"User {tg_id} has existing subscription in Remnawave until {current_until}, extending by {days} days to {new_until}")
+                else:
+                    # Ошибка получения информации из Remnawave, используем БД или создаём новую
+                    logger.warning(f"Failed to get Remnawave info for {tg_id}, using default calculation")
+                    new_until = datetime.utcnow() + timedelta(days=days)
+            else:
+                # Пользователя нет в Remnawave - создаём новую подписку
+                new_until = datetime.utcnow() + timedelta(days=days)
+                logger.info(f"User {tg_id} has no Remnawave account, setting new subscription to {new_until}")
+
+            # Убедимся что пользователь существует в БД
+            if not user:
+                await db.create_user(tg_id, f"user_{tg_id}")
+                logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
+
+            # Создаём или получаем пользователя в Remnawave (с минимальными днями для создания)
             uuid, username = await remnawave_get_or_create_user(
-                session, tg_id, days=days, extend_if_exists=True
+                session, tg_id, days=30, extend_if_exists=False
             )
 
             if not uuid:
@@ -197,6 +212,11 @@ async def admin_give_sub(message: Message):
             squad_added = await remnawave_add_to_squad(session, uuid)
             if not squad_added:
                 logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
+
+            # Устанавливаем точную дату окончания подписки в Remnawave
+            success = await remnawave_set_subscription_expiry(session, uuid, new_until)
+            if not success:
+                logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id}, but continuing")
 
             # Обновляем подписку в БД с рассчитанной датой
             await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
@@ -303,20 +323,54 @@ async def admin_take_sub(message: Message):
             logger.warning(f"Admin {admin_id} tried to take subscription from non-existent user {tg_id}")
             return
 
-        current_subscription_until = user.get('subscription_until')
+        remnawave_uuid = user.get('remnawave_uuid')
 
-        if not current_subscription_until:
+        if not remnawave_uuid:
             await message.answer(f"❌ Пользователь {tg_id} не имеет активной подписки")
-            logger.info(f"Admin {admin_id} /take_sub - user {tg_id} has no active subscription")
+            logger.info(f"Admin {admin_id} /take_sub - user {tg_id} has no Remnawave UUID")
             return
+
+        # Получаем актуальную информацию о подписке из Remnawave
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            user_info = await remnawave_get_user_info(session, remnawave_uuid)
+
+        if not user_info or 'expireAt' not in user_info:
+            await message.answer(f"❌ Не удалось получить информацию о подписке из Remnawave")
+            logger.warning(f"Admin {admin_id} /take_sub - failed to get user info from Remnawave for {tg_id}")
+            return
+
+        # Парсим дату окончания подписки из Remnawave (она в ISO формате)
+        expire_at_str = user_info['expireAt']
+        current_subscription_until = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
+        # Конвертируем в naive UTC для сравнения
+        current_subscription_until = current_subscription_until.replace(tzinfo=None)
 
         # Рассчитываем новое время окончания подписки
         new_subscription_until = current_subscription_until - timedelta(days=days)
         now = datetime.utcnow()
 
+        # Логируем информацию для отладки
+        logger.info(f"Admin {admin_id} /take_sub user {tg_id}: current_until={current_subscription_until}, removing {days} days, new_until={new_subscription_until}, now={now}")
+
         # Если новое время в прошлом, аннулируем подписку
         if new_subscription_until <= now:
-            # Аннулируем подписку
+            # Сначала обновляем Remnawave если есть UUID
+            if remnawave_uuid:
+                connector = aiohttp.TCPConnector(ssl=False)
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    # Устанавливаем дату окончания в прошлое чтобы деактивировать
+                    success = await remnawave_set_subscription_expiry(
+                        session,
+                        remnawave_uuid,
+                        now - timedelta(seconds=1)
+                    )
+                    if not success:
+                        logger.warning(f"Failed to update Remnawave for user {tg_id}, continuing")
+
+            # Обновляем БД - аннулируем подписку
             pool = await db.get_pool()
             async with pool.acquire() as conn:
                 async with conn.transaction():
@@ -356,7 +410,20 @@ async def admin_take_sub(message: Message):
             logger.info(f"Admin {admin_id} cancelled subscription for user {tg_id} (removed {days} days)")
 
         else:
-            # Обновляем подписку с новым временем
+            # Сначала обновляем Remnawave если есть UUID
+            if remnawave_uuid:
+                connector = aiohttp.TCPConnector(ssl=False)
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    success = await remnawave_set_subscription_expiry(
+                        session,
+                        remnawave_uuid,
+                        new_subscription_until
+                    )
+                    if not success:
+                        logger.warning(f"Failed to update Remnawave for user {tg_id}, but continuing with DB update")
+
+            # Обновляем подписку в БД
             # Пересчитываем следующее уведомление на основе нового времени подписки
             next_notification = new_subscription_until - timedelta(days=1.5)
             notification_type = "1day_left" if next_notification > now else None
@@ -401,7 +468,7 @@ async def admin_take_sub(message: Message):
             logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, remaining: {remaining_days}д")
 
     except Exception as e:
-        logger.error(f"Take subscription error: {e}")
+        logger.error(f"Take subscription error: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка: {str(e)[:100]}")
 
     finally:
