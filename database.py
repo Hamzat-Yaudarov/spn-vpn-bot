@@ -559,14 +559,34 @@ async def update_subscription(tg_id: int, uuid: str, username: str, subscription
     Обновить подписку пользователя
 
     Также автоматически устанавливает время для уведомления о заканчивающейся подписке
-    (1.5 дня до окончания)
+    (1.5 дня до окончания). Если это время в прошлом, уведомление рассчитывается корректно
     """
     from datetime import datetime, timedelta
 
     # Рассчитываем время следующего уведомления (1.5 дня до окончания подписки)
     if subscription_until:
+        now = datetime.utcnow()
         next_notification = subscription_until - timedelta(days=1.5)
-        notification_type = "1day_left"
+
+        # Если следующее уведомление уже в прошлом, установим его на более раннее время
+        if next_notification <= now:
+            # Проверяем сколько времени осталось до конца подписки
+            time_left = (subscription_until - now).total_seconds()
+
+            if time_left > 86400:  # Больше 1 дня
+                # Установим уведомление на 1 день до конца
+                next_notification = subscription_until - timedelta(days=1)
+                notification_type = "below1day"
+            elif time_left > 0:  # Менее 1 дня но подписка ещё активна
+                # Установим уведомление на конец подписки
+                next_notification = subscription_until
+                notification_type = "expired"
+            else:
+                # Подписка уже истекла
+                next_notification = None
+                notification_type = None
+        else:
+            notification_type = "1day_left"
     else:
         next_notification = None
         notification_type = None
@@ -1043,21 +1063,46 @@ async def mark_notification_sent(tg_id: int):
         return
 
     subscription_until = user['subscription_until']
+    now = datetime.utcnow()
+    time_until_expiry = (subscription_until - now).total_seconds()
 
     # Определяем следующее уведомление в зависимости от текущего типа
     current_type = user.get('notification_type')
-    logging.info(f"User {tg_id} notification sent, current_type={current_type}, subscription_until={subscription_until}")
+    logging.info(f"User {tg_id} notification sent, current_type={current_type}, subscription_until={subscription_until}, time_until_expiry_seconds={time_until_expiry}")
+
+    next_notification = None
+    next_type = None
 
     if current_type == "1day_left":
-        # Если было уведомление "1.5 дня осталось", следующее будет "1 день осталось"
-        # это происходит за 1 день до окончания
-        next_notification = subscription_until - timedelta(days=1)
-        next_type = "below1day"
+        # Последнее уведомление было "1.5 дня осталось"
+        # Теперь проверяем, осталось ли до 1 дня
+        if time_until_expiry > 86400:  # Более 1 дня (86400 секунд)
+            # Ещё много времени, установим следующее уведомление на 1 день до конца
+            next_notification = subscription_until - timedelta(days=1)
+            next_type = "below1day"
+        else:
+            # Уже менее 1 дня, установим следующее на конец подписки
+            next_notification = subscription_until
+            next_type = "expired"
+
     elif current_type == "below1day":
-        # Если было уведомление "меньше дня осталось", следующее будет "подписка истекла"
-        # это происходит в момент окончания подписки
-        next_notification = subscription_until
-        next_type = "expired"
+        # Последнее уведомление было "менее 1 дня осталось"
+        # Следующее будет уведомление об истечении подписки
+        if time_until_expiry > 0:
+            # Подписка ещё активна, установим следующее на конец
+            next_notification = subscription_until
+            next_type = "expired"
+        else:
+            # Подписка уже истекла, очищаем
+            next_notification = None
+            next_type = None
+
+    elif current_type == "expired":
+        # Уведомление об истечении было отправлено
+        # Очищаем уведомления если подписка активна (вероятно была продлена)
+        next_notification = None
+        next_type = None
+
     else:
         # Если это первое уведомление или что-то странное, просто очищаем
         next_notification = None

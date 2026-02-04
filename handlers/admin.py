@@ -156,10 +156,25 @@ async def admin_give_sub(message: Message):
         return
 
     try:
-        # Убедимся что пользователь существует в БД
-        if not await db.user_exists(tg_id):
+        # Получаем существующего пользователя или создаём нового
+        user = await db.get_user(tg_id)
+
+        if not user:
             await db.create_user(tg_id, f"user_{tg_id}")
             logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
+            # Для нового пользователя подписка должна быть N дней от сейчас
+            new_until = datetime.utcnow() + timedelta(days=days)
+        else:
+            # Для существующего пользователя добавляем дни к текущей подписке
+            current_until = user.get('subscription_until')
+            if current_until:
+                # Есть активная подписка - добавляем дни к ней
+                new_until = current_until + timedelta(days=days)
+                logger.info(f"User {tg_id} has existing subscription until {current_until}, extending by {days} days to {new_until}")
+            else:
+                # Нет активной подписки - устанавливаем на N дней от сейчас
+                new_until = datetime.utcnow() + timedelta(days=days)
+                logger.info(f"User {tg_id} has no active subscription, setting to {new_until}")
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
@@ -183,8 +198,7 @@ async def admin_give_sub(message: Message):
             if not squad_added:
                 logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
 
-            # Обновляем подписку в БД
-            new_until = datetime.utcnow() + timedelta(days=days)
+            # Обновляем подписку в БД с рассчитанной датой
             await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         await message.answer(
@@ -214,6 +228,180 @@ async def admin_give_sub(message: Message):
 
     except Exception as e:
         logger.error(f"Give subscription error: {e}")
+        await message.answer(f"❌ Ошибка: {str(e)[:100]}")
+
+    finally:
+        await db.release_user_lock(tg_id)
+
+
+@router.message(Command("take_sub"))
+async def admin_take_sub(message: Message):
+    """Админ команда: забрать подписку пользователю (уменьшить на N дней)"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning(f"Unauthorized /take_sub attempt from user {admin_id}")
+        return
+
+    parts = message.text.split()
+
+    # Валидация количества аргументов
+    if len(parts) < 3:
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /take_sub ТГ_ИД ДНЕЙ\n\n"
+            "<b>Параметры:</b>\n"
+            "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
+            "• <code>ДНЕЙ</code> - количество дней для удаления (число > 0)\n\n"
+            "<b>Пример:</b> /take_sub 123456789 10\n\n"
+            "<i>Если дней больше чем осталось, подписка будет аннулирована</i>"
+        )
+        logger.warning(f"Admin {admin_id} /take_sub - wrong number of arguments: {len(parts)-1}")
+        return
+
+    try:
+        tg_id = int(parts[1])
+        days = int(parts[2])
+
+        # Валидация значений
+        if tg_id <= 0:
+            await message.answer("❌ ID пользователя должен быть положительным числом")
+            return
+
+        if days <= 0:
+            await message.answer("❌ Количество дней должно быть больше 0")
+            return
+
+        if tg_id == admin_id:
+            await message.answer("❌ Нельзя отобрать подписку самому себе")
+            logger.warning(f"Admin {admin_id} tried to take subscription from themselves")
+            return
+
+    except ValueError:
+        await message.answer(
+            "❌ <b>Ошибка валидации</b>\n\n"
+            "Убедитесь, что:\n"
+            "• ТГ_ИД и ДНЕЙ - целые числа\n"
+            "• Оба числа больше 0\n\n"
+            "<b>Пример:</b> /take_sub 123456789 10"
+        )
+        logger.warning(f"Admin {admin_id} /take_sub - parsing error for arguments: {parts[1:]}")
+        return
+
+    if not await db.acquire_user_lock(tg_id):
+        await message.answer(f"❌ Пользователь {tg_id} занят, попробуй позже")
+        logger.info(f"Admin {admin_id} /take_sub - could not acquire lock for user {tg_id}")
+        return
+
+    try:
+        # Получаем информацию о пользователе
+        user = await db.get_user(tg_id)
+
+        if not user:
+            await message.answer(f"❌ Пользователь {tg_id} не найден в БД")
+            logger.warning(f"Admin {admin_id} tried to take subscription from non-existent user {tg_id}")
+            return
+
+        current_subscription_until = user.get('subscription_until')
+
+        if not current_subscription_until:
+            await message.answer(f"❌ Пользователь {tg_id} не имеет активной подписки")
+            logger.info(f"Admin {admin_id} /take_sub - user {tg_id} has no active subscription")
+            return
+
+        # Рассчитываем новое время окончания подписки
+        new_subscription_until = current_subscription_until - timedelta(days=days)
+        now = datetime.utcnow()
+
+        # Если новое время в прошлом, аннулируем подписку
+        if new_subscription_until <= now:
+            # Аннулируем подписку
+            pool = await db.get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        """
+                        UPDATE users
+                        SET remnawave_uuid = NULL,
+                            remnawave_username = NULL,
+                            subscription_until = NULL,
+                            squad_uuid = NULL,
+                            next_notification_time = NULL,
+                            notification_type = NULL
+                        WHERE tg_id = $1
+                        """,
+                        tg_id
+                    )
+
+            await message.answer(
+                f"✅ <b>Подписка аннулирована</b>\n\n"
+                f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+                f"📅 <b>Удалено дней:</b> {days}\n"
+                f"❌ <b>Статус:</b> подписка истекла"
+            )
+
+            # Уведомляем пользователя
+            try:
+                await message.bot.send_message(
+                    tg_id,
+                    f"❌ <b>Ваша подписка была аннулирована</b>\n\n"
+                    f"Администратор удалил подписку на {days} дней.\n\n"
+                    f"Ваш доступ закрыт. Пожалуйста, свяжитесь с поддержкой."
+                )
+                logger.info(f"User {tg_id} notified about subscription cancellation by admin {admin_id}")
+            except Exception as e:
+                logger.warning(f"Failed to notify user {tg_id}: {e}")
+
+            logger.info(f"Admin {admin_id} cancelled subscription for user {tg_id} (removed {days} days)")
+
+        else:
+            # Обновляем подписку с новым временем
+            # Пересчитываем следующее уведомление на основе нового времени подписки
+            next_notification = new_subscription_until - timedelta(days=1.5)
+            notification_type = "1day_left" if next_notification > now else None
+
+            pool = await db.get_pool()
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        """
+                        UPDATE users
+                        SET subscription_until = $1,
+                            next_notification_time = $2,
+                            notification_type = $3
+                        WHERE tg_id = $4
+                        """,
+                        (new_subscription_until, next_notification if next_notification > now else None, notification_type, tg_id)
+                    )
+
+            remaining_days = (new_subscription_until - now).days
+            remaining_hours = ((new_subscription_until - now).seconds // 3600) % 24
+
+            await message.answer(
+                f"✅ <b>Подписка обновлена</b>\n\n"
+                f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+                f"📅 <b>Удалено дней:</b> {days}\n"
+                f"⏰ <b>Осталось:</b> {remaining_days}д {remaining_hours}ч\n"
+                f"🟢 <b>Статус:</b> активна"
+            )
+
+            # Уведомляем пользователя
+            try:
+                await message.bot.send_message(
+                    tg_id,
+                    f"⚠️ <b>Ваша подписка была сокращена</b>\n\n"
+                    f"Администратор удалил {days} дней из вашей подписки.\n\n"
+                    f"⏰ <b>Осталось:</b> <b>{remaining_days}д {remaining_hours}ч</b>"
+                )
+                logger.info(f"User {tg_id} notified about subscription reduction by admin {admin_id}")
+            except Exception as e:
+                logger.warning(f"Failed to notify user {tg_id}: {e}")
+
+            logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, remaining: {remaining_days}д")
+
+    except Exception as e:
+        logger.error(f"Take subscription error: {e}")
         await message.answer(f"❌ Ошибка: {str(e)[:100]}")
 
     finally:

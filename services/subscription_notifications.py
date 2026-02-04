@@ -44,37 +44,45 @@ async def _send_notifications_batch(bot):
             return
 
         logger.info(f"📤 Found {len(users)} users to notify at {now}")
-        
+
         for user in users:
             try:
                 tg_id = user['tg_id']
                 notification_type = user['notification_type']
                 subscription_until = user['subscription_until']
-                
+
                 # Рассчитываем оставшееся время
                 now = datetime.utcnow()
                 time_left = subscription_until - now
-                
+
                 if time_left.total_seconds() < 0:
                     # Подписка уже истекла
                     days_left = 0
                     hours_left = 0
+                    minutes_left = 0
                 else:
                     days_left = time_left.days
-                    hours_left = time_left.seconds // 3600
-                
+                    hours_left = (time_left.seconds // 3600)
+                    minutes_left = (time_left.seconds % 3600) // 60
+
                 # Формируем сообщение в зависимости от типа уведомления
                 if notification_type == "1day_left":
                     # 1-1.5 дня осталось
-                    time_str = f"{days_left} дн. {hours_left} ч." if days_left > 0 else f"{hours_left} ч."
+                    if days_left > 0:
+                        time_str = f"{days_left} дн. {hours_left} ч."
+                    else:
+                        time_str = f"{hours_left} ч. {minutes_left} мин."
                     text = (
                         "⏰ <b>Ваша подписка скоро закончится!</b>\n\n"
                         f"Осталось: <b>{time_str}</b>\n\n"
                         "Продлите подписку, чтобы не потерять доступ к быстрой и безопасной сети!"
                     )
                 elif notification_type == "below1day":
-                    # Меньше дня осталось
-                    time_str = f"{hours_left} ч." if hours_left > 0 else f"{time_left.seconds // 60} мин."
+                    # Менее 1 дня осталось
+                    if hours_left > 0:
+                        time_str = f"{hours_left} ч. {minutes_left} мин."
+                    else:
+                        time_str = f"{minutes_left} мин."
                     text = (
                         "⚠️ <b>Подписка закончится совсем скоро!</b>\n\n"
                         f"Осталось: <b>{time_str}</b>\n\n"
@@ -89,23 +97,23 @@ async def _send_notifications_batch(bot):
                 else:
                     logger.warning(f"Unknown notification type: {notification_type} for user {tg_id}")
                     continue
-                
+
                 # Создаём кнопку "Продлить подписку"
                 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
                     [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
                 ])
-                
+
                 # Отправляем сообщение
                 await bot.send_message(tg_id, text, reply_markup=kb)
-                logger.info(f"✅ Notification sent to user {tg_id}, type: {notification_type}")
-                
+                logger.info(f"✅ Notification sent to user {tg_id}, type: {notification_type}, time_left: {days_left}d {hours_left}h {minutes_left}m")
+
                 # Отмечаем что уведомление отправлено и устанавливаем следующее
                 await db.mark_notification_sent(tg_id)
-                
+
             except Exception as e:
-                logger.error(f"Failed to send notification to user {user.get('tg_id')}: {e}")
-    
+                logger.error(f"Failed to send notification to user {user.get('tg_id')}: {e}", exc_info=True)
+
     except Exception as e:
         logger.error(f"Error in _send_notifications_batch: {e}", exc_info=True)
