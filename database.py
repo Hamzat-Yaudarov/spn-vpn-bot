@@ -1295,8 +1295,8 @@ async def add_partner_referral(partner_id: int, referred_user_id: int) -> bool:
         return False
 
     # Проверка 3: пользователь должен быть НОВЫМ (впервые заходит в бота)
-    user_exists = await user_exists(referred_user_id)
-    if user_exists:
+    user_was_found = await user_exists(referred_user_id)
+    if user_was_found:
         logging.warning(f"User {referred_user_id} is not new (already visited bot before), cannot assign partner referral for partner {partner_id}")
         return False
 
