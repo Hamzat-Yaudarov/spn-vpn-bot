@@ -244,6 +244,7 @@ async def run_migrations():
                     partner_id BIGINT NOT NULL,
                     referred_user_id BIGINT NOT NULL,
                     created_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(partner_id, referred_user_id),
                     FOREIGN KEY (partner_id) REFERENCES partnerships(tg_id) ON DELETE CASCADE
                 )
             """)
@@ -382,6 +383,35 @@ async def run_migrations():
                         logging.debug(f"Столбец уже существует, пропускаем: {query.strip()}")
                     else:
                         logging.warning(f"⚠️ Ошибка миграции: {e}")
+
+            # ═══════════════════════════════════════════════════════════
+            # ЭТАП 3.5: ОЧИСТКА ДУБЛИКАТОВ И ДОБАВЛЕНИЕ CONSTRAINTS
+            # ═══════════════════════════════════════════════════════════
+
+            try:
+                # Удаляем дубликаты в partner_referrals (оставляем только первый)
+                await conn.execute("""
+                    DELETE FROM partner_referrals WHERE id NOT IN (
+                        SELECT MIN(id) FROM partner_referrals
+                        GROUP BY partner_id, referred_user_id
+                    )
+                """)
+                logging.info("✅ Удалены дубликаты в таблице partner_referrals")
+            except Exception as e:
+                logging.debug(f"Дубликатов не найдено или уже удалены: {e}")
+
+            try:
+                # Добавляем UNIQUE constraint если его ещё нет
+                await conn.execute("""
+                    ALTER TABLE partner_referrals
+                    ADD CONSTRAINT unique_partner_referral UNIQUE (partner_id, referred_user_id)
+                """)
+                logging.info("✅ Добавлено UNIQUE ограничение на partner_referrals (partner_id, referred_user_id)")
+            except Exception as e:
+                if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                    logging.debug("UNIQUE ограничение уже существует")
+                else:
+                    logging.debug(f"Примечание по UNIQUE: {e}")
 
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 4: СИНХРОНИЗАЦИЯ СХЕМЫ ТАБЛИЦ
@@ -1232,12 +1262,12 @@ async def has_accepted_partnership_agreement(tg_id: int) -> bool:
 
 
 async def add_partner_referral(partner_id: int, referred_user_id: int):
-    """Добавить партнёрского реферала"""
+    """Добавить партнёрского реферала (дубликаты игнорируются)"""
     await db_execute(
         """
         INSERT INTO partner_referrals (partner_id, referred_user_id)
         VALUES ($1, $2)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (partner_id, referred_user_id) DO NOTHING
         """,
         (partner_id, referred_user_id)
     )
