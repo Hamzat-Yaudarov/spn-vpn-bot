@@ -30,15 +30,23 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         if args[1].startswith("ref_"):
             try:
                 referrer_id = int(args[1].split("_")[1])
-                await db.update_referral_count(referrer_id)
-                logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
+                # Проверяем что это не сам пользователь
+                if referrer_id != tg_id:
+                    await db.update_referral_count(referrer_id)
+                    logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
+                else:
+                    logging.warning(f"User {tg_id} tried to use their own referral link")
+                    referrer_id = None
             except (ValueError, IndexError):
                 referrer_id = None
         elif args[1].startswith("partner_"):
             try:
                 partner_id = int(args[1].split("_")[1])
-                await db.add_partner_referral(partner_id, tg_id)
-                logging.info(f"User {tg_id} joined via partner link from {partner_id}")
+                # add_partner_referral теперь возвращает bool и делает все проверки
+                success = await db.add_partner_referral(partner_id, tg_id)
+                if success:
+                    logging.info(f"User {tg_id} joined via partner link from {partner_id}")
+                # Если функция вернула False, логирование уже сделано внутри функции
             except (ValueError, IndexError):
                 partner_id = None
 

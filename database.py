@@ -1261,16 +1261,59 @@ async def has_accepted_partnership_agreement(tg_id: int) -> bool:
     return result and result['agreement_accepted']
 
 
-async def add_partner_referral(partner_id: int, referred_user_id: int):
-    """Добавить партнёрского реферала (дубликаты игнорируются)"""
-    await db_execute(
-        """
-        INSERT INTO partner_referrals (partner_id, referred_user_id)
-        VALUES ($1, $2)
-        ON CONFLICT (partner_id, referred_user_id) DO NOTHING
-        """,
-        (partner_id, referred_user_id)
+async def get_partner_for_user(referred_user_id: int) -> int | None:
+    """Получить партнёра для пользователя (если уже засчитан)"""
+    result = await db_execute(
+        "SELECT partner_id FROM partner_referrals WHERE referred_user_id = $1 LIMIT 1",
+        (referred_user_id,),
+        fetch_one=True
     )
+    return result['partner_id'] if result else None
+
+
+async def add_partner_referral(partner_id: int, referred_user_id: int) -> bool:
+    """
+    Добавить партнёрского реферала с проверками
+
+    Проверки:
+    1. Партнёр не может быть рефералом себе
+    2. Пользователь не может быть рефералом нескольких партнёров
+    3. Пользователь должен быть НОВЫМ (впервые активирует бота)
+
+    Returns:
+        True если реферал добавлен, False если уже был или ошибка
+    """
+    # Проверка 1: партнёр не может быть рефералом себе
+    if partner_id == referred_user_id:
+        logging.warning(f"Partner {partner_id} tried to refer themselves")
+        return False
+
+    # Проверка 2: пользователь уже может быть рефералом другого партнёра
+    existing_partner = await get_partner_for_user(referred_user_id)
+    if existing_partner is not None:
+        logging.warning(f"User {referred_user_id} is already a referral for partner {existing_partner}, skipping partner {partner_id}")
+        return False
+
+    # Проверка 3: пользователь должен быть НОВЫМ (впервые заходит в бота)
+    user_exists = await user_exists(referred_user_id)
+    if user_exists:
+        logging.warning(f"User {referred_user_id} is not new (already visited bot before), cannot assign partner referral for partner {partner_id}")
+        return False
+
+    # Добавляем реферала (дубликаты одной пары игнорируются благодаря UNIQUE constraint)
+    try:
+        await db_execute(
+            """
+            INSERT INTO partner_referrals (partner_id, referred_user_id)
+            VALUES ($1, $2)
+            ON CONFLICT (partner_id, referred_user_id) DO NOTHING
+            """,
+            (partner_id, referred_user_id)
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Error adding partner referral: {e}")
+        return False
 
 
 async def get_partner_referral_count(partner_id: int) -> int:
