@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-import pytz
+from zoneinfo import ZoneInfo
 import database as db
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramAPIError
@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramAPIError
 logger = logging.getLogger(__name__)
 
 # Часовой пояс MSK (UTC+3)
-MSK = pytz.timezone('Europe/Moscow')
+MSK = ZoneInfo("Europe/Moscow")
 
 # Лимиты Telegram бота
 TELEGRAM_RATE_LIMIT = 0.1  # Одно сообщение в 100ms (10 сообщений в секунду)
