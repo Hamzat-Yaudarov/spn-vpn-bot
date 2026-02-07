@@ -194,15 +194,15 @@ async def _send_notifications_for_expired(bot):
     try:
         logger.info("🔍 Searching for users with expired subscriptions...")
         
-        # Находим пользователей подписка которых уже закончилась
+        # Находим пользователей у которых нет активной подписки
+        # (включая тех, у кого подписка закончилась, и тех, кто никогда не платил)
         users = await db.db_execute(
             """
             SELECT tg_id, remnawave_uuid, subscription_until
             FROM users
-            WHERE subscription_until IS NOT NULL
-            AND subscription_until <= now() AT TIME ZONE 'UTC'
-            AND remnawave_uuid IS NOT NULL
-            ORDER BY subscription_until DESC
+            WHERE subscription_until IS NULL
+            OR subscription_until <= now() AT TIME ZONE 'UTC'
+            ORDER BY subscription_until DESC NULLS LAST
             """,
             fetch_all=True
         )
