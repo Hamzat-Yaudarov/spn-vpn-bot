@@ -127,10 +127,6 @@ async def _send_notifications_for_expiring(bot):
                 tg_id = user['tg_id']
                 subscription_until = ensure_utc_aware(user['subscription_until'])
 
-                # Если не удалось получить время подписки, пропускаем
-                if subscription_until is None:
-                    continue
-
                 now = datetime.now(timezone.utc)
                 time_left = subscription_until - now
                 
