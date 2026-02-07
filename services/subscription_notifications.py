@@ -222,18 +222,22 @@ async def _send_notifications_for_expired(bot):
                 tg_id = user['tg_id']
                 subscription_until = ensure_utc_aware(user['subscription_until'])
 
-                # Если не удалось получить время подписки, пропускаем
+                # Формируем сообщение в зависимости от того, была ли подписка когда-то
                 if subscription_until is None:
-                    continue
-
-                now = datetime.now(timezone.utc)
-                days_expired = (now - subscription_until).days
-                
-                text = (
-                    "❌ <b>Ваша подписка закончилась!</b>\n\n"
-                    f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
-                    "Продлите подписку, чтобы вернуть доступ к быстрой и безопасной сети!"
-                )
+                    # Пользователь никогда не имел подписку
+                    text = (
+                        "❌ <b>У вас нет активной подписки!</b>\n\n"
+                        "Приобретите подписку, чтобы получить доступ к быстрой и безопасной сети!"
+                    )
+                else:
+                    # Пользователь имел подписку, но она закончилась
+                    now = datetime.now(timezone.utc)
+                    days_expired = (now - subscription_until).days
+                    text = (
+                        "❌ <b>Ваша подписка закончилась!</b>\n\n"
+                        f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
+                        "Продлите подписку, чтобы вернуть доступ к быстрой и безопасной сети!"
+                    )
                 
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
@@ -243,7 +247,10 @@ async def _send_notifications_for_expired(bot):
                 # Отправляем сообщение
                 await bot.send_message(tg_id, text, reply_markup=kb)
                 success_count += 1
-                logger.debug(f"✅ Expiry notification sent to user {tg_id} (expired {days_expired}d ago)")
+                if subscription_until is None:
+                    logger.debug(f"✅ Notification sent to user {tg_id} (no subscription)")
+                else:
+                    logger.debug(f"✅ Notification sent to user {tg_id} (expired {days_expired}d ago)")
                 
             except TelegramAPIError as e:
                 if "429" in str(e) or "Too Many Requests" in str(e):
