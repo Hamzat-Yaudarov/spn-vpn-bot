@@ -1,4 +1,5 @@
 import logging
+import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -15,6 +16,28 @@ MSK = ZoneInfo("Europe/Moscow")
 # Лимиты Telegram бота
 TELEGRAM_RATE_LIMIT = 0.1  # Одно сообщение в 100ms (10 сообщений в секунду)
 BATCH_SIZE = 50  # Обрабатываем по 50 пользователей за раз
+
+
+def ensure_utc_aware(dt):
+    """
+    Убедиться что datetime имеет timezone UTC.
+    Если это naive datetime, добавляем UTC.
+    Если это datetime с другим timezone, конвертируем в UTC.
+    """
+    if dt is None:
+        return None
+
+    if not isinstance(dt, datetime):
+        return None
+
+    if dt.tzinfo is None:
+        # Наивный datetime, предполагаем что это UTC
+        return dt.replace(tzinfo=timezone.utc)
+    elif dt.tzinfo != timezone.utc:
+        # Конвертируем в UTC
+        return dt.astimezone(timezone.utc)
+
+    return dt
 
 
 async def check_and_send_notifications(bot):
@@ -102,9 +125,12 @@ async def _send_notifications_for_expiring(bot):
         for i, user in enumerate(users):
             try:
                 tg_id = user['tg_id']
-                subscription_until = user['subscription_until']
-                
-                # Рассчитываем оставшееся время
+                subscription_until = ensure_utc_aware(user['subscription_until'])
+
+                # Если не удалось получить время подписки, пропускаем
+                if subscription_until is None:
+                    continue
+
                 now = datetime.now(timezone.utc)
                 time_left = subscription_until - now
                 
@@ -194,9 +220,12 @@ async def _send_notifications_for_expired(bot):
         for i, user in enumerate(users):
             try:
                 tg_id = user['tg_id']
-                subscription_until = user['subscription_until']
-                
-                # Рассчитываем на сколько дней подписка закончилась
+                subscription_until = ensure_utc_aware(user['subscription_until'])
+
+                # Если не удалось получить время подписки, пропускаем
+                if subscription_until is None:
+                    continue
+
                 now = datetime.now(timezone.utc)
                 days_expired = (now - subscription_until).days
                 
