@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import aiohttp
 from datetime import datetime, timedelta, timezone
@@ -590,3 +591,171 @@ async def admin_stats(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при получении статистики: {str(e)[:100]}")
         logger.error(f"Error getting stats for admin {admin_id}: {e}")
+
+
+@router.message(Command("all_sms"))
+async def admin_broadcast_all(message: Message):
+    """Админ команда: отправить сообщение всем пользователям"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning(f"Unauthorized /all_sms attempt from user {admin_id}")
+        return
+
+    # Извлекаем текст после команды
+    text_parts = message.text.split(maxsplit=1)
+    if len(text_parts) < 2 or not text_parts[1].strip():
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /all_sms <i>[Сообщение]</i>\n\n"
+            "<b>Пример:</b> /all_sms 🎉 Специальное предложение!"
+        )
+        logger.warning(f"Admin {admin_id} /all_sms - no message provided")
+        return
+
+    broadcast_text = text_parts[1]
+
+    try:
+        # Получаем всех пользователей из БД
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            users = await conn.fetch("SELECT tg_id FROM users ORDER BY tg_id")
+
+        if not users:
+            await message.answer("❌ В БД нет пользователей")
+            logger.warning(f"Admin {admin_id} /all_sms - no users found")
+            return
+
+        total_users = len(users)
+        sent_count = 0
+        error_count = 0
+        blocked_count = 0
+
+        await message.answer(
+            f"📤 <b>Начинаю рассылку всем {total_users} пользователям...</b>\n\n"
+            f"<i>Это может занять некоторое время...</i>"
+        )
+
+        # Отправляем сообщение каждому пользователю с rate limiting
+        for user_record in users:
+            user_id = user_record['tg_id']
+            try:
+                await message.bot.send_message(user_id, broadcast_text)
+                sent_count += 1
+                logger.info(f"Broadcast message sent to user {user_id}")
+            except Exception as e:
+                error_msg = str(e)
+                # Проверяем если это ошибка блокировки
+                if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
+                    blocked_count += 1
+                    logger.warning(f"User {user_id} has blocked bot or deactivated account")
+                else:
+                    error_count += 1
+                    logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
+
+            # Rate limiting: 0.1s между сообщениями (10 сообщений в секунду)
+            await asyncio.sleep(0.1)
+
+        await message.answer(
+            f"✅ <b>Рассылка завершена!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• ✅ Отправлено: {sent_count}/{total_users}\n"
+            f"• 🚫 Заблокировано: {blocked_count}\n"
+            f"• ❌ Ошибок: {error_count}\n\n"
+            f"<i>Сообщение: {broadcast_text[:50]}...</i>"
+        )
+
+        logger.info(f"Admin {admin_id} completed /all_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
+
+    except Exception as e:
+        logger.error(f"Broadcast all error: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
+
+
+@router.message(Command("not_sub_sms"))
+async def admin_broadcast_no_subscription(message: Message):
+    """Админ команда: отправить сообщение только пользователям без активной подписки"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning(f"Unauthorized /not_sub_sms attempt from user {admin_id}")
+        return
+
+    # Извлекаем текст после команды
+    text_parts = message.text.split(maxsplit=1)
+    if len(text_parts) < 2 or not text_parts[1].strip():
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /not_sub_sms <i>[Сообщение]</i>\n\n"
+            "<b>Пример:</b> /not_sub_sms 💳 Получи подписку со скидкой!"
+        )
+        logger.warning(f"Admin {admin_id} /not_sub_sms - no message provided")
+        return
+
+    broadcast_text = text_parts[1]
+
+    try:
+        # Получаем пользователей БЕЗ активной подписки
+        # Активная подписка = subscription_until IS NOT NULL AND subscription_until > now()
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            users = await conn.fetch(
+                """
+                SELECT tg_id FROM users
+                WHERE subscription_until IS NULL
+                   OR subscription_until <= now() AT TIME ZONE 'UTC'
+                ORDER BY tg_id
+                """
+            )
+
+        if not users:
+            await message.answer("❌ Не найдено пользователей без подписки")
+            logger.info(f"Admin {admin_id} /not_sub_sms - no users without subscription found")
+            return
+
+        total_users = len(users)
+        sent_count = 0
+        error_count = 0
+        blocked_count = 0
+
+        await message.answer(
+            f"📤 <b>Начинаю рассылку {total_users} пользователям без подписки...</b>\n\n"
+            f"<i>Это может занять некоторое время...</i>"
+        )
+
+        # Отправляем сообщение каждому пользователю с rate limiting
+        for user_record in users:
+            user_id = user_record['tg_id']
+            try:
+                await message.bot.send_message(user_id, broadcast_text)
+                sent_count += 1
+                logger.info(f"Broadcast message sent to user {user_id} (no subscription)")
+            except Exception as e:
+                error_msg = str(e)
+                # Проверяем если это ошибка блокировки
+                if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
+                    blocked_count += 1
+                    logger.warning(f"User {user_id} has blocked bot or deactivated account")
+                else:
+                    error_count += 1
+                    logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
+
+            # Rate limiting: 0.1s между сообщениями (10 сообщений в секунду)
+            await asyncio.sleep(0.1)
+
+        await message.answer(
+            f"✅ <b>Рассылка завершена!</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"• ✅ Отправлено: {sent_count}/{total_users}\n"
+            f"• 🚫 Заблокировано: {blocked_count}\n"
+            f"• ❌ Ошибок: {error_count}\n\n"
+            f"<i>Сообщение: {broadcast_text[:50]}...</i>"
+        )
+
+        logger.info(f"Admin {admin_id} completed /not_sub_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
+
+    except Exception as e:
+        logger.error(f"Broadcast no subscription error: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
