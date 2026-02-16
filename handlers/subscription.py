@@ -387,7 +387,6 @@ async def process_my_subscription(callback: CallbackQuery):
         "</blockquote>\n\n"
         "<b>Персональная ссылка доступа:</b>\n"
         f"{sub_url or '<i>Ошибка получения ссылки</i>'}\n\n"
-        "🟢 <i>Статус: активен</i>"
     )
 
     await edit_text_with_photo(callback, text, kb, "Моя подписка")

@@ -228,7 +228,21 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
                 # Партнёрская ошибка не должна блокировать основной платеж
 
             # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
-            new_until = datetime.utcnow() + timedelta(days=days)
+            # Если уже есть активная подписка, добавляем дни к ней
+            # Если подписки нет, создаём новую
+            user = await db.get_user(tg_id)
+            existing_subscription = user.get('subscription_until') if user else None
+            now = datetime.utcnow()
+
+            if existing_subscription and existing_subscription > now:
+                # Активная подписка есть - добавляем дни к ней
+                new_until = existing_subscription + timedelta(days=days)
+                logging.info(f"User {tg_id} has active subscription, extending from {existing_subscription} by {days} days to {new_until}")
+            else:
+                # Подписки нет или она истекла - создаём новую
+                new_until = now + timedelta(days=days)
+                logging.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
+
             await db.update_subscription(tg_id, uuid, username, new_until, None)
 
             # Только после успешных операций отмечаем платеж как paid
