@@ -386,7 +386,7 @@ async def admin_take_sub(message: Message):
                             notification_type = NULL
                         WHERE tg_id = $1
                         """,
-                        tg_id
+                        (tg_id,)
                     )
 
             await message.answer(
