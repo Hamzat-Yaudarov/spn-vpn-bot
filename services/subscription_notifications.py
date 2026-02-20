@@ -192,7 +192,7 @@ async def _send_notifications_for_expiring(bot):
 
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
                 ])
 
                 # Отправляем сообщение
@@ -339,7 +339,7 @@ async def _send_notifications_for_expired(bot):
 
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
                 ])
 
                 # Отправляем сообщение

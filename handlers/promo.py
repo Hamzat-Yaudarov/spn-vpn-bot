@@ -122,7 +122,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         # Отправляем успешное сообщение
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔴 Назад", callback_data="back_to_menu")]
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
         ])
 
         text = (

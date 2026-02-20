@@ -29,7 +29,7 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="3 месяца — 449₽", callback_data="tariff_3m")],
         [InlineKeyboardButton(text="6 месяцев — 790₽", callback_data="tariff_6m")],
         [InlineKeyboardButton(text="12 месяцев — 1200₽", callback_data="tariff_12m")],
-        [InlineKeyboardButton(text="🔴 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
     text = "Выбери срок подписки:"
@@ -51,7 +51,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
         [InlineKeyboardButton(text="💳 Yookassa", callback_data="pay_yookassa")],
-        [InlineKeyboardButton(text="🔴 Назад", callback_data="buy_subscription")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
     ])
 
     text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
@@ -92,7 +92,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
                     [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-                    [InlineKeyboardButton(text="🔴 Назад", callback_data="buy_subscription")]
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
                 ])
 
                 text = (
@@ -131,7 +131,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
         [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-        [InlineKeyboardButton(text="🔴 Назад", callback_data="buy_subscription")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
     ])
 
     text = (
@@ -178,7 +178,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
                     [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-                    [InlineKeyboardButton(text="🔴 Назад", callback_data="buy_subscription")]
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
                 ])
 
                 text = (
@@ -223,7 +223,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
         [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
-        [InlineKeyboardButton(text="🔴 Назад", callback_data="buy_subscription")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
     ])
 
     text = (
@@ -336,8 +336,8 @@ async def process_my_subscription(callback: CallbackQuery):
 
     if not user or not user['remnawave_uuid']:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💚 Оформить подписку", callback_data="buy_subscription")],
-            [InlineKeyboardButton(text="🔴 Назад", callback_data="back_to_menu")]
+            [InlineKeyboardButton(text="Оформить подписку", callback_data="buy_subscription")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
         ])
         text = "У тебя пока нет активной подписки.\nОформи её сейчас!"
         await edit_text_with_photo(callback, text, kb, "My-not_subscription")
@@ -376,7 +376,7 @@ async def process_my_subscription(callback: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="buy_subscription")],
-        [InlineKeyboardButton(text="🔴 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
     text = (

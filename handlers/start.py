@@ -69,15 +69,12 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
 
 async def show_main_menu(message: Message):
-    """Показать главное меню с цветными кнопками"""
+    """Показать главное меню"""
     tg_id = message.from_user.id
     is_partner = await db.is_partner(tg_id)
 
-    # Создаём клавиатуру с цветными кнопками
-    # 💚 Зелёная кнопка для "Оформить подписку"
-    # 🔴 Красная кнопка для "Назад" (есть в других меню)
     keyboard = [
-        [InlineKeyboardButton(text="💚 Оформить подписку", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription", style="success")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
