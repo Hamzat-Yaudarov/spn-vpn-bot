@@ -46,7 +46,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
-        [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="💚 Оформить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
@@ -91,7 +91,7 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📱 iPhone", callback_data="device_iphone")],
         [InlineKeyboardButton(text="🤖 Android", callback_data="device_android")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔴 Главное меню", callback_data="back_to_menu")]
     ])
 
     text = "Выберите устройство, для которого нужна инструкция:"
@@ -108,7 +108,7 @@ async def process_device_iphone(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="← Назад к выбору устройства", callback_data="how_to_connect")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔴 Главное меню", callback_data="back_to_menu")]
     ])
 
     text = (
@@ -133,7 +133,7 @@ async def process_device_android(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="← Назад к выбору устройства", callback_data="how_to_connect")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔴 Главное меню", callback_data="back_to_menu")]
     ])
 
     text = (

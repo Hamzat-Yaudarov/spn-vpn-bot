@@ -27,7 +27,7 @@ async def process_referral(callback: CallbackQuery):
     active_count = stats[1] if stats else 0
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔴 Назад", callback_data="back_to_menu")]
     ])
 
     text = (
