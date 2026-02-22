@@ -634,6 +634,7 @@ async def admin_broadcast_all(message: Message):
         sent_count = 0
         error_count = 0
         blocked_count = 0
+        rate_limited_delay = 0.3  # Начальная задержка между сообщениями (3-4 сообщений в секунду)
 
         await message.answer(
             f"📤 <b>Начинаю рассылку всем {total_users} пользователям...</b>\n\n"
@@ -647,18 +648,29 @@ async def admin_broadcast_all(message: Message):
                 await message.bot.send_message(user_id, broadcast_text)
                 sent_count += 1
                 logger.info(f"Broadcast message sent to user {user_id}")
+                # Сбрасываем задержку при успешной отправке
+                rate_limited_delay = 0.3
             except Exception as e:
                 error_msg = str(e)
                 # Проверяем если это ошибка блокировки
                 if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
+                # Проверяем если это 429 (Too Many Requests)
+                elif "429" in error_msg or "too many requests" in error_msg.lower():
+                    error_count += 1
+                    # Экспоненциально увеличиваем задержку при 429 ошибке
+                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)  # Максимум 3 секунды
+                    logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
+                    # Ждём перед следующей попыткой
+                    await asyncio.sleep(rate_limited_delay)
+                    continue
                 else:
                     error_count += 1
                     logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
 
-            # Rate limiting: 0.1s между сообщениями (10 сообщений в секунду)
-            await asyncio.sleep(0.1)
+            # Rate limiting: задержка между сообщениями
+            await asyncio.sleep(rate_limited_delay)
 
         await message.answer(
             f"✅ <b>Рассылка завершена!</b>\n\n"
@@ -722,6 +734,7 @@ async def admin_broadcast_no_subscription(message: Message):
         sent_count = 0
         error_count = 0
         blocked_count = 0
+        rate_limited_delay = 0.3  # Начальная задержка между сообщениями (3-4 сообщений в секунду)
 
         await message.answer(
             f"📤 <b>Начинаю рассылку {total_users} пользователям без подписки...</b>\n\n"
@@ -735,18 +748,29 @@ async def admin_broadcast_no_subscription(message: Message):
                 await message.bot.send_message(user_id, broadcast_text)
                 sent_count += 1
                 logger.info(f"Broadcast message sent to user {user_id} (no subscription)")
+                # Сбрасываем задержку при успешной отправке
+                rate_limited_delay = 0.3
             except Exception as e:
                 error_msg = str(e)
                 # Проверяем если это ошибка блокировки
                 if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
+                # Проверяем если это 429 (Too Many Requests)
+                elif "429" in error_msg or "too many requests" in error_msg.lower():
+                    error_count += 1
+                    # Экспоненциально увеличиваем задержку при 429 ошибке
+                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)  # Максимум 3 секунды
+                    logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
+                    # Ждём перед следующей попыткой
+                    await asyncio.sleep(rate_limited_delay)
+                    continue
                 else:
                     error_count += 1
                     logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
 
-            # Rate limiting: 0.1s между сообщениями (10 сообщений в секунду)
-            await asyncio.sleep(0.1)
+            # Rate limiting: задержка между сообщениями
+            await asyncio.sleep(rate_limited_delay)
 
         await message.answer(
             f"✅ <b>Рассылка завершена!</b>\n\n"
