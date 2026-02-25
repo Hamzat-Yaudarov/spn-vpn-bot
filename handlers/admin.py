@@ -1,10 +1,13 @@
 import asyncio
 import logging
 import aiohttp
+import asyncio
 from datetime import datetime, timedelta, timezone
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from config import ADMIN_ID, DEFAULT_SQUAD_UUID
 import database as db
 from services.remnawave import (
@@ -17,6 +20,12 @@ from services.remnawave import (
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+class BroadcastStates(StatesGroup):
+    """Состояния для рассылок сообщений"""
+    waiting_for_broadcast_all = State()
+    waiting_for_broadcast_no_sub = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -597,8 +606,8 @@ async def admin_stats(message: Message):
 
 
 @router.message(Command("all_sms"))
-async def admin_broadcast_all(message: Message):
-    """Админ команда: отправить сообщение всем пользователям"""
+async def admin_broadcast_all(message: Message, state: FSMContext):
+    """Админ команда: начать рассылку всем пользователям"""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
@@ -606,18 +615,28 @@ async def admin_broadcast_all(message: Message):
         logger.warning(f"Unauthorized /all_sms attempt from user {admin_id}")
         return
 
-    # Извлекаем текст после команды
-    text_parts = message.text.split(maxsplit=1)
-    if len(text_parts) < 2 or not text_parts[1].strip():
-        await message.answer(
-            "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /all_sms <i>[Сообщение]</i>\n\n"
-            "<b>Пример:</b> /all_sms 🎉 Специальное предложение!"
-        )
-        logger.warning(f"Admin {admin_id} /all_sms - no message provided")
-        return
+    await state.set_state(BroadcastStates.waiting_for_broadcast_all)
+    await message.answer(
+        "📤 <b>Режим рассылки всем пользователям</b>\n\n"
+        "Отправь сообщение, которое нужно разослать:\n"
+        "• Только текст\n"
+        "• Текст + фото\n"
+        "• Текст + видео\n"
+        "• Любая комбинация\n\n"
+        "<i>Я скопирую это сообщение всем пользователям</i>"
+    )
+    logger.info(f"Admin {admin_id} started /all_sms broadcast mode")
 
-    broadcast_text = text_parts[1]
+
+@router.message(BroadcastStates.waiting_for_broadcast_all)
+async def handle_broadcast_all_message(message: Message, state: FSMContext):
+    """Обработчик сообщения в режиме рассылки всем пользователям"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ У вас нет доступа")
+        await state.clear()
+        return
 
     try:
         # Получаем всех пользователей из БД
@@ -628,48 +647,47 @@ async def admin_broadcast_all(message: Message):
         if not users:
             await message.answer("❌ В БД нет пользователей")
             logger.warning(f"Admin {admin_id} /all_sms - no users found")
+            await state.clear()
             return
 
         total_users = len(users)
         sent_count = 0
         error_count = 0
         blocked_count = 0
-        rate_limited_delay = 0.3  # Начальная задержка между сообщениями (3-4 сообщений в секунду)
+        rate_limited_delay = 0.3
 
         await message.answer(
             f"📤 <b>Начинаю рассылку всем {total_users} пользователям...</b>\n\n"
             f"<i>Это может занять некоторое время...</i>"
         )
 
-        # Отправляем сообщение каждому пользователю с rate limiting
+        # Копируем сообщение каждому пользователю с rate limiting
         for user_record in users:
             user_id = user_record['tg_id']
             try:
-                await message.bot.send_message(user_id, broadcast_text)
+                await message.bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id
+                )
                 sent_count += 1
-                logger.info(f"Broadcast message sent to user {user_id}")
-                # Сбрасываем задержку при успешной отправке
+                logger.info(f"Broadcast message copied to user {user_id}")
                 rate_limited_delay = 0.3
             except Exception as e:
                 error_msg = str(e)
-                # Проверяем если это ошибка блокировки
                 if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                # Проверяем если это 429 (Too Many Requests)
                 elif "429" in error_msg or "too many requests" in error_msg.lower():
                     error_count += 1
-                    # Экспоненциально увеличиваем задержку при 429 ошибке
-                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)  # Максимум 3 секунды
+                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)
                     logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
-                    # Ждём перед следующей попыткой
                     await asyncio.sleep(rate_limited_delay)
                     continue
                 else:
                     error_count += 1
                     logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
 
-            # Rate limiting: задержка между сообщениями
             await asyncio.sleep(rate_limited_delay)
 
         await message.answer(
@@ -677,8 +695,7 @@ async def admin_broadcast_all(message: Message):
             f"📊 <b>Статистика:</b>\n"
             f"• ✅ Отправлено: {sent_count}/{total_users}\n"
             f"• 🚫 Заблокировано: {blocked_count}\n"
-            f"• ❌ Ошибок: {error_count}\n\n"
-            f"<i>Сообщение: {broadcast_text[:50]}...</i>"
+            f"• ❌ Ошибок: {error_count}"
         )
 
         logger.info(f"Admin {admin_id} completed /all_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
@@ -686,11 +703,13 @@ async def admin_broadcast_all(message: Message):
     except Exception as e:
         logger.error(f"Broadcast all error: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
+    finally:
+        await state.clear()
 
 
 @router.message(Command("not_sub_sms"))
-async def admin_broadcast_no_subscription(message: Message):
-    """Админ команда: отправить сообщение только пользователям без активной подписки"""
+async def admin_broadcast_no_subscription(message: Message, state: FSMContext):
+    """Админ команда: начать рассылку пользователям без активной подписки"""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
@@ -698,22 +717,31 @@ async def admin_broadcast_no_subscription(message: Message):
         logger.warning(f"Unauthorized /not_sub_sms attempt from user {admin_id}")
         return
 
-    # Извлекаем текст после команды
-    text_parts = message.text.split(maxsplit=1)
-    if len(text_parts) < 2 or not text_parts[1].strip():
-        await message.answer(
-            "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /not_sub_sms <i>[Сообщение]</i>\n\n"
-            "<b>Пример:</b> /not_sub_sms 💳 Получи подписку со скидкой!"
-        )
-        logger.warning(f"Admin {admin_id} /not_sub_sms - no message provided")
-        return
+    await state.set_state(BroadcastStates.waiting_for_broadcast_no_sub)
+    await message.answer(
+        "📤 <b>Режим рассылки пользователям без подписки</b>\n\n"
+        "Отправь сообщение, которое нужно разослать:\n"
+        "• Только текст\n"
+        "• Текст + фото\n"
+        "• Текст + видео\n"
+        "• Любая комбинация\n\n"
+        "<i>Я скопирую это сообщение всем пользователям без активной подписки</i>"
+    )
+    logger.info(f"Admin {admin_id} started /not_sub_sms broadcast mode")
 
-    broadcast_text = text_parts[1]
+
+@router.message(BroadcastStates.waiting_for_broadcast_no_sub)
+async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
+    """Обработчик сообщения в режиме рассылки пользователям без подписки"""
+    admin_id = message.from_user.id
+
+    if not is_admin(admin_id):
+        await message.answer("❌ У вас нет доступа")
+        await state.clear()
+        return
 
     try:
         # Получаем пользователей БЕЗ активной подписки
-        # Активная подписка = subscription_until IS NOT NULL AND subscription_until > now()
         pool = await db.get_pool()
         async with pool.acquire() as conn:
             users = await conn.fetch(
@@ -728,48 +756,47 @@ async def admin_broadcast_no_subscription(message: Message):
         if not users:
             await message.answer("❌ Не найдено пользователей без подписки")
             logger.info(f"Admin {admin_id} /not_sub_sms - no users without subscription found")
+            await state.clear()
             return
 
         total_users = len(users)
         sent_count = 0
         error_count = 0
         blocked_count = 0
-        rate_limited_delay = 0.3  # Начальная задержка между сообщениями (3-4 сообщений в секунду)
+        rate_limited_delay = 0.3
 
         await message.answer(
             f"📤 <b>Начинаю рассылку {total_users} пользователям без подписки...</b>\n\n"
             f"<i>Это может занять некоторое время...</i>"
         )
 
-        # Отправляем сообщение каждому пользователю с rate limiting
+        # Копируем сообщение каждому пользователю с rate limiting
         for user_record in users:
             user_id = user_record['tg_id']
             try:
-                await message.bot.send_message(user_id, broadcast_text)
+                await message.bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id
+                )
                 sent_count += 1
-                logger.info(f"Broadcast message sent to user {user_id} (no subscription)")
-                # Сбрасываем задержку при успешной отправке
+                logger.info(f"Broadcast message copied to user {user_id} (no subscription)")
                 rate_limited_delay = 0.3
             except Exception as e:
                 error_msg = str(e)
-                # Проверяем если это ошибка блокировки
                 if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                # Проверяем если это 429 (Too Many Requests)
                 elif "429" in error_msg or "too many requests" in error_msg.lower():
                     error_count += 1
-                    # Экспоненциально увеличиваем задержку при 429 ошибке
-                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)  # Максимум 3 секунды
+                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)
                     logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
-                    # Ждём перед следующей попыткой
                     await asyncio.sleep(rate_limited_delay)
                     continue
                 else:
                     error_count += 1
                     logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
 
-            # Rate limiting: задержка между сообщениями
             await asyncio.sleep(rate_limited_delay)
 
         await message.answer(
@@ -777,8 +804,7 @@ async def admin_broadcast_no_subscription(message: Message):
             f"📊 <b>Статистика:</b>\n"
             f"• ✅ Отправлено: {sent_count}/{total_users}\n"
             f"• 🚫 Заблокировано: {blocked_count}\n"
-            f"• ❌ Ошибок: {error_count}\n\n"
-            f"<i>Сообщение: {broadcast_text[:50]}...</i>"
+            f"• ❌ Ошибок: {error_count}"
         )
 
         logger.info(f"Admin {admin_id} completed /not_sub_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
@@ -786,3 +812,5 @@ async def admin_broadcast_no_subscription(message: Message):
     except Exception as e:
         logger.error(f"Broadcast no subscription error: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
+    finally:
+        await state.clear()
