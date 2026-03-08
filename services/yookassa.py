@@ -66,7 +66,7 @@ async def create_yookassa_payment(
                 "return_url": "https://t.me/WaySPN_robot"  # После оплаты вернёт в бот
             },
             "capture": True,
-            "description": f"Подписка SPN VPN — {tariff_code}",
+            "description": f"Подписка Way SPN — {tariff_code}",
             "metadata": {
                 "tg_id": str(tg_id),
                 "tariff_code": tariff_code

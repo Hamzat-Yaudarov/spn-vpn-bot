@@ -50,7 +50,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
-        [InlineKeyboardButton(text="💳 Yookassa", callback_data="pay_yookassa")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
     ])
 
