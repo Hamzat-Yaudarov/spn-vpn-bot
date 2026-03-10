@@ -205,7 +205,7 @@ async def remnawave_extend_subscription(
         new_expire = current_dt + timedelta(days=days)
 
         payload = {
-            "uuid": user_uuid,
+            "uuid": str(user_uuid),  # Конвертируем UUID в строку для JSON сериализации
             "expireAt": new_expire.isoformat()
         }
 
@@ -255,7 +255,7 @@ async def remnawave_add_to_squad(
     """
     async def _add_to_squad():
         url = f"{REMNAWAVE_BASE_URL}/internal-squads/{squad_uuid}/bulk-actions/add-users"
-        payload = {"userUuids": [user_uuid]}
+        payload = {"userUuids": [str(user_uuid)]}  # Конвертируем UUID в строку для JSON сериализации
         headers = {
             "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
             "Content-Type": "application/json"
