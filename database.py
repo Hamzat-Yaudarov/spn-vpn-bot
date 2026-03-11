@@ -182,25 +182,6 @@ async def run_migrations():
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
-            expected_referral_earnings_columns = {
-                'referrer_id': {'type': 'BIGINT', 'nullable': False},
-                'user_id': {'type': 'BIGINT', 'nullable': False},
-                'tariff_code': {'type': 'TEXT', 'nullable': False},
-                'amount': {'type': 'NUMERIC', 'nullable': False},
-                'referral_share': {'type': 'NUMERIC', 'nullable': False},
-                'is_first_purchase': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
-            }
-
-            expected_referral_withdrawals_columns = {
-                'referrer_id': {'type': 'BIGINT', 'nullable': False},
-                'amount': {'type': 'NUMERIC', 'nullable': False},
-                'withdrawal_type': {'type': 'TEXT', 'nullable': False},
-                'bank_name': {'type': 'TEXT', 'nullable': True},
-                'phone_number': {'type': 'TEXT', 'nullable': True},
-                'usdt_address': {'type': 'TEXT', 'nullable': True},
-                'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
-            }
-
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
             # ═══════════════════════════════════════════════════════════
@@ -300,40 +281,6 @@ async def run_migrations():
                 )
             """)
             logging.info("✅ Таблица 'partner_withdrawals' создана или уже существует")
-
-            # Таблица реферальных заработков
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS referral_earnings (
-                    id BIGSERIAL PRIMARY KEY,
-                    referrer_id BIGINT NOT NULL,
-                    user_id BIGINT NOT NULL,
-                    tariff_code TEXT NOT NULL,
-                    amount NUMERIC NOT NULL,
-                    referral_share NUMERIC NOT NULL,
-                    is_first_purchase BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT now(),
-                    FOREIGN KEY (referrer_id) REFERENCES users(tg_id) ON DELETE CASCADE
-                )
-            """)
-            logging.info("✅ Таблица 'referral_earnings' создана или уже существует")
-
-            # Таблица запросов на вывод средств рефералами
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS referral_withdrawals (
-                    id BIGSERIAL PRIMARY KEY,
-                    referrer_id BIGINT NOT NULL,
-                    amount NUMERIC NOT NULL,
-                    withdrawal_type TEXT NOT NULL,
-                    bank_name TEXT,
-                    phone_number TEXT,
-                    usdt_address TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT now(),
-                    FOREIGN KEY (referrer_id) REFERENCES users(tg_id) ON DELETE CASCADE
-                )
-            """)
-            logging.info("✅ Таблица 'referral_withdrawals' создана или уже существует")
-
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -404,11 +351,6 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_partner_referrals_partner_id ON partner_referrals(partner_id);",
                 "CREATE INDEX IF NOT EXISTS idx_partner_earnings_partner_id ON partner_earnings(partner_id);",
                 "CREATE INDEX IF NOT EXISTS idx_partner_withdrawals_partner_id ON partner_withdrawals(partner_id);",
-
-                # referral индексы
-                "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referrer_id ON referral_earnings(referrer_id);",
-                "CREATE INDEX IF NOT EXISTS idx_referral_earnings_user_id ON referral_earnings(user_id);",
-                "CREATE INDEX IF NOT EXISTS idx_referral_withdrawals_referrer_id ON referral_withdrawals(referrer_id);",
             ]
 
             for query in index_queries:
@@ -486,8 +428,6 @@ async def run_migrations():
             await sync_table_schema(conn, 'partner_referrals', expected_partner_referrals_columns)
             await sync_table_schema(conn, 'partner_earnings', expected_partner_earnings_columns)
             await sync_table_schema(conn, 'partner_withdrawals', expected_partner_withdrawals_columns)
-            await sync_table_schema(conn, 'referral_earnings', expected_referral_earnings_columns)
-            await sync_table_schema(conn, 'referral_withdrawals', expected_referral_withdrawals_columns)
 
             logging.info("✅ Синхронизация схемы завершена")
 
@@ -1497,118 +1437,5 @@ async def mark_withdrawal_completed(withdrawal_id: int):
     """Отметить вывод как выполненный"""
     await db_execute(
         "UPDATE partner_withdrawals SET status = 'completed' WHERE id = $1",
-        (withdrawal_id,)
-    )
-
-
-# ────────────────────────────────────────────────
-#          REFERRAL EARNINGS MANAGEMENT
-# ────────────────────────────────────────────────
-
-async def add_referral_earning(referrer_id: int, user_id: int, tariff_code: str, amount: float, percentage: int, is_first_purchase: bool = True):
-    """Записать реферальный доход"""
-    referral_share = amount * percentage / 100
-    await db_execute(
-        """
-        INSERT INTO referral_earnings (referrer_id, user_id, tariff_code, amount, referral_share, is_first_purchase)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        """,
-        (referrer_id, user_id, tariff_code, amount, referral_share, is_first_purchase)
-    )
-
-
-async def get_referral_balance_stats(referrer_id: int):
-    """Получить полную статистику реферального баланса пользователя"""
-    # Общий заработок
-    total_earned = await db_execute(
-        "SELECT SUM(referral_share) as total FROM referral_earnings WHERE referrer_id = $1",
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    # Всего выведено
-    total_withdrawn = await db_execute(
-        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1 AND status = 'completed'",
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    # Текущий баланс = заработано - выведено
-    earned = float(total_earned['total'] or 0)
-    withdrawn = float(total_withdrawn['total'] or 0)
-    balance = earned - withdrawn
-
-    # Заработок по тарифам
-    earnings = await db_execute(
-        """
-        SELECT
-            tariff_code,
-            COUNT(*) as purchase_count,
-            SUM(referral_share) as total_share
-        FROM referral_earnings
-        WHERE referrer_id = $1
-        GROUP BY tariff_code
-        """,
-        (referrer_id,),
-        fetch_all=True
-    )
-
-    # Количество приглашённых пользователей
-    referral_count = await db_execute(
-        "SELECT COUNT(DISTINCT referred_user_id) as count FROM (SELECT user_id as referred_user_id FROM referral_earnings WHERE referrer_id = $1) as t",
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    return {
-        'earnings_by_tariff': earnings or [],
-        'total_earned': earned,
-        'total_withdrawn': withdrawn,
-        'current_balance': balance,
-        'referral_count': referral_count['count'] if referral_count else 0
-    }
-
-
-async def create_referral_withdrawal_request(referrer_id: int, amount: float, withdrawal_type: str, **kwargs):
-    """Создать запрос на вывод средств для реферала"""
-    bank_name = kwargs.get('bank_name')
-    phone_number = kwargs.get('phone_number')
-    usdt_address = kwargs.get('usdt_address')
-
-    await db_execute(
-        """
-        INSERT INTO referral_withdrawals (referrer_id, amount, withdrawal_type, bank_name, phone_number, usdt_address)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        """,
-        (referrer_id, amount, withdrawal_type, bank_name, phone_number, usdt_address)
-    )
-
-
-async def get_pending_referral_withdrawals():
-    """Получить все ожидающие запросы на вывод от рефералов"""
-    return await db_execute(
-        """
-        SELECT
-            rw.id,
-            rw.referrer_id,
-            rw.amount,
-            rw.withdrawal_type,
-            rw.bank_name,
-            rw.phone_number,
-            rw.usdt_address,
-            u.username
-        FROM referral_withdrawals rw
-        LEFT JOIN users u ON rw.referrer_id = u.tg_id
-        WHERE rw.status = 'pending'
-        ORDER BY rw.created_at ASC
-        """,
-        fetch_all=True
-    )
-
-
-async def mark_referral_withdrawal_completed(withdrawal_id: int):
-    """Отметить реферальный вывод как выполненный"""
-    await db_execute(
-        "UPDATE referral_withdrawals SET status = 'completed' WHERE id = $1",
         (withdrawal_id,)
     )

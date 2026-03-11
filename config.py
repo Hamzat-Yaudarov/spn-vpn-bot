@@ -73,9 +73,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 TARIFFS = {
     "1m": {"days": 30, "price": 200},
-    "3m": {"days": 90, "price": 500},
-    "6m": {"days": 180, "price": 900},
-    "12m": {"days": 365, "price": 1550}
+    "3m": {"days": 90, "price": 449},
+    "6m": {"days": 180, "price": 790},
+    "12m": {"days": 365, "price": 1200}
 }
 
 # ────────────────────────────────────────────────
