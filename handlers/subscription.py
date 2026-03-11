@@ -48,11 +48,26 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     tariff = TARIFFS[tariff_code]
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    # Проверяем баланс пользователя для опции "Оплатить с баланса"
+    balance_stats = await db.get_referral_balance_stats(tg_id)
+    balance = balance_stats['current_balance']
+    price = tariff['price']
+
+    # Определяем, может ли пользователь платить с баланса
+    can_pay_from_balance = balance >= price
+
+    payment_buttons = [
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
         [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
-    ])
+    ]
+
+    # Добавляем кнопку платежа с баланса, если есть достаточно средств
+    if can_pay_from_balance:
+        payment_buttons.append([InlineKeyboardButton(text=f"🪙 Оплатить с баланса ({balance:.2f} ₽)", callback_data="pay_from_balance")])
+
+    payment_buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=payment_buttons)
 
     text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
 
@@ -390,3 +405,92 @@ async def process_my_subscription(callback: CallbackQuery):
     )
 
     await edit_text_with_photo(callback, text, kb, "Моя подписка")
+
+
+@router.callback_query(F.data == "pay_from_balance")
+async def process_pay_from_balance(callback: CallbackQuery, state: FSMContext):
+    """Оплатить подписку с использованием реферального баланса"""
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    tariff_code = data.get("tariff_code")
+    logging.info(f"User {tg_id} selected payment method: balance (tariff: {tariff_code})")
+
+    if not tariff_code:
+        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
+        await state.clear()
+        return
+
+    tariff = TARIFFS[tariff_code]
+    amount = tariff["price"]
+    days = tariff["days"]
+
+    # Проверяем баланс
+    balance_stats = await db.get_referral_balance_stats(tg_id)
+    balance = balance_stats['current_balance']
+
+    if balance < amount:
+        await callback.answer(f"❌ Недостаточно средств! Не хватает {amount - balance:.2f} ₽", show_alert=True)
+        return
+
+    try:
+        # Попытаемся активировать подписку
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            from services.remnawave import remnawave_get_or_create_user, remnawave_add_to_squad, remnawave_get_subscription_url
+
+            # Создаём или получаем пользователя в Remnawave
+            uuid, username = await remnawave_get_or_create_user(
+                session, tg_id, days, extend_if_exists=True
+            )
+
+            if not uuid:
+                logging.error(f"Failed to create/get Remnawave user for {tg_id}")
+                await callback.answer("❌ Ошибка активации подписки. Попробуй позже.", show_alert=True)
+                return
+
+            # Добавляем в сквад
+            squad_added = await remnawave_add_to_squad(session, uuid)
+            if not squad_added:
+                logging.warning(f"Failed to add user {uuid} to squad")
+
+            # Получаем ссылку подписки
+            sub_url = await remnawave_get_subscription_url(session, uuid)
+
+            # Обновляем подписку пользователя
+            user = await db.get_user(tg_id)
+            existing_subscription = user.get('subscription_until') if user else None
+            now = datetime.utcnow()
+
+            if existing_subscription and existing_subscription > now:
+                # Активная подписка есть - добавляем дни к ней
+                new_until = existing_subscription + timedelta(days=days)
+                logging.info(f"User {tg_id} has active subscription, extending from {existing_subscription} by {days} days to {new_until}")
+            else:
+                # Подписки нет или она истекла - создаём новую
+                new_until = now + timedelta(days=days)
+                logging.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
+
+            await db.update_subscription(tg_id, uuid, username, new_until, None)
+
+            # Отправляем уведомление в админ о транзакции баланса (опционально, может быть логирование)
+            logging.info(f"✅ Balance payment: User {tg_id} paid {amount}₽ from balance for tariff {tariff_code}")
+
+        # Отправляем сообщение пользователю об успешной оплате
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
+        ])
+
+        text = (
+            "✅ <b>Оплата с баланса успешна!</b>\n\n"
+            f"Тариф: {tariff_code} ({days} дней)\n"
+            f"Сумма: {amount} ₽\n\n"
+            f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
+        )
+
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await state.clear()
+
+    except Exception as e:
+        logging.error(f"Error processing balance payment: {e}", exc_info=True)
+        await callback.answer(f"❌ Ошибка: {str(e)[:100]}", show_alert=True)

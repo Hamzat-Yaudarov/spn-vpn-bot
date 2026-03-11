@@ -156,29 +156,36 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             if not sub_url:
                 logging.warning(f"Failed to get subscription URL for {uuid}")
 
-            # Обрабатываем реферальную программу
+            # Обрабатываем реферальную программу (новая система с комиссиями)
             try:
                 referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    logging.info(f"Processing referral bonus for referrer {referrer[0]}")
-                    referrer_uuid_row = await db.get_user(referrer[0])
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
-                        logging.info(f"Attempting to extend subscription for referrer {referrer[0]}")
-                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
-                        if ref_extended:
-                            await db.increment_active_referrals(referrer[0])
-                            logging.info(f"Referral bonus given to {referrer[0]}")
-                            # Отмечаем первый платёж ТОЛЬКО если бонус успешно дан
-                            await db.mark_first_payment(tg_id)
-                        else:
-                            logging.error(f"Failed to extend subscription for referrer {referrer[0]} (remnawave_extend_subscription returned False)")
-                            logging.warning(f"NOT marking first payment - will retry bonus on next payment attempt")
+                if referrer and referrer[0]:  # есть рефералит
+                    amount = TARIFFS[tariff_code]["price"]
+                    is_first_payment = not referrer[1]  # True если это первый платеж реферала
+
+                    # Определяем процент комиссии
+                    if is_first_payment:
+                        commission_percentage = 35  # 35% за первую покупку
+                        logging.info(f"First purchase by referred user {tg_id}, applying 35% commission to referrer {referrer[0]}")
                     else:
-                        logging.warning(f"Cannot give referral bonus: referrer {referrer[0]} has no Remnawave UUID")
-                        logging.warning(f"NOT marking first payment - will retry bonus on next payment attempt")
+                        commission_percentage = 15  # 15% за повторные покупки
+                        logging.info(f"Repeat purchase by referred user {tg_id}, applying 15% commission to referrer {referrer[0]}")
+
+                    # Записываем заработок рефералу
+                    await db.add_referral_earning(
+                        referrer[0],
+                        tg_id,
+                        tariff_code,
+                        amount,
+                        commission_percentage,
+                        is_first_payment
+                    )
+                    logging.info(f"✅ Referral earning recorded: {referrer[0]} earned {amount * commission_percentage / 100}₽ from {tg_id} ({amount}₽ × {commission_percentage}%)")
+
+                    if is_first_payment:
+                        await db.mark_first_payment(tg_id)
             except Exception as e:
                 logging.error(f"Error processing referral for user {tg_id}: {e}")
-                logging.warning(f"NOT marking first payment - will retry bonus on next payment attempt")
                 # Реферальная ошибка не должна блокировать основной платеж
 
             # Обрабатываем партнёрскую программу

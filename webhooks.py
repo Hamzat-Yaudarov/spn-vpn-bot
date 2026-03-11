@@ -95,23 +95,14 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
                     logger.info(f"🎁 Processing referral bonus for referrer {referrer[0]}")
                     referrer_uuid_row = await db.get_user(referrer[0])
                     if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
-                        logger.info(f"🔄 Attempting to extend subscription for referrer {referrer[0]}")
                         ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
                         if ref_extended:
                             await db.increment_active_referrals(referrer[0])
                             logger.info(f"✅ Referral bonus given to {referrer[0]} (+7 days)")
-                            # Отмечаем первый платёж ТОЛЬКО если бонус успешно дан
-                            # Это позволяет повторить попытку на следующем платеже если текущая попытка упала
-                            await db.mark_first_payment(tg_id)
-                        else:
-                            logger.error(f"❌ Failed to extend subscription for referrer {referrer[0]} (remnawave_extend_subscription returned False)")
-                            logger.warning(f"⚠️ NOT marking first payment - will retry bonus on next payment attempt")
-                    else:
-                        logger.warning(f"⚠️ Cannot give referral bonus: referrer {referrer[0]} has no Remnawave UUID")
-                        logger.warning(f"⚠️ NOT marking first payment - will retry bonus on next payment attempt")
+
+                    await db.mark_first_payment(tg_id)
             except Exception as e:
                 logger.error(f"❌ Error processing referral for user {tg_id}: {e}")
-                logger.warning(f"⚠️ NOT marking first payment - will retry bonus on next payment attempt")
 
             # Обрабатываем партнёрскую программу
             try:
