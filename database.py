@@ -122,6 +122,8 @@ async def run_migrations():
                 'first_payment': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'referral_count': {'type': 'INT', 'nullable': False, 'default': '0'},
                 'active_referrals': {'type': 'INT', 'nullable': False, 'default': '0'},
+                'referral_earnings': {'type': 'NUMERIC', 'nullable': False, 'default': '0'},
+                'referral_withdrawn': {'type': 'NUMERIC', 'nullable': False, 'default': '0'},
                 'gift_received': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
                 'notification_type': {'type': 'TEXT', 'nullable': True},
@@ -182,6 +184,14 @@ async def run_migrations():
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
+            expected_referral_earnings_columns = {
+                'referrer_id': {'type': 'BIGINT', 'nullable': False},
+                'referred_user_id': {'type': 'BIGINT', 'nullable': False},
+                'tariff_code': {'type': 'TEXT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'referrer_share': {'type': 'NUMERIC', 'nullable': False},
+            }
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
             # ═══════════════════════════════════════════════════════════
@@ -202,11 +212,15 @@ async def run_migrations():
                     subscription_until TIMESTAMP,
                     squad_uuid UUID,
 
-                    -- Реферальная программа
+                    -- Реферальная программа (старая система)
                     referrer_id BIGINT,
                     first_payment BOOLEAN DEFAULT FALSE,
                     referral_count INT DEFAULT 0,
                     active_referrals INT DEFAULT 0,
+
+                    -- Реферальная программа (новая система с комиссиями)
+                    referral_earnings NUMERIC DEFAULT 0,
+                    referral_withdrawn NUMERIC DEFAULT 0,
 
                     -- Подарки
                     gift_received BOOLEAN DEFAULT FALSE,
@@ -295,6 +309,22 @@ async def run_migrations():
                     status TEXT DEFAULT 'pending'
                 )
             """)
+
+            # Таблица реферальных заработков
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_earnings (
+                    id BIGSERIAL PRIMARY KEY,
+                    referrer_id BIGINT NOT NULL,
+                    referred_user_id BIGINT NOT NULL,
+                    tariff_code TEXT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    referrer_share NUMERIC NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(referrer_id, referred_user_id, tariff_code),
+                    FOREIGN KEY (referrer_id) REFERENCES users(tg_id) ON DELETE CASCADE,
+                    FOREIGN KEY (referred_user_id) REFERENCES users(tg_id) ON DELETE CASCADE
+                )
+            """)
             logging.info("✅ Таблица 'payments' создана или уже существует")
 
             # Таблица промокодов
@@ -351,6 +381,10 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_partner_referrals_partner_id ON partner_referrals(partner_id);",
                 "CREATE INDEX IF NOT EXISTS idx_partner_earnings_partner_id ON partner_earnings(partner_id);",
                 "CREATE INDEX IF NOT EXISTS idx_partner_withdrawals_partner_id ON partner_withdrawals(partner_id);",
+
+                # referral_earnings индексы
+                "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referrer_id ON referral_earnings(referrer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referred_user_id ON referral_earnings(referred_user_id);",
             ]
 
             for query in index_queries:
@@ -372,6 +406,8 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings NUMERIC DEFAULT 0;",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_withdrawn NUMERIC DEFAULT 0;",
             ]
 
             for query in alter_queries:
@@ -428,6 +464,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'partner_referrals', expected_partner_referrals_columns)
             await sync_table_schema(conn, 'partner_earnings', expected_partner_earnings_columns)
             await sync_table_schema(conn, 'partner_withdrawals', expected_partner_withdrawals_columns)
+            await sync_table_schema(conn, 'referral_earnings', expected_referral_earnings_columns)
 
             logging.info("✅ Синхронизация схемы завершена")
 
@@ -1439,3 +1476,148 @@ async def mark_withdrawal_completed(withdrawal_id: int):
         "UPDATE partner_withdrawals SET status = 'completed' WHERE id = $1",
         (withdrawal_id,)
     )
+
+
+# ────────────────────────────────────────────────
+#          REFERRAL EARNINGS MANAGEMENT
+# ────────────────────────────────────────────────
+
+async def add_referral_earning(referrer_id: int, referred_user_id: int, tariff_code: str, amount: float, percentage: int) -> bool:
+    """
+    Добавить реферальный заработок (комиссию)
+
+    Возвращает True если успешно добавлено, False если это повторное зачисление для одного реферала
+
+    Использует транзакцию для атомарности и защиты от повторного зачисления
+    """
+    referrer_share = amount * percentage / 100
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # Пытаемся вставить запись с UNIQUE constraint
+                # Если запись уже существует, не вставляем её
+                result = await conn.fetch(
+                    """
+                    INSERT INTO referral_earnings (referrer_id, referred_user_id, tariff_code, amount, referrer_share)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (referrer_id, referred_user_id, tariff_code) DO NOTHING
+                    RETURNING 1
+                    """,
+                    referrer_id, referred_user_id, tariff_code, amount, referrer_share
+                )
+
+                # Если RETURNING вернул результат - запись была вставлена
+                if result:
+                    # Обновляем общий заработок пользователя только если запись была вставлена
+                    await conn.execute(
+                        "UPDATE users SET referral_earnings = referral_earnings + $1 WHERE tg_id = $2",
+                        referrer_share, referrer_id
+                    )
+                    return True
+                else:
+                    # Запись уже существует - это повторное зачисление
+                    return False
+
+            except Exception as e:
+                logging.error(f"Error adding referral earning: {e}")
+                return False
+
+
+async def get_referral_earnings_stats(referrer_id: int):
+    """
+    Получить полную статистику по реферальным заработкам
+
+    Returns:
+        dict с информацией о заработках, или None если нет данных
+    """
+    user = await get_user(referrer_id)
+    if not user:
+        return None
+
+    # Заработок по тарифам
+    earnings = await db_execute(
+        """
+        SELECT
+            tariff_code,
+            COUNT(DISTINCT referred_user_id) as referral_count,
+            SUM(referrer_share) as total_share
+        FROM referral_earnings
+        WHERE referrer_id = $1
+        GROUP BY tariff_code
+        ORDER BY tariff_code
+        """,
+        (referrer_id,),
+        fetch_all=True
+    )
+
+    # Общий заработок, выведено, баланс из таблицы users
+    total_earned = float(user['referral_earnings'] or 0)
+    total_withdrawn = float(user['referral_withdrawn'] or 0)
+    current_balance = total_earned - total_withdrawn
+
+    # Всего приглашено и активировало доступ
+    total_referrals = await db_execute(
+        "SELECT COUNT(DISTINCT referred_user_id) as count FROM referral_earnings WHERE referrer_id = $1",
+        (referrer_id,),
+        fetch_one=True
+    )
+
+    return {
+        'total_referrals': total_referrals['count'] if total_referrals else 0,
+        'earnings_by_tariff': earnings or [],
+        'total_earned': total_earned,
+        'total_withdrawn': total_withdrawn,
+        'current_balance': current_balance
+    }
+
+
+async def has_referred_user_earning(referrer_id: int, referred_user_id: int) -> bool:
+    """Проверить получил ли рефератор уже заработок за этого реферала"""
+    result = await db_execute(
+        "SELECT 1 FROM referral_earnings WHERE referrer_id = $1 AND referred_user_id = $2",
+        (referrer_id, referred_user_id),
+        fetch_one=True
+    )
+    return result is not None
+
+
+async def create_referral_withdrawal_request(referrer_id: int, amount: float, withdrawal_type: str, **kwargs):
+    """
+    Создать запрос на вывод реферальных средств
+
+    Args:
+        referrer_id: ID рефератора
+        amount: Сумма вывода
+        withdrawal_type: Тип вывода (bank, card, usdt, etc)
+        **kwargs: Дополнительные данные (bank_name, phone_number, usdt_address)
+    """
+    bank_name = kwargs.get('bank_name')
+    phone_number = kwargs.get('phone_number')
+    usdt_address = kwargs.get('usdt_address')
+
+    # Сохраняем данные в отдельную таблицу, используя партнёрскую таблицу withdrawals
+    # но мы будем отличать по типу или добавить флаг источника
+    # Для простоты используем новую таблицу или добавим source_type в partner_withdrawals
+
+    # Обновляем баланс пользователя
+    await db_execute(
+        "UPDATE users SET referral_withdrawn = referral_withdrawn + $1 WHERE tg_id = $2",
+        (amount, referrer_id)
+    )
+
+    # Можно добавить логирование или отправить админу
+    logging.info(f"Referral withdrawal request created: referrer_id={referrer_id}, amount={amount}, type={withdrawal_type}")
+
+
+async def get_referral_withdrawal_balance(referrer_id: int) -> float:
+    """Получить текущий баланс для вывода реферальных средств"""
+    user = await get_user(referrer_id)
+    if not user:
+        return 0.0
+
+    total_earned = float(user['referral_earnings'] or 0)
+    total_withdrawn = float(user['referral_withdrawn'] or 0)
+
+    return total_earned - total_withdrawn

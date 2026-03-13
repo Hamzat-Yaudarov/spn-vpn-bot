@@ -32,8 +32,15 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 referrer_id = int(args[1].split("_")[1])
                 # Проверяем что это не сам пользователь
                 if referrer_id != tg_id:
-                    await db.update_referral_count(referrer_id)
-                    logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
+                    # Проверяем что пользователь ещё не существует в БД
+                    # (защита от множественного рефератора)
+                    existing_user = await db.get_user(tg_id)
+                    if existing_user:
+                        logging.warning(f"User {tg_id} already exists in DB, not assigning referrer {referrer_id}")
+                        referrer_id = None  # Не переопределяем рефератора
+                    else:
+                        await db.update_referral_count(referrer_id)
+                        logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
                 else:
                     logging.warning(f"User {tg_id} tried to use their own referral link")
                     referrer_id = None
@@ -51,6 +58,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 partner_id = None
 
     # Создаём пользователя если его нет
+    # Если пользователь уже существует, create_user использует ON CONFLICT DO NOTHING,
+    # поэтому существующий referrer_id не будет изменён (защита от множественного рефератора)
     await db.create_user(tg_id, username, referrer_id)
 
     # Проверяем принял ли пользователь условия
