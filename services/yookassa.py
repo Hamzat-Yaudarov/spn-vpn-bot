@@ -170,60 +170,36 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             if not sub_url:
                 logging.warning(f"Failed to get subscription URL for {uuid}")
 
-            # Обрабатываем реферальную программу (СТАРАЯ СИСТЕМА: +7 дней)
-            # Это будет удалено в будущем, но оставляем для совместимости
+            # Обрабатываем реферальную программу (NEW: проценты вместо дней)
             try:
                 referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    referrer_uuid_row = await db.get_user(referrer[0])
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:  # remnawave_uuid существует
-                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
-                        if ref_extended:
-                            await db.increment_active_referrals(referrer[0])
-                            logging.info(f"Referral bonus given to {referrer[0]} (old system)")
+                if referrer and referrer[0]:  # есть рефератор
+                    referrer_id = referrer[0]
+                    amount = TARIFFS[tariff_code]["price"]
 
-                    await db.mark_first_payment(tg_id)
-            except Exception as e:
-                logging.error(f"Error processing referral for user {tg_id}: {e}")
-                # Реферальная ошибка не должна блокировать основной платеж
+                    # Проверяем это первая покупка реферала или повторная
+                    is_first_purchase = await db.check_first_referral_purchase(tg_id, referrer_id)
+                    percentage = 35 if is_first_purchase else 15
 
-            # Обрабатываем реферальную программу (НОВАЯ СИСТЕМА: комиссии)
-            try:
-                amount = TARIFFS[tariff_code]["price"]
-                referrer_id = None
-
-                # Получаем рефератора из таблицы users
-                user = await db.get_user(tg_id)
-                if user:
-                    referrer_id = user.get('referrer_id')
-
-                if referrer_id:
-                    logging.info(f"Checking for referrer for user {tg_id}, referrer_id={referrer_id}")
-
-                    # Проверяем, есть ли уже заработок для этого реферала по этому тарифу
-                    already_earned = await db.has_referred_user_earning(referrer_id, tg_id)
-
-                    # Определяем процент: 35% для первой покупки, 15% для последующих
-                    percentage = 35 if not already_earned else 15
-
-                    # Добавляем заработок
-                    result = await db.add_referral_earning(
+                    # Записываем заработок рефератора
+                    await db.add_referral_earning(
                         referrer_id,
                         tg_id,
                         tariff_code,
                         amount,
-                        percentage
+                        is_first_purchase=is_first_purchase
                     )
 
-                    if result:
-                        share = amount * percentage / 100
-                        logging.info(f"✅ Referral earning recorded: referrer_id={referrer_id} earned {share}₽ from {tg_id} ({amount}₽ × {percentage}%)")
-                    else:
-                        logging.warning(f"Failed to add referral earning for referrer_id={referrer_id}, referred_user_id={tg_id}")
-                else:
-                    logging.debug(f"No referrer found for user {tg_id}")
+                    referral_share = amount * percentage / 100
+                    purchase_type = "первую покупку" if is_first_purchase else "повторную покупку"
+                    logging.info(
+                        f"✅ Referral earning recorded: {referrer_id} earned {referral_share}₽ "
+                        f"from {tg_id} ({purchase_type}: {amount}₽ × {percentage}%)"
+                    )
+
+                    await db.mark_first_payment(tg_id)
             except Exception as e:
-                logging.error(f"Error processing referral earnings for user {tg_id}: {e}", exc_info=True)
+                logging.error(f"Error processing referral for user {tg_id}: {e}")
                 # Реферальная ошибка не должна блокировать основной платеж
 
             # Обрабатываем партнёрскую программу

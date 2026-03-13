@@ -32,15 +32,20 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 referrer_id = int(args[1].split("_")[1])
                 # Проверяем что это не сам пользователь
                 if referrer_id != tg_id:
-                    # Проверяем что пользователь ещё не существует в БД
-                    # (защита от множественного рефератора)
-                    existing_user = await db.get_user(tg_id)
-                    if existing_user:
-                        logging.warning(f"User {tg_id} already exists in DB, not assigning referrer {referrer_id}")
-                        referrer_id = None  # Не переопределяем рефератора
-                    else:
+                    # Проверяем защиту: пользователь не может быть рефералом нескольких людей
+                    existing_referrer = await db.db_execute(
+                        "SELECT referrer_id FROM users WHERE tg_id = $1 AND referrer_id IS NOT NULL",
+                        (tg_id,),
+                        fetch_one=True
+                    )
+
+                    if existing_referrer is None:
+                        # Пользователь ещё не имеет рефератора, можем назначить
                         await db.update_referral_count(referrer_id)
                         logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
+                    else:
+                        logging.warning(f"User {tg_id} already has referrer {existing_referrer['referrer_id']}, cannot assign {referrer_id}")
+                        referrer_id = None
                 else:
                     logging.warning(f"User {tg_id} tried to use their own referral link")
                     referrer_id = None
@@ -58,8 +63,6 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 partner_id = None
 
     # Создаём пользователя если его нет
-    # Если пользователь уже существует, create_user использует ON CONFLICT DO NOTHING,
-    # поэтому существующий referrer_id не будет изменён (защита от множественного рефератора)
     await db.create_user(tg_id, username, referrer_id)
 
     # Проверяем принял ли пользователь условия
@@ -118,8 +121,9 @@ async def show_main_menu(message: Message):
         "</blockquote>\n\n"
         "<b>Реферальная программа:</b>\n"
         "<blockquote>"
-        "👥 За каждого приглашённого пользователя,\n"
-        "активировавшего доступ, вы получаете +7 дней"
+        "👥 За каждого приглашённого пользователя:\n"
+        "💰 35% от первой покупки\n"
+        "💰 15% от повторных покупок"
         "</blockquote>"
     )
 

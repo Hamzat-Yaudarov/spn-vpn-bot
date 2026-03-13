@@ -2,7 +2,6 @@ import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
-from config import TARIFFS, ADMIN_ID
 from states import UserStates
 import database as db
 from services.image_handler import edit_text_with_photo, send_text_with_photo
@@ -24,64 +23,41 @@ async def process_referral(callback: CallbackQuery):
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{tg_id}"
 
-    # Получаем статистику реферальных заработков
-    stats = await db.get_referral_earnings_stats(tg_id)
-    
-    if not stats:
-        # У пользователя ещё нет рефералов
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
-        ])
+    # Получаем полную статистику рефералов
+    stats = await db.get_referral_stats(tg_id)
 
-        text = (
-            "<b>💰 Реферальная программа</b>\n\n"
-            "<blockquote>"
-            "Приглашайте друзей и получайте комиссию за каждую их покупку!\n\n"
-            "📊 <b>Как это работает:</b>\n"
-            "• За <b>первую покупку</b> реферала: <b>35%</b> от суммы\n"
-            "• За <b>последующие покупки</b>: <b>15%</b> от суммы\n"
-            "</blockquote>\n\n"
-            "🔗 <b>Ваша персональная ссылка:</b>\n"
-            f"<code>{referral_link}</code>\n\n"
-            "💡 <i>Нажми на ссылку чтобы скопировать её</i>\n\n"
-            "ℹ️ <i>Минимальная сумма вывода: 5000 ₽</i>"
-        )
-
-        await edit_text_with_photo(callback, text, kb, "Реферальная программа")
-        return
-
-    # У пользователя есть рефералы - показываем полную статистику
-    earnings_text = ""
+    # Формируем информацию по тарифам
+    tariffs_info = ""
     if stats['earnings_by_tariff']:
-        earnings_text += "\n📊 <b>Покупки по тарифам:</b>\n"
         for earning in stats['earnings_by_tariff']:
             tariff_code = earning['tariff_code']
-            count = earning['referral_count']
-            days = TARIFFS[tariff_code]["days"]
-            earnings_text += f"• {days} дней: {count}\n"
+            purchase_count = earning['purchase_count'] or 0
+            tariffs_info += f"• {tariff_code}: {purchase_count}\n"
     else:
-        earnings_text += "\n<i>Нет покупок у рефералов</i>\n"
-
-    total_earned = stats['total_earned']
-    total_withdrawn = stats['total_withdrawn']
-    current_balance = stats['current_balance']
+        tariffs_info = "• 1 месяц: \n• 3 месяца: \n• 6 месяцев: \n• 12 месяцев: \n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Вывести средства", callback_data="referral_withdraw")],
+        [InlineKeyboardButton(text="💰 Запросить вывод", callback_data="referral_withdraw")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
     text = (
-        "<b>💰 Реферальная программа</b>\n\n"
+        "<b>💰 Реферальная программа</b>\n"
+        "Приглашайте друзей и зарабатывайте на их покупках:\n\n"
         "<blockquote>"
-        "Вы приглашаете друзей и получаете комиссию за каждую их покупку!\n"
-        "</blockquote>\n"
-        f"{earnings_text}"
-        f"\n💸 <b>Всего заработано:</b> {total_earned:.2f} ₽\n"
-        f"📤 <b>Всего выведено:</b> {total_withdrawn:.2f} ₽\n"
-        f"🪙 <b>Текущий баланс:</b> {current_balance:.2f} ₽\n\n"
-        f"ℹ️ <b>Минимальная сумма вывода:</b> 5000 ₽\n\n"
-        f"🔗 <b>Ваша персональная ссылка:</b>\n"
+        "• <b>35%</b> от первой покупки реферала\n"
+        "• <b>15%</b> от повторных покупок\n"
+        "</blockquote>\n\n"
+        f"👥 <b>Всего активных друзей:</b> {stats['active_referrals']}\n\n"
+        "<b>📊 Покупки по тарифам:</b>\n"
+        f"{tariffs_info}\n"
+        f"<b>💰 Всего заработано:</b> {stats['total_earned']:.2f} ₽\n"
+        f"<b>💸 Всего выведено:</b> {stats['total_withdrawn']:.2f} ₽\n"
+        f"<b>🪙 Текущий баланс:</b> {stats['current_balance']:.2f} ₽\n\n"
+        "<blockquote>"
+        "ℹ️ <b>Минимальная сумма вывода:</b> 5000 ₽\n"
+        "</blockquote>\n\n"
+        "<b>🔗 Ваша реферальная ссылка:</b>\n"
         f"<code>{referral_link}</code>\n\n"
         "💡 <i>Нажми на ссылку чтобы скопировать её</i>"
     )
@@ -89,63 +65,47 @@ async def process_referral(callback: CallbackQuery):
     await edit_text_with_photo(callback, text, kb, "Реферальная программа")
 
 
+# ────────────────────────────────────────────────
+#            WITHDRAWAL FLOWS: SBP
+# ────────────────────────────────────────────────
+
 @router.callback_query(F.data == "referral_withdraw")
-async def process_referral_withdraw(callback: CallbackQuery):
-    """Показать меню вывода реферальных средств"""
+async def process_referral_withdraw_start(callback: CallbackQuery, state: FSMContext):
+    """Начать процесс вывода денег для реферала"""
     tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} requesting referral withdrawal")
+    logging.info(f"User {tg_id} started referral withdrawal")
 
-    # Получаем текущий баланс
-    balance = await db.get_referral_withdrawal_balance(tg_id)
+    # Получаем статистику
+    stats = await db.get_referral_stats(tg_id)
 
-    if balance < 5000:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
-        ])
-
-        needed = 5000 - balance
-        text = (
-            "<b>❌ Недостаточно средств</b>\n\n"
-            f"Ваш баланс: {balance:.2f} ₽\n"
-            f"Минимальная сумма вывода: 5000 ₽\n\n"
-            f"Вам нужно ещё: {needed:.2f} ₽"
-        )
-
-        await edit_text_with_photo(callback, text, kb, "Вывод средств")
+    if stats['current_balance'] < 5000:
+        await callback.answer("❌ Баланс меньше минимальной суммы вывода (5000 ₽)", show_alert=True)
         return
 
-    # У пользователя достаточно средств
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏦 На банковский счёт", callback_data="referral_withdraw_bank")],
-        [InlineKeyboardButton(text="💳 На карту по СБП", callback_data="referral_withdraw_card")],
-        [InlineKeyboardButton(text="₿ На USDT", callback_data="referral_withdraw_usdt")],
+        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="referral_withdraw_sbp")],
+        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="referral_withdraw_usdt")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
     ])
 
     text = (
-        "<b>💰 Вывод реферальных средств</b>\n\n"
-        f"Ваш баланс: {balance:.2f} ₽\n"
-        f"Минимальная сумма вывода: 5000 ₽\n\n"
-        "Выберите способ вывода:"
+        "<b>💰 Выбор способа вывода</b>\n\n"
+        "Выберите удобный для вас способ получения денег:"
     )
 
-    await edit_text_with_photo(callback, text, kb, "Вывод средств")
+    await send_text_with_photo(callback.message, text, kb, "Выбор способа вывода")
 
 
-# ────────────────────────────────────────────────
-#        WITHDRAWAL FLOWS: BANK ACCOUNT
-# ────────────────────────────────────────────────
-
-@router.callback_query(F.data == "referral_withdraw_bank")
-async def process_referral_withdraw_bank_start(callback: CallbackQuery, state: FSMContext):
-    """Начать процесс вывода на банковский счёт"""
+@router.callback_query(F.data == "referral_withdraw_sbp")
+async def process_referral_withdraw_sbp_start(callback: CallbackQuery, state: FSMContext):
+    """Начать процесс вывода на карту по СБП"""
     tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} started bank withdrawal")
+    logging.info(f"User {tg_id} started SBP withdrawal")
 
     # Проверяем баланс
-    balance = await db.get_referral_withdrawal_balance(tg_id)
+    stats = await db.get_referral_stats(tg_id)
 
-    if balance < 5000:
+    if stats['current_balance'] < 5000:
         await callback.answer("❌ Баланс меньше минимальной суммы вывода (5000 ₽)", show_alert=True)
         return
 
@@ -153,14 +113,14 @@ async def process_referral_withdraw_bank_start(callback: CallbackQuery, state: F
         [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
     ])
 
-    text = "🏦 <b>Вывод на банковский счёт</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
+    text = "💳 <b>Вывод на карту по СБП</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
 
     await send_text_with_photo(callback.message, text, kb, "Введите сумму вывода")
-    await state.set_state(UserStates.referral_waiting_withdraw_amount)
+    await state.set_state(UserStates.referral_waiting_sbp_amount)
 
 
-@router.message(UserStates.referral_waiting_withdraw_amount)
-async def process_referral_amount(message: Message, state: FSMContext):
+@router.message(UserStates.referral_waiting_sbp_amount)
+async def process_referral_sbp_amount(message: Message, state: FSMContext):
     """Обработчик ввода суммы для вывода"""
     tg_id = message.from_user.id
 
@@ -171,9 +131,9 @@ async def process_referral_amount(message: Message, state: FSMContext):
             return
 
         # Проверяем баланс
-        balance = await db.get_referral_withdrawal_balance(tg_id)
-        if amount > balance:
-            await message.answer(f"❌ Невозможно вывести больше чем есть на балансе ({balance:.2f} ₽)")
+        stats = await db.get_referral_stats(tg_id)
+        if amount > stats['current_balance']:
+            await message.answer(f"❌ Невозможно вывести больше чем есть на балансе ({stats['current_balance']:.2f} ₽)")
             return
 
         await state.update_data(withdrawal_amount=amount)
@@ -185,14 +145,14 @@ async def process_referral_amount(message: Message, state: FSMContext):
         text = f"🏦 <b>Укажите банк</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите название вашего банка:"
 
         await send_text_with_photo(message, text, kb, "Укажите банк")
-        await state.set_state(UserStates.referral_waiting_bank_name)
+        await state.set_state(UserStates.referral_waiting_sbp_bank)
 
     except ValueError:
         await message.answer("❌ Введите корректную сумму")
 
 
-@router.message(UserStates.referral_waiting_bank_name)
-async def process_referral_bank(message: Message, state: FSMContext):
+@router.message(UserStates.referral_waiting_sbp_bank)
+async def process_referral_sbp_bank(message: Message, state: FSMContext):
     """Обработчик ввода банка"""
     tg_id = message.from_user.id
     bank_name = message.text.strip()
@@ -210,11 +170,11 @@ async def process_referral_bank(message: Message, state: FSMContext):
     text = f"📱 <b>Укажите номер телефона</b>\n\n✅ Введите номер телефона, к которому привязана карта (с кодом страны, например +7XXXXXXXXXX):"
 
     await send_text_with_photo(message, text, kb, "Укажите номер телефона")
-    await state.set_state(UserStates.referral_waiting_phone_number)
+    await state.set_state(UserStates.referral_waiting_sbp_phone)
 
 
-@router.message(UserStates.referral_waiting_phone_number)
-async def process_referral_phone(message: Message, state: FSMContext):
+@router.message(UserStates.referral_waiting_sbp_phone)
+async def process_referral_sbp_phone(message: Message, state: FSMContext):
     """Обработчик ввода номера телефона"""
     tg_id = message.from_user.id
     phone = message.text.strip()
@@ -228,9 +188,9 @@ async def process_referral_phone(message: Message, state: FSMContext):
     amount = data['withdrawal_amount']
     bank_name = data['bank_name']
 
-    # Создаём запрос на вывод (используем функцию из database)
+    # Создаём запрос на вывод
     await db.create_referral_withdrawal_request(
-        tg_id, amount, 'bank',
+        tg_id, amount, 'sbp',
         bank_name=bank_name,
         phone_number=phone
     )
@@ -251,7 +211,7 @@ async def process_referral_phone(message: Message, state: FSMContext):
 
     # Отправляем уведомление администратору
     admin_text = (
-        f"🏦 <b>Новый запрос на вывод реферальных средств (Банк)</b>\n\n"
+        f"💳 <b>Новый запрос на вывод средств от реферала (СБП)</b>\n\n"
         f"👤 <b>Пользователь:</b> @{message.from_user.username or 'unknown'}\n"
         f"🆔 <b>ID:</b> <code>{tg_id}</code>\n"
         f"💰 <b>Сумма:</b> {amount:.2f} ₽\n"
@@ -260,6 +220,7 @@ async def process_referral_phone(message: Message, state: FSMContext):
     )
 
     try:
+        from config import ADMIN_ID
         await message.bot.send_message(ADMIN_ID, admin_text)
     except Exception as e:
         logging.error(f"Failed to send withdrawal notification to admin: {e}")
@@ -268,34 +229,7 @@ async def process_referral_phone(message: Message, state: FSMContext):
 
 
 # ────────────────────────────────────────────────
-#         WITHDRAWAL FLOWS: SBP CARD
-# ────────────────────────────────────────────────
-
-@router.callback_query(F.data == "referral_withdraw_card")
-async def process_referral_withdraw_card_start(callback: CallbackQuery, state: FSMContext):
-    """Начать процесс вывода на карту по СБП"""
-    tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} started card withdrawal")
-
-    # Проверяем баланс
-    balance = await db.get_referral_withdrawal_balance(tg_id)
-
-    if balance < 5000:
-        await callback.answer("❌ Баланс меньше минимальной суммы вывода (5000 ₽)", show_alert=True)
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
-    ])
-
-    text = "💳 <b>Вывод на карту по СБП</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
-
-    await send_text_with_photo(callback.message, text, kb, "Введите сумму вывода")
-    await state.set_state(UserStates.referral_waiting_withdraw_amount)
-
-
-# ────────────────────────────────────────────────
-#         WITHDRAWAL FLOWS: USDT
+#            WITHDRAWAL FLOWS: USDT
 # ────────────────────────────────────────────────
 
 @router.callback_query(F.data == "referral_withdraw_usdt")
@@ -305,9 +239,9 @@ async def process_referral_withdraw_usdt_start(callback: CallbackQuery, state: F
     logging.info(f"User {tg_id} started USDT withdrawal")
 
     # Проверяем баланс
-    balance = await db.get_referral_withdrawal_balance(tg_id)
+    stats = await db.get_referral_stats(tg_id)
 
-    if balance < 5000:
+    if stats['current_balance'] < 5000:
         await callback.answer("❌ Баланс меньше минимальной суммы вывода (5000 ₽)", show_alert=True)
         return
 
@@ -318,10 +252,10 @@ async def process_referral_withdraw_usdt_start(callback: CallbackQuery, state: F
     text = "💎 <b>Вывод в USDT</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
 
     await send_text_with_photo(callback.message, text, kb, "Введите сумму вывода")
-    await state.set_state(UserStates.referral_waiting_withdraw_amount)
+    await state.set_state(UserStates.referral_waiting_usdt_amount)
 
 
-@router.message(UserStates.referral_waiting_withdraw_amount)
+@router.message(UserStates.referral_waiting_usdt_amount)
 async def process_referral_usdt_amount(message: Message, state: FSMContext):
     """Обработчик ввода суммы для вывода в USDT"""
     tg_id = message.from_user.id
@@ -333,25 +267,21 @@ async def process_referral_usdt_amount(message: Message, state: FSMContext):
             return
 
         # Проверяем баланс
-        balance = await db.get_referral_withdrawal_balance(tg_id)
-        if amount > balance:
-            await message.answer(f"❌ Невозможно вывести больше чем есть на балансе ({balance:.2f} ₽)")
+        stats = await db.get_referral_stats(tg_id)
+        if amount > stats['current_balance']:
+            await message.answer(f"❌ Невозможно вывести больше чем есть на балансе ({stats['current_balance']:.2f} ₽)")
             return
 
-        # Проверяем в каком состоянии сейчас пользователь (для USDT или для карты)
-        current_state = await state.get_state()
+        await state.update_data(withdrawal_amount=amount)
 
-        if current_state == UserStates.referral_waiting_withdraw_amount.state:
-            await state.update_data(withdrawal_amount=amount)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+        ])
 
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
-            ])
+        text = f"💎 <b>Введите адрес USDT кошелька</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите адрес вашего USDT кошелька (TRC-20 или ERC-20):"
 
-            text = f"💎 <b>Введите адрес USDT кошелька</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите адрес вашего USDT кошелька (TRC-20 или ERC-20):"
-
-            await send_text_with_photo(message, text, kb, "Введите адрес кошелька")
-            await state.set_state(UserStates.referral_waiting_usdt_address)
+        await send_text_with_photo(message, text, kb, "Введите адрес кошелька")
+        await state.set_state(UserStates.referral_waiting_usdt_address)
 
     except ValueError:
         await message.answer("❌ Введите корректную сумму")
@@ -392,7 +322,7 @@ async def process_referral_usdt_address(message: Message, state: FSMContext):
 
     # Отправляем уведомление администратору
     admin_text = (
-        f"💎 <b>Новый запрос на вывод реферальных средств (USDT)</b>\n\n"
+        f"💎 <b>Новый запрос на вывод средств от реферала (USDT)</b>\n\n"
         f"👤 <b>Пользователь:</b> @{message.from_user.username or 'unknown'}\n"
         f"🆔 <b>ID:</b> <code>{tg_id}</code>\n"
         f"💰 <b>Сумма:</b> {amount:.2f} ₽\n"
@@ -400,6 +330,7 @@ async def process_referral_usdt_address(message: Message, state: FSMContext):
     )
 
     try:
+        from config import ADMIN_ID
         await message.bot.send_message(ADMIN_ID, admin_text)
     except Exception as e:
         logging.error(f"Failed to send withdrawal notification to admin: {e}")

@@ -27,8 +27,9 @@ class UserStates(StatesGroup):
     partnership_waiting_usdt_amount = State()
     partnership_waiting_usdt_address = State()
 
-    # Реферальная программа (вывод средств)
-    referral_waiting_withdraw_amount = State()
-    referral_waiting_bank_name = State()
-    referral_waiting_phone_number = State()
+    # Реферальная программа (выводы денег)
+    referral_waiting_sbp_amount = State()
+    referral_waiting_sbp_bank = State()
+    referral_waiting_sbp_phone = State()
+    referral_waiting_usdt_amount = State()
     referral_waiting_usdt_address = State()
