@@ -88,17 +88,34 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             else:
                 logger.info(f"🔗 Got subscription URL for {uuid}")
 
-            # Обрабатываем реферальную программу
+            # Обрабатываем реферальную программу (NEW: проценты вместо дней)
             try:
                 referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0] and not referrer[1]:  # есть рефералит и это первый платеж
-                    logger.info(f"🎁 Processing referral bonus for referrer {referrer[0]}")
-                    referrer_uuid_row = await db.get_user(referrer[0])
-                    if referrer_uuid_row and referrer_uuid_row['remnawave_uuid']:
-                        ref_extended = await remnawave_extend_subscription(session, referrer_uuid_row['remnawave_uuid'], 7)
-                        if ref_extended:
-                            await db.increment_active_referrals(referrer[0])
-                            logger.info(f"✅ Referral bonus given to {referrer[0]} (+7 days)")
+                if referrer and referrer[0]:  # есть рефератор
+                    referrer_id = referrer[0]
+                    amount = TARIFFS[tariff_code]["price"]
+
+                    logger.info(f"🎁 Processing referral bonus for referrer {referrer_id}")
+
+                    # Проверяем это первая покупка реферала или повторная
+                    is_first_purchase = await db.check_first_referral_purchase(tg_id, referrer_id)
+                    percentage = 35 if is_first_purchase else 15
+
+                    # Записываем заработок рефератора
+                    await db.add_referral_earning(
+                        referrer_id,
+                        tg_id,
+                        tariff_code,
+                        amount,
+                        is_first_purchase=is_first_purchase
+                    )
+
+                    referral_share = amount * percentage / 100
+                    purchase_type = "первую покупку" if is_first_purchase else "повторную покупку"
+                    logger.info(
+                        f"💰 Referral earning recorded: {referrer_id} earned {referral_share}₽ "
+                        f"from {tg_id} ({purchase_type}: {amount}₽ × {percentage}%)"
+                    )
 
                     await db.mark_first_payment(tg_id)
             except Exception as e:
