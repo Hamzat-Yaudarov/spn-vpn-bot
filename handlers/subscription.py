@@ -26,9 +26,9 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1 месяц — 200₽", callback_data="tariff_1m")],
-        [InlineKeyboardButton(text="3 месяца — 449₽", callback_data="tariff_3m")],
-        [InlineKeyboardButton(text="6 месяцев — 790₽", callback_data="tariff_6m")],
-        [InlineKeyboardButton(text="12 месяцев — 1200₽", callback_data="tariff_12m")],
+        [InlineKeyboardButton(text="3 месяца — 500₽", callback_data="tariff_3m")],
+        [InlineKeyboardButton(text="6 месяцев — 900₽", callback_data="tariff_6m")],
+        [InlineKeyboardButton(text="12 месяцев — 1550₽", callback_data="tariff_12m")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
@@ -289,9 +289,9 @@ async def process_check_payment(callback: CallbackQuery):
 
                 if success:
                     await callback.answer(
-                        "✅ <b>Оплата подтверждена!</b>\n\n"
+                        "✅ Оплата подтверждена!\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше.",
+                        "Ваш ключ отправлен в сообщении от бота.",
                         show_alert=True
                     )
                 else:
@@ -308,9 +308,9 @@ async def process_check_payment(callback: CallbackQuery):
 
                 if success:
                     await callback.answer(
-                        "✅ <b>Оплата подтверждена!</b>\n\n"
+                        "✅ Оплата подтверждена!\n\n"
                         f"Тариф: {tariff_code}\n"
-                        "Ссылка подписки отправлена в сообщении выше.",
+                        "Ваш ключ отправлен в сообщении выше.",
                         show_alert=True
                     )
                 else:
@@ -385,7 +385,7 @@ async def process_my_subscription(callback: CallbackQuery):
             f"📆 Осталось времени: <b>{remaining_str}</b>\n"
         "🌐 Группа подключения: <b>SPN-Squad</b>\n"
         "</blockquote>\n\n"
-        "<b>Персональная ссылка доступа:</b>\n"
+        "<b>Ваш ключ:</b>\n"
         f"{sub_url or '<i>Ошибка получения ссылки</i>'}\n\n"
     )
 
