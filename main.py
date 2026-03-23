@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, MenuButtonCommands
 
 from config import BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
@@ -59,6 +60,24 @@ def setup_handlers():
     logger.info("All handlers registered")
 
 
+async def setup_menu_button():
+    """Устанавливаем кнопку меню в левом нижнем углу чата"""
+    try:
+        # Устанавливаем команду
+        commands = [
+            BotCommand(command="start", description="Главное меню"),
+        ]
+        await bot.set_my_commands(commands)
+
+        # Устанавливаем кнопку меню которая показывает команды
+        menu_button = MenuButtonCommands()
+        await bot.set_chat_menu_button(menu_button=menu_button)
+
+        logger.info("✅ Menu button configured")
+    except Exception as e:
+        logger.error(f"Failed to setup menu button: {e}")
+
+
 # ────────────────────────────────────────────────
 #          GRACEFUL SHUTDOWN & SIGNAL HANDLING
 # ────────────────────────────────────────────────
@@ -105,6 +124,9 @@ async def main():
     # Регистрируем обработчики
     setup_handlers()
     logger.info("✅ Handlers registered")
+
+    # Устанавливаем кнопку меню
+    await setup_menu_button()
 
     # Устанавливаем экземпляр бота для webhook'ов
     webhooks.set_bot(bot)
