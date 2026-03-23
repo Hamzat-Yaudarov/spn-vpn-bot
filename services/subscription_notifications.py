@@ -45,9 +45,9 @@ def ensure_utc_aware(dt):
 async def check_and_send_notifications(bot):
     """
     Главная фоновая задача для отправки уведомлений по расписанию:
-    - 10:00 MSK: пользователи с <24h до конца подписки
+    - 10:00 MSK: пользователи с <3d до конца подписки
     - 16:00 MSK: пользователи у которых подписка уже закончилась
-    - 20:00 MSK: пользователи с <24h до конца подписки
+    - 20:00 MSK: пользователи с <3d до конца подписки
     """
     logger.info("✅ Scheduled notification service started")
     
@@ -59,7 +59,7 @@ async def check_and_send_notifications(bot):
             
             # Проверяем каждое из трёх времён
             if hour == 10 and minute == 0:
-                logger.info("⏰ Scheduled check: 10:00 MSK - Users with <24h left")
+                logger.info("⏰ Scheduled check: 10:00 MSK - Users with <3d left")
                 try:
                     await _send_notifications_for_expiring(bot)
                 except Exception as e:
@@ -77,7 +77,7 @@ async def check_and_send_notifications(bot):
                 await asyncio.sleep(60)
                 
             elif hour == 20 and minute == 0:
-                logger.info("⏰ Scheduled check: 20:00 MSK - Users with <24h left")
+                logger.info("⏰ Scheduled check: 20:00 MSK - Users with <3d left")
                 try:
                     await _send_notifications_for_expiring(bot)
                 except Exception as e:
@@ -95,12 +95,12 @@ async def check_and_send_notifications(bot):
 
 async def _send_notifications_for_expiring(bot):
     """
-    Найти и отправить уведомления пользователям у которых до конца подписки <24h
+    Найти и отправить уведомления пользователям у которых до конца подписки <3d
     Информация берётся прямо из Remnawave API для точности
     Соблюдает лимиты Telegram API
     """
     try:
-        logger.info("🔍 Searching for users with <24h left (checking Remnawave)...")
+        logger.info("🔍 Searching for users with <3d left (checking Remnawave)...")
 
         # Находим всех пользователей с remnawave_uuid
         users = await db.db_execute(
@@ -150,8 +150,8 @@ async def _send_notifications_for_expiring(bot):
                     # Проверяем есть ли <24h до конца подписки
                     time_left = expire_at - now
 
-                    # Если подписка активна И закончится в ближайшие 24 часа
-                    if time_left.total_seconds() > 0 and time_left.total_seconds() <= 86400:  # 86400 = 24 hours
+                    # Если подписка активна И закончится в ближайшие 3 дня
+                    if time_left.total_seconds() > 0 and time_left.total_seconds() <= 259200:  # 259200 = 72 hours = 3 days
                         users_to_notify.append({
                             'tg_id': tg_id,
                             'expire_at': expire_at,
@@ -166,7 +166,7 @@ async def _send_notifications_for_expiring(bot):
             logger.info("No users found with <24h left in Remnawave")
             return
 
-        logger.info(f"📤 Found {len(users_to_notify)} users with <24h left, sending notifications...")
+        logger.info(f"📤 Found {len(users_to_notify)} users with <3d left, sending notifications...")
 
         # Отправляем уведомления
         for i, user_data in enumerate(users_to_notify):

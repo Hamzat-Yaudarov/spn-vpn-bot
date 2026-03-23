@@ -189,7 +189,7 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
             text = (
                 "✅ <b>Оплата прошла успешно!</b>\n\n"
                 f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ссылка подписки:</b>\n<code>{sub_url or 'Ошибка получения ссылки'}</code>"
+                f"<b>Ваш ключ:</b>\nf"{sub_url or 'Ошибка получения ссылки'}"
             )
 
             try:
