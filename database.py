@@ -59,7 +59,7 @@ def normalize_pg_type(pg_type: str) -> str:
 
 
 async def sync_table_schema(conn, table_name: str, expected_columns: dict):
-    """Синхронизировать схему таблицы: добавить недостающие столбцы"""
+    """Синхронизировать схему таблицы: добавить недостающие, удалить лишние столбцы"""
     try:
         current_columns = await get_table_columns(conn, table_name)
     except Exception as e:
@@ -87,7 +87,16 @@ async def sync_table_schema(conn, table_name: str, expected_columns: dict):
             except Exception as e:
                 logging.warning(f"⚠️ Ошибка при добавлении столбца {table_name}.{col_name}: {e}")
 
-    # Лишние столбцы не удаляем автоматически, чтобы не терять данные в продакшене.
+    # Удаляем лишние столбцы (которые есть в таблице но не в expected_columns)
+    system_columns = {'id', 'created_at', 'updated_at'}  # Системные столбцы не трогаем
+
+    for col_name in current_columns:
+        if col_name not in expected_columns and col_name not in system_columns:
+            try:
+                await conn.execute(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS {col_name} CASCADE")
+                logging.info(f"✅ Удалён лишний столбец {table_name}.{col_name}")
+            except Exception as e:
+                logging.warning(f"⚠️ Ошибка при удалении столбца {table_name}.{col_name}: {e}")
 
 
 async def run_migrations():
@@ -1650,36 +1659,16 @@ async def get_referral_stats(referrer_id: int) -> dict:
         fetch_one=True
     )
 
-    # Всего выведено на выплаты пользователю
+    # Всего выведено
     total_withdrawn = await db_execute(
-        """
-        SELECT SUM(amount) as total
-        FROM referral_withdrawals
-        WHERE referrer_id = $1
-          AND status = 'completed'
-          AND withdrawal_type IN ('sbp', 'usdt')
-        """,
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    # Потрачено на подписки с реферального баланса
-    subscription_spent = await db_execute(
-        """
-        SELECT SUM(amount) as total
-        FROM referral_withdrawals
-        WHERE referrer_id = $1
-          AND status = 'completed'
-          AND withdrawal_type LIKE 'subscription%%'
-        """,
+        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1 AND status = 'completed'",
         (referrer_id,),
         fetch_one=True
     )
 
     earned = float(total_earned['total'] or 0)
     withdrawn = float(total_withdrawn['total'] or 0)
-    spent = float(subscription_spent['total'] or 0)
-    balance = earned - withdrawn - spent
+    balance = earned - withdrawn
 
     return {
         'active_referrals': active_referrals['count'] if active_referrals else 0,
@@ -1715,18 +1704,6 @@ async def create_referral_withdrawal_request(
         VALUES ($1, $2, $3, $4, $5, $6)
         """,
         (referrer_id, amount, withdrawal_type, bank_name, phone_number, usdt_address)
-    )
-    return True
-
-
-async def create_referral_balance_spend(referrer_id: int, amount: float, tariff_code: str) -> bool:
-    """Списать средства реферального баланса на оплату подписки"""
-    await db_execute(
-        """
-        INSERT INTO referral_withdrawals (referrer_id, amount, withdrawal_type, status)
-        VALUES ($1, $2, $3, 'completed')
-        """,
-        (referrer_id, amount, f'subscription_{tariff_code}')
     )
     return True
 
