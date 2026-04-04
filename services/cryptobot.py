@@ -254,7 +254,7 @@ async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: st
             text = (
                 "✅ <b>Оплата прошла успешно!</b>\n\n"
                 f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ваш ключ:</b>\nf"{sub_url or 'Ошибка получения ссылки'}"
+                f"<b>Ваш ключ:</b>\n"f"{sub_url or 'Ошибка получения ссылки'}"
             )
             await bot.send_message(tg_id, text)
 
