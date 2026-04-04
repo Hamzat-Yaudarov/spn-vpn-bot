@@ -268,7 +268,7 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
             text = (
                 "✅ <b>Оплата прошла успешно!</b>\n\n"
                 f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ваш ключ:</b>\nf"{sub_url or 'Ошибка получения ссылки'}"
+                f"<b>Ваш ключ:</b>\n"f"{sub_url or 'Ошибка получения ссылки'}"
             )
             await bot.send_message(tg_id, text)
 

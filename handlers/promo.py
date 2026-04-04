@@ -128,7 +128,7 @@ async def process_promo_input(message: Message, state: FSMContext):
         text = (
             f"✅ <b>Промокод активирован!</b>\n\n"
             f"Добавлено {days} дней подписки\n\n"
-            f"<b>Ваш ключ:</b>\nf"{sub_url}"
+            f"<b>Ваш ключ:</b>\n"f"{sub_url}"
         )
 
         await send_text_with_photo(message, text, kb, "Add_a_subscription")
