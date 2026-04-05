@@ -7,7 +7,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from config import TARIFFS, DEFAULT_SQUAD_UUID
 from states import UserStates
 import database as db
-from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
+from services.remnawave import (
+    remnawave_get_or_create_user,
+    remnawave_add_to_squad,
+    remnawave_get_subscription_url,
+    remnawave_get_user_info,
+)
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 from services.image_handler import edit_text_with_photo
@@ -47,14 +52,22 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     await state.update_data(tariff_code=tariff_code)
 
     tariff = TARIFFS[tariff_code]
+    stats = await db.get_referral_stats(tg_id)
+    referral_balance = stats['current_balance']
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
         [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa")],
+        [InlineKeyboardButton(text="💰 Оплатить с баланса от рефералов", callback_data="pay_referral_balance")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")]
     ])
 
-    text = f"<b>Оплата тарифа {tariff_code}</b>\nСумма: {tariff['price']} ₽\n\nВыбери способ оплаты:"
+    text = (
+        f"<b>Оплата тарифа {tariff_code}</b>\n"
+        f"Сумма: {tariff['price']} ₽\n"
+        f"Баланс от рефералов: {referral_balance:.2f} ₽\n\n"
+        "Выбери способ оплаты:"
+    )
 
     await edit_text_with_photo(callback, text, kb, "Выбери способ оплаты")
     await state.set_state(UserStates.choosing_payment)
@@ -144,6 +157,93 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
     await edit_text_with_photo(callback, text, kb, "Оплати")
     await state.clear()
+
+
+@router.callback_query(F.data == "pay_referral_balance")
+async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContext):
+    """Оплатить подписку с баланса рефералов"""
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    tariff_code = data.get("tariff_code")
+    logging.info(f"User {tg_id} selected payment method: referral_balance (tariff: {tariff_code})")
+
+    if not tariff_code:
+        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
+        await state.clear()
+        return
+
+    tariff = TARIFFS[tariff_code]
+    amount = tariff["price"]
+
+    if not await db.acquire_user_lock(tg_id):
+        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+        return
+
+    try:
+        stats = await db.get_referral_stats(tg_id)
+        referral_balance = stats["current_balance"]
+
+        if referral_balance < amount:
+            missing = amount - referral_balance
+            await callback.answer(
+                f"Не хватает {missing:.2f} ₽ на балансе рефералов",
+                show_alert=True
+            )
+            return
+
+        user = await db.get_user(tg_id)
+        existing_subscription = user.get("subscription_until") if user else None
+        now = datetime.utcnow()
+
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            uuid, username = await remnawave_get_or_create_user(
+                session, tg_id, tariff["days"], extend_if_exists=True
+            )
+
+            if not uuid:
+                await callback.answer("Ошибка получения доступа в VPN. Попробуй позже.", show_alert=True)
+                return
+
+            squad_added = await remnawave_add_to_squad(session, uuid)
+            if not squad_added:
+                logging.warning(f"Failed to add user {uuid} to squad")
+
+            sub_url = await remnawave_get_subscription_url(session, uuid)
+            if not sub_url:
+                logging.warning(f"Failed to get subscription URL for {uuid}")
+
+        if existing_subscription and existing_subscription > now:
+            new_until = existing_subscription + timedelta(days=tariff["days"])
+        else:
+            new_until = now + timedelta(days=tariff["days"])
+
+        await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+        await db.spend_referral_balance_for_subscription(tg_id, amount, tariff_code)
+
+        remaining_balance = referral_balance - amount
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
+        ])
+
+        text = (
+            "✅ <b>Оплата с баланса рефералов прошла успешно!</b>\n\n"
+            f"Тариф: {tariff_code} ({tariff['days']} дней)\n"
+            f"Списано: {amount} ₽\n"
+            f"Остаток баланса: {remaining_balance:.2f} ₽\n\n"
+            f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
+        )
+
+        await edit_text_with_photo(callback, text, kb, "Оплати")
+        await state.clear()
+
+    except Exception as e:
+        logging.error(f"Referral balance payment error: {e}")
+        await callback.answer("Ошибка при оплате с баланса рефералов", show_alert=True)
+    finally:
+        await db.release_user_lock(tg_id)
 
 
 @router.callback_query(F.data == "pay_yookassa")

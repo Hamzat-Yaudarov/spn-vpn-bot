@@ -1708,6 +1708,22 @@ async def create_referral_withdrawal_request(
     return True
 
 
+async def spend_referral_balance_for_subscription(
+    referrer_id: int,
+    amount: float,
+    tariff_code: str
+) -> bool:
+    """Списать баланс рефералов за оплату подписки"""
+    await db_execute(
+        """
+        INSERT INTO referral_withdrawals (referrer_id, amount, withdrawal_type, status)
+        VALUES ($1, $2, $3, 'completed')
+        """,
+        (referrer_id, amount, f'subscription_{tariff_code}')
+    )
+    return True
+
+
 async def get_pending_referral_withdrawals():
     """Получить все ожидающие запросы на вывод от рефералов"""
     return await db_execute(
