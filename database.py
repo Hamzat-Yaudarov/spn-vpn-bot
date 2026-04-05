@@ -1659,9 +1659,9 @@ async def get_referral_stats(referrer_id: int) -> dict:
         fetch_one=True
     )
 
-    # Всего выведено
+    # Всего выведено/зарезервировано на вывод
     total_withdrawn = await db_execute(
-        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1 AND status = 'completed'",
+        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1",
         (referrer_id,),
         fetch_one=True
     )

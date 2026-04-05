@@ -52,7 +52,7 @@ async def process_referral(callback: CallbackQuery):
         "<b>📊 Покупки по тарифам:</b>\n"
         f"{tariffs_info}\n"
         f"<b>💰 Всего заработано:</b> {stats['total_earned']:.2f} ₽\n"
-        f"<b>💸 Всего выведено:</b> {stats['total_withdrawn']:.2f} ₽\n"
+        f"<b>💸 Всего выведено/потрачено:</b> {stats['total_withdrawn']:.2f} ₽\n"
         f"<b>🪙 Текущий баланс:</b> {stats['current_balance']:.2f} ₽\n\n"
         "<blockquote>"
         "ℹ️ <b>Минимальная сумма вывода:</b> 5000 ₽\n"
