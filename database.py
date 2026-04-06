@@ -1552,13 +1552,21 @@ async def check_first_referral_purchase(referred_user_id: int, referrer_id: int)
     """
     result = await db_execute(
         """
-        SELECT COUNT(*) as count FROM referral_earnings
-        WHERE referred_user_id = $1 AND referrer_id = $2
+        SELECT referrer_id, first_payment
+        FROM users
+        WHERE tg_id = $1
         """,
-        (referred_user_id, referrer_id),
+        (referred_user_id,),
         fetch_one=True
     )
-    return (result['count'] if result else 0) == 0
+
+    if not result:
+        return False
+
+    if result['referrer_id'] != referrer_id:
+        return False
+
+    return not bool(result['first_payment'])
 
 
 async def add_referral_without_duplicates(referrer_id: int, referred_user_id: int) -> bool:
