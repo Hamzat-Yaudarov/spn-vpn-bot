@@ -38,6 +38,44 @@ def _subscription_short_status(subscription) -> str:
     return "истекла"
 
 
+async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
+    """Получить ссылку подписки и остаток времени."""
+    remaining_str = "неизвестно"
+    sub_url = None
+
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if subscription.get('remnawave_uuid'):
+                sub_url = await remnawave_get_subscription_url(session, subscription['remnawave_uuid'])
+                user_info = await remnawave_get_user_info(session, subscription['remnawave_uuid'])
+
+                if user_info and "expireAt" in user_info:
+                    remaining_str = _format_remaining(user_info["expireAt"])
+                elif subscription.get('subscription_until'):
+                    remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
+            elif subscription.get('subscription_until'):
+                remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
+    except Exception as e:
+        logging.error(f"Error fetching subscription info from Remnawave: {e}")
+        remaining_str = "ошибка загрузки"
+
+    return sub_url, remaining_str
+
+
+def _build_instruction_text(sub_url: str) -> str:
+    return (
+        "📲 <b>Инструкция по подключению</b>\n\n"
+        "1. Скачай <b>Happ Plus</b> из Google Play или App Store\n"
+        f"2. Скопируй ключ:\n<code>{sub_url}</code>\n"
+        "3. Открой Happ Plus\n"
+        "4. Нажми <b>+</b> в правом верхнем углу\n"
+        "5. Выбери <b>Вставить из буфера обмена</b>\n\n"
+        "По всем вопросам: @wayspn_support"
+    )
+
+
 def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
     return f"tg_{tg_id}_{subscription_id}"
 
@@ -120,28 +158,10 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    remaining_str = "неизвестно"
-    sub_url = "ошибка получения ссылки"
-
-    try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            if subscription.get('remnawave_uuid'):
-                sub_url = await remnawave_get_subscription_url(session, subscription['remnawave_uuid'])
-                user_info = await remnawave_get_user_info(session, subscription['remnawave_uuid'])
-
-                if user_info and "expireAt" in user_info:
-                    remaining_str = _format_remaining(user_info["expireAt"])
-                elif subscription.get('subscription_until'):
-                    remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
-            elif subscription.get('subscription_until'):
-                remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
-    except Exception as e:
-        logging.error(f"Error fetching subscription info from Remnawave: {e}")
-        remaining_str = "ошибка загрузки"
+    sub_url, remaining_str = await _get_subscription_access_data(subscription)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}")],
         [InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
     ])
@@ -158,6 +178,33 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
     )
 
     await edit_text_with_photo(callback, text, kb, "Моя подписка")
+
+
+async def _show_subscription_instruction(callback: CallbackQuery, subscription_id: int):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not subscription:
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    sub_url, _ = await _get_subscription_access_data(subscription)
+    if not sub_url:
+        await callback.answer("Не удалось получить ключ подписки", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+
+    await edit_text_with_photo(
+        callback,
+        _build_instruction_text(sub_url),
+        kb,
+        "Как подключиться",
+    )
 
 
 async def _get_or_create_target_subscription_for_direct_flow(tg_id: int, state_data: dict):
@@ -213,6 +260,12 @@ async def process_buy_new_subscription(callback: CallbackQuery, state: FSMContex
 async def process_subscription_view(callback: CallbackQuery, state: FSMContext):
     subscription_id = int(callback.data.split("_")[-1])
     await _show_subscription_card(callback, subscription_id)
+
+
+@router.callback_query(F.data.startswith("subscription_instruction_"))
+async def process_subscription_instruction(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    await _show_subscription_instruction(callback, subscription_id)
 
 
 @router.callback_query(F.data.startswith("renew_subscription_"))

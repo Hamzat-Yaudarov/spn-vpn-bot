@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 import aiohttp
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
 from config import DEFAULT_SQUAD_UUID, TARIFFS
@@ -229,7 +230,12 @@ async def process_paid_payment(
                 f"Тариф: {tariff_code} ({days} дней)\n"
                 f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
             )
-            await bot.send_message(tg_id, text)
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+                [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}")],
+                [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+            ])
+            await bot.send_message(tg_id, text, reply_markup=kb)
 
             logger.info("Payment processing completed successfully for user %s", tg_id)
             return True
