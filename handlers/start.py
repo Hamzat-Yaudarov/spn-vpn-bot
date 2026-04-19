@@ -82,7 +82,7 @@ async def show_main_menu(message: Message):
 
     keyboard = [
         [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🔐 Моя подписка", callback_data="my_subscription")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscription")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],

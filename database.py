@@ -10,6 +10,9 @@ from config import (
 )
 
 
+MAX_SUBSCRIPTIONS_PER_USER = 3
+
+
 # Глобальный пул подключений
 _pool = None
 
@@ -143,7 +146,22 @@ async def run_migrations():
                 'amount': {'type': 'NUMERIC', 'nullable': False},
                 'provider': {'type': 'TEXT', 'nullable': False},
                 'invoice_id': {'type': 'TEXT', 'nullable': False},
+                'subscription_id': {'type': 'BIGINT', 'nullable': True},
+                'payment_target': {'type': 'TEXT', 'nullable': False, 'default': "'new'"},
+                'target_slot_number': {'type': 'INT', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+            }
+
+            expected_subscriptions_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'slot_number': {'type': 'INT', 'nullable': False},
+                'remnawave_uuid': {'type': 'UUID', 'nullable': True},
+                'remnawave_username': {'type': 'TEXT', 'nullable': True},
+                'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
+                'squad_uuid': {'type': 'UUID', 'nullable': True},
+                'is_active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
+                'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
+                'notification_type': {'type': 'TEXT', 'nullable': True},
             }
 
             expected_promo_columns = {
@@ -263,6 +281,25 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'partnerships' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    slot_number INT NOT NULL,
+                    remnawave_uuid UUID,
+                    remnawave_username TEXT,
+                    subscription_until TIMESTAMP,
+                    squad_uuid UUID,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    next_notification_time TIMESTAMP,
+                    notification_type TEXT,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(tg_id, slot_number)
+                )
+            """)
+            logging.info("✅ Таблица 'subscriptions' создана или уже существует")
+
             # Таблица партнёрских рефералов и покупок
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS partner_referrals (
@@ -352,6 +389,9 @@ async def run_migrations():
                     updated_at TIMESTAMP DEFAULT now(),
                     provider TEXT NOT NULL,
                     invoice_id TEXT UNIQUE NOT NULL,
+                    subscription_id BIGINT,
+                    payment_target TEXT DEFAULT 'new',
+                    target_slot_number INT,
                     status TEXT DEFAULT 'pending'
                 )
             """)
@@ -395,10 +435,16 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
 
+                # subscriptions индексы
+                "CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);",
+                "CREATE INDEX IF NOT EXISTS idx_subscriptions_uuid ON subscriptions(remnawave_uuid);",
+                "CREATE INDEX IF NOT EXISTS idx_subscriptions_notification ON subscriptions(next_notification_time) WHERE next_notification_time IS NOT NULL;",
+
                 # payments индексы
                 "CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);",
+                "CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);",
 
                 # promo_codes индексы
@@ -437,6 +483,9 @@ async def run_migrations():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_gift_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_promo_attempt TIMESTAMP;",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_payment_check TIMESTAMP;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_id BIGINT;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_target TEXT DEFAULT 'new';",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS target_slot_number INT;",
             ]
 
             for query in alter_queries:
@@ -486,6 +535,7 @@ async def run_migrations():
 
             # Синхронизируем таблицы
             await sync_table_schema(conn, 'users', expected_users_columns)
+            await sync_table_schema(conn, 'subscriptions', expected_subscriptions_columns)
             await sync_table_schema(conn, 'payments', expected_payments_columns)
             await sync_table_schema(conn, 'promo_codes', expected_promo_columns)
             await sync_table_schema(conn, 'promo_code_users', expected_promo_usage_columns)
@@ -495,6 +545,38 @@ async def run_migrations():
             await sync_table_schema(conn, 'partner_withdrawals', expected_partner_withdrawals_columns)
             await sync_table_schema(conn, 'referral_earnings', expected_referral_earnings_columns)
             await sync_table_schema(conn, 'referral_withdrawals', expected_referral_withdrawals_columns)
+
+            await conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    tg_id,
+                    slot_number,
+                    remnawave_uuid,
+                    remnawave_username,
+                    subscription_until,
+                    squad_uuid,
+                    is_active,
+                    next_notification_time,
+                    notification_type
+                )
+                SELECT
+                    u.tg_id,
+                    1,
+                    u.remnawave_uuid,
+                    u.remnawave_username,
+                    u.subscription_until,
+                    u.squad_uuid,
+                    TRUE,
+                    u.next_notification_time,
+                    u.notification_type
+                FROM users u
+                WHERE u.remnawave_uuid IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM subscriptions s
+                      WHERE s.tg_id = u.tg_id AND s.slot_number = 1
+                  )
+                """
+            )
 
             logging.info("✅ Синхронизация схемы завершена")
 
@@ -673,35 +755,24 @@ async def has_accepted_terms(tg_id: int) -> bool:
 #             SUBSCRIPTION MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def update_subscription(tg_id: int, uuid: str, username: str, subscription_until, squad_uuid: str):
-    """
-    Обновить подписку пользователя
-
-    Также автоматически устанавливает время для уведомления о заканчивающейся подписке
-    (1.5 дня до окончания). Если это время в прошлом, уведомление рассчитывается корректно
-    """
+def _calculate_notification_fields(subscription_until):
+    """Рассчитать время и тип следующего уведомления."""
     from datetime import datetime, timedelta
 
-    # Рассчитываем время следующего уведомления (1.5 дня до окончания подписки)
     if subscription_until:
         now = datetime.utcnow()
         next_notification = subscription_until - timedelta(days=1.5)
 
-        # Если следующее уведомление уже в прошлом, установим его на более раннее время
         if next_notification <= now:
-            # Проверяем сколько времени осталось до конца подписки
             time_left = (subscription_until - now).total_seconds()
 
-            if time_left > 86400:  # Больше 1 дня
-                # Установим уведомление на 1 день до конца
+            if time_left > 86400:
                 next_notification = subscription_until - timedelta(days=1)
                 notification_type = "below1day"
-            elif time_left > 0:  # Менее 1 дня но подписка ещё активна
-                # Установим уведомление на конец подписки
+            elif time_left > 0:
                 next_notification = subscription_until
                 notification_type = "expired"
             else:
-                # Подписка уже истекла
                 next_notification = None
                 notification_type = None
         else:
@@ -710,47 +781,248 @@ async def update_subscription(tg_id: int, uuid: str, username: str, subscription
         next_notification = None
         notification_type = None
 
+    return next_notification, notification_type
+
+
+async def get_user_subscriptions(tg_id: int):
+    """Получить все подписки пользователя."""
+    return await db_execute(
+        "SELECT * FROM subscriptions WHERE tg_id = $1 ORDER BY slot_number ASC, id ASC",
+        (tg_id,),
+        fetch_all=True
+    )
+
+
+async def get_subscription_by_id(subscription_id: int, tg_id: int | None = None):
+    """Получить подписку по ID."""
+    if tg_id is None:
+        return await db_execute(
+            "SELECT * FROM subscriptions WHERE id = $1 LIMIT 1",
+            (subscription_id,),
+            fetch_one=True
+        )
+
+    return await db_execute(
+        "SELECT * FROM subscriptions WHERE id = $1 AND tg_id = $2 LIMIT 1",
+        (subscription_id, tg_id),
+        fetch_one=True
+    )
+
+
+async def get_subscription_by_slot(tg_id: int, slot_number: int):
+    """Получить подписку пользователя по номеру слота."""
+    return await db_execute(
+        "SELECT * FROM subscriptions WHERE tg_id = $1 AND slot_number = $2 LIMIT 1",
+        (tg_id, slot_number),
+        fetch_one=True
+    )
+
+
+async def get_subscription_by_uuid(remnawave_uuid: str):
+    """Получить подписку по UUID Remnawave."""
+    return await db_execute(
+        "SELECT * FROM subscriptions WHERE remnawave_uuid = $1 LIMIT 1",
+        (remnawave_uuid,),
+        fetch_one=True
+    )
+
+
+async def get_next_subscription_slot(tg_id: int) -> int | None:
+    """Получить следующий свободный слот подписки."""
+    subscriptions = await get_user_subscriptions(tg_id)
+    taken_slots = {sub['slot_number'] for sub in subscriptions}
+
+    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1):
+        if slot not in taken_slots:
+            return slot
+
+    return None
+
+
+async def create_subscription_record(tg_id: int, slot_number: int):
+    """Создать запись подписки без VPN-данных."""
+    return await db_execute(
+        """
+        INSERT INTO subscriptions (tg_id, slot_number, is_active)
+        VALUES ($1, $2, TRUE)
+        RETURNING *
+        """,
+        (tg_id, slot_number),
+        fetch_one=True
+    )
+
+
+async def sync_primary_subscription_to_user(tg_id: int):
+    """Синхронизировать слот #1 в legacy-поля users."""
+    primary = await get_subscription_by_slot(tg_id, 1)
+
+    if primary:
+        await db_execute(
+            """
+            UPDATE users
+            SET remnawave_uuid = $1,
+                remnawave_username = $2,
+                subscription_until = $3,
+                squad_uuid = $4,
+                next_notification_time = $5,
+                notification_type = $6
+            WHERE tg_id = $7
+            """,
+            (
+                primary['remnawave_uuid'],
+                primary['remnawave_username'],
+                primary['subscription_until'],
+                primary['squad_uuid'],
+                primary['next_notification_time'],
+                primary['notification_type'],
+                tg_id,
+            )
+        )
+    else:
+        await db_execute(
+            """
+            UPDATE users
+            SET remnawave_uuid = NULL,
+                remnawave_username = NULL,
+                subscription_until = NULL,
+                squad_uuid = NULL,
+                next_notification_time = NULL,
+                notification_type = NULL
+            WHERE tg_id = $1
+            """,
+            (tg_id,)
+        )
+
+
+async def update_subscription_record(subscription_id: int, uuid: str, username: str, subscription_until, squad_uuid: str | None):
+    """Обновить конкретную подписку пользователя."""
+    next_notification, notification_type = _calculate_notification_fields(subscription_until)
+
     await db_execute(
         """
-        UPDATE users
+        UPDATE subscriptions
         SET remnawave_uuid = $1,
             remnawave_username = $2,
             subscription_until = $3,
             squad_uuid = $4,
             next_notification_time = $6,
-            notification_type = $7
-        WHERE tg_id = $5
+            notification_type = $7,
+            is_active = TRUE,
+            updated_at = now()
+        WHERE id = $5
         """,
-        (uuid, username, subscription_until, squad_uuid, tg_id, next_notification, notification_type)
+        (uuid, username, subscription_until, squad_uuid, subscription_id, next_notification, notification_type)
     )
+
+    subscription = await get_subscription_by_id(subscription_id)
+    if subscription:
+        await sync_primary_subscription_to_user(subscription['tg_id'])
+
+
+async def update_subscription(
+    tg_id: int,
+    uuid: str,
+    username: str,
+    subscription_until,
+    squad_uuid: str | None,
+    *,
+    subscription_id: int | None = None,
+    slot_number: int | None = 1,
+):
+    """Совместимый wrapper обновления подписки."""
+    target_subscription = None
+
+    if subscription_id is not None:
+        target_subscription = await get_subscription_by_id(subscription_id, tg_id)
+
+    if target_subscription is None and uuid:
+        target_subscription = await get_subscription_by_uuid(uuid)
+        if target_subscription and target_subscription['tg_id'] != tg_id:
+            target_subscription = None
+
+    if target_subscription is None and slot_number is not None:
+        target_subscription = await get_subscription_by_slot(tg_id, slot_number)
+
+    if target_subscription is None:
+        resolved_slot = slot_number if slot_number is not None else await get_next_subscription_slot(tg_id)
+        if resolved_slot is None:
+            raise RuntimeError(f"No free subscription slots for user {tg_id}")
+        target_subscription = await create_subscription_record(tg_id, resolved_slot)
+
+    await update_subscription_record(target_subscription['id'], uuid, username, subscription_until, squad_uuid)
+    return target_subscription['id']
+
+
+async def delete_subscription_record(subscription_id: int):
+    """Удалить запись подписки и синхронизировать legacy-поля."""
+    subscription = await get_subscription_by_id(subscription_id)
+    if not subscription:
+        return
+
+    await db_execute("DELETE FROM subscriptions WHERE id = $1", (subscription_id,))
+    await sync_primary_subscription_to_user(subscription['tg_id'])
 
 
 async def has_subscription(tg_id: int) -> bool:
-    """Проверить есть ли активная подписка"""
-    user = await get_user(tg_id)
-    return user and user['remnawave_uuid'] is not None
+    """Проверить есть ли хотя бы одна подписка."""
+    result = await db_execute(
+        "SELECT 1 FROM subscriptions WHERE tg_id = $1 LIMIT 1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return result is not None
 
 
 # ────────────────────────────────────────────────
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
-async def create_payment(tg_id: int, tariff_code: str, amount: float, provider: str, invoice_id: str):
+async def create_payment(
+    tg_id: int,
+    tariff_code: str,
+    amount: float,
+    provider: str,
+    invoice_id: str,
+    *,
+    subscription_id: int | None = None,
+    payment_target: str = 'new',
+    target_slot_number: int | None = None,
+):
     """Создать запись о платеже"""
     from datetime import datetime
     await db_execute(
         """
-        INSERT INTO payments (tg_id, tariff_code, amount, created_at, provider, invoice_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO payments (
+            tg_id,
+            tariff_code,
+            amount,
+            created_at,
+            provider,
+            invoice_id,
+            subscription_id,
+            payment_target,
+            target_slot_number
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         """,
-        (tg_id, tariff_code, amount, datetime.utcnow(), provider, str(invoice_id))
+        (
+            tg_id,
+            tariff_code,
+            amount,
+            datetime.utcnow(),
+            provider,
+            str(invoice_id),
+            subscription_id,
+            payment_target,
+            target_slot_number,
+        )
     )
 
 
 async def get_pending_payments():
     """Получить все ожидающие платежи"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
         fetch_all=True
     )
 
@@ -758,13 +1030,21 @@ async def get_pending_payments():
 async def get_pending_payments_by_provider(provider: str):
     """Получить все ожидающие платежи по конкретному провайдеру"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
         (provider,),
         fetch_all=True
     )
 
 
-async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, provider: str):
+async def get_active_payment_for_user_and_tariff(
+    tg_id: int,
+    tariff_code: str,
+    provider: str,
+    *,
+    subscription_id: int | None = None,
+    payment_target: str = 'new',
+    target_slot_number: int | None = None,
+):
     """
     Получить существующий неоплаченный счёт пользователя для конкретного тарифа и провайдера
 
@@ -781,11 +1061,17 @@ async def get_active_payment_for_user_and_tariff(tg_id: int, tariff_code: str, p
     result = await db_execute(
         """
         SELECT id, invoice_id, created_at FROM payments
-        WHERE tg_id = $1 AND tariff_code = $2 AND status = 'pending' AND provider = $3
+        WHERE tg_id = $1
+          AND tariff_code = $2
+          AND status = 'pending'
+          AND provider = $3
+          AND subscription_id IS NOT DISTINCT FROM $4
+          AND payment_target = $5
+          AND target_slot_number IS NOT DISTINCT FROM $6
         ORDER BY id DESC
         LIMIT 1
         """,
-        (tg_id, tariff_code, provider),
+        (tg_id, tariff_code, provider, subscription_id, payment_target, target_slot_number),
         fetch_one=True
     )
 
@@ -837,16 +1123,25 @@ async def get_last_pending_payment(tg_id: int):
     """Получить последний ожидающий платеж пользователя"""
     result = await db_execute(
         """
-        SELECT invoice_id, tariff_code 
+        SELECT invoice_id, tariff_code, provider, subscription_id, payment_target, target_slot_number
         FROM payments 
-        WHERE tg_id = $1 AND status = 'pending' AND provider = 'cryptobot' 
+        WHERE tg_id = $1 AND status = 'pending'
         ORDER BY id DESC 
         LIMIT 1
         """,
         (tg_id,),
         fetch_one=True
     )
-    return (result['invoice_id'], result['tariff_code']) if result else None
+    return result
+
+
+async def get_payment_by_invoice(invoice_id: str):
+    """Получить запись платежа по invoice_id."""
+    return await db_execute(
+        "SELECT * FROM payments WHERE invoice_id = $1 LIMIT 1",
+        (invoice_id,),
+        fetch_one=True
+    )
 
 
 async def update_payment_status(payment_id: int, status: str):

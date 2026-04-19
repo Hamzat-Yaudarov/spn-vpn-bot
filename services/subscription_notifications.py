@@ -102,22 +102,21 @@ async def _send_notifications_for_expiring(bot):
     try:
         logger.info("🔍 Searching for users with <3d left (checking Remnawave)...")
 
-        # Находим всех пользователей с remnawave_uuid
-        users = await db.db_execute(
+        subscriptions = await db.db_execute(
             """
-            SELECT tg_id, remnawave_uuid
-            FROM users
+            SELECT id, tg_id, slot_number, remnawave_uuid
+            FROM subscriptions
             WHERE remnawave_uuid IS NOT NULL
-            ORDER BY tg_id ASC
+            ORDER BY tg_id ASC, slot_number ASC
             """,
             fetch_all=True
         )
 
-        if not users:
+        if not subscriptions:
             logger.info("No users found with Remnawave UUID")
             return
 
-        logger.info(f"📤 Found {len(users)} users with Remnawave UUID, checking their subscription status...")
+        logger.info(f"📤 Found {len(subscriptions)} subscriptions with Remnawave UUID, checking their status...")
 
         # Обрабатываем пользователей батчами с соблюдением rate limits
         success_count = 0
@@ -130,10 +129,10 @@ async def _send_notifications_for_expiring(bot):
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             now = datetime.now(timezone.utc)
 
-            for user in users:
+            for subscription in subscriptions:
                 try:
-                    tg_id = user['tg_id']
-                    remnawave_uuid = user['remnawave_uuid']
+                    tg_id = subscription['tg_id']
+                    remnawave_uuid = subscription['remnawave_uuid']
 
                     # Получаем информацию из Remnawave
                     user_info = await remnawave_get_user_info(session, remnawave_uuid)
@@ -154,12 +153,13 @@ async def _send_notifications_for_expiring(bot):
                     if time_left.total_seconds() > 0 and time_left.total_seconds() <= 259200:  # 259200 = 72 hours = 3 days
                         users_to_notify.append({
                             'tg_id': tg_id,
+                            'slot_number': subscription['slot_number'],
                             'expire_at': expire_at,
                             'time_left': time_left
                         })
 
                 except Exception as e:
-                    logger.warning(f"Error checking Remnawave info for user {user.get('tg_id')}: {e}")
+                    logger.warning(f"Error checking Remnawave info for subscription {subscription.get('id')}: {e}")
                     error_count += 1
 
         if not users_to_notify:
@@ -172,6 +172,7 @@ async def _send_notifications_for_expiring(bot):
         for i, user_data in enumerate(users_to_notify):
             try:
                 tg_id = user_data['tg_id']
+                slot_number = user_data['slot_number']
                 time_left = user_data['time_left']
 
                 days_left = time_left.days
@@ -185,7 +186,7 @@ async def _send_notifications_for_expiring(bot):
                     time_str = f"{hours_left} ч. {minutes_left} мин."
 
                 text = (
-                    "⏰ <b>Ваша подписка скоро закончится!</b>\n\n"
+                    f"⏰ <b>Подписка #{slot_number} скоро закончится!</b>\n\n"
                     f"Осталось: <b>{time_str}</b>\n\n"
                     "Продлите подписку, чтобы не потерять доступ к быстрой и безопасной сети!"
                 )
@@ -235,12 +236,9 @@ async def _send_notifications_for_expired(bot):
     try:
         logger.info("🔍 Searching for users with expired subscriptions (checking Remnawave)...")
 
-        # Находим всех пользователей в БД
         all_users = await db.db_execute(
             """
-            SELECT tg_id, remnawave_uuid
-            FROM users
-            ORDER BY tg_id ASC
+            SELECT tg_id FROM users ORDER BY tg_id ASC
             """,
             fetch_all=True
         )
@@ -265,34 +263,37 @@ async def _send_notifications_for_expired(bot):
             for user in all_users:
                 try:
                     tg_id = user['tg_id']
-                    remnawave_uuid = user['remnawave_uuid']
+                    subscriptions = await db.get_user_subscriptions(tg_id)
 
                     has_active_subscription = False
                     message_type = None
                     days_expired = None
 
-                    if remnawave_uuid:
-                        # Получаем информацию из Remnawave
+                    for subscription in subscriptions:
+                        remnawave_uuid = subscription.get('remnawave_uuid')
+                        if not remnawave_uuid:
+                            continue
+
                         user_info = await remnawave_get_user_info(session, remnawave_uuid)
+                        if not user_info or 'expireAt' not in user_info:
+                            continue
 
-                        if user_info and 'expireAt' in user_info:
-                            # Парсим дату окончания подписки из Remnawave
-                            expire_at_str = user_info['expireAt']
-                            expire_at = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-                            expire_at = ensure_utc_aware(expire_at)
+                        expire_at_str = user_info['expireAt']
+                        expire_at = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
+                        expire_at = ensure_utc_aware(expire_at)
 
-                            # Проверяем активна ли подписка
-                            if expire_at > now:
-                                has_active_subscription = True
-                            else:
-                                # Подписка истекла
-                                days_expired = (now - expire_at).days
-                                message_type = "expired"
-                        else:
-                            # Нет информации - считаем что подписки нет
-                            message_type = "no_subscription"
-                    else:
-                        # Нет UUID - пользователь никогда не платил или информация потеряна
+                        if expire_at > now:
+                            has_active_subscription = True
+                            break
+
+                        expired_days = (now - expire_at).days
+                        if days_expired is None or expired_days < days_expired:
+                            days_expired = expired_days
+                            message_type = "expired"
+
+                    if not subscriptions:
+                        message_type = "no_subscription"
+                    elif not has_active_subscription and message_type is None:
                         message_type = "no_subscription"
 
                     # Если подписка неактивна, добавляем в список для уведомления

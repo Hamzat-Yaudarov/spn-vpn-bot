@@ -121,25 +121,30 @@ async def admin_give_sub(message: Message):
     parts = message.text.split()
 
     # Валидация количества аргументов
-    if len(parts) < 3:
+    if len(parts) not in (3, 4):
         await message.answer(
             "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /give_sub ТГ_ИД ДНЕЙ\n\n"
+            "<b>Использование:</b> /give_sub ТГ_ИД [СЛОТ] ДНЕЙ\n\n"
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
+            "• <code>СЛОТ</code> - номер подписки 1..3 (необязательно, по умолчанию 1)\n"
             "• <code>ДНЕЙ</code> - количество дней (число > 0)\n\n"
-            "<b>Пример:</b> /give_sub 123456789 30"
+            "<b>Примеры:</b>\n"
+            "<code>/give_sub 123456789 30</code>\n"
+            "<code>/give_sub 123456789 2 30</code>"
         )
         logger.warning(f"Admin {admin_id} /give_sub - wrong number of arguments: {len(parts)-1}")
         return
 
     try:
-        tg_id = int(parts[1])
-        days = int(parts[2])
+        tg_id, slot_number, days = _parse_admin_subscription_command(parts)
 
-        # Валидация значений
         if tg_id <= 0:
             await message.answer("❌ ID пользователя должен быть положительным числом")
+            return
+
+        if slot_number < 1 or slot_number > db.MAX_SUBSCRIPTIONS_PER_USER:
+            await message.answer(f"❌ Слот должен быть от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}")
             return
 
         if days <= 0:
@@ -155,9 +160,12 @@ async def admin_give_sub(message: Message):
         await message.answer(
             "❌ <b>Ошибка валидации</b>\n\n"
             "Убедитесь, что:\n"
-            "• ТГ_ИД и ДНЕЙ - целые числа\n"
-            "• Оба числа больше 0\n\n"
-            "<b>Пример:</b> /give_sub 123456789 30"
+            "• ТГ_ИД, СЛОТ и ДНЕЙ - целые числа\n"
+            "• СЛОТ от 1 до 3\n"
+            "• ДНЕЙ больше 0\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/give_sub 123456789 30</code>\n"
+            "<code>/give_sub 123456789 2 30</code>"
         )
         logger.warning(f"Admin {admin_id} /give_sub - parsing error for arguments: {parts[1:]}")
         return
@@ -277,26 +285,31 @@ async def admin_take_sub(message: Message):
     parts = message.text.split()
 
     # Валидация количества аргументов
-    if len(parts) < 3:
+    if len(parts) not in (3, 4):
         await message.answer(
             "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /take_sub ТГ_ИД ДНЕЙ\n\n"
+            "<b>Использование:</b> /take_sub ТГ_ИД [СЛОТ] ДНЕЙ\n\n"
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
+            "• <code>СЛОТ</code> - номер подписки 1..3 (необязательно, по умолчанию 1)\n"
             "• <code>ДНЕЙ</code> - количество дней для удаления (число > 0)\n\n"
-            "<b>Пример:</b> /take_sub 123456789 10\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/take_sub 123456789 10</code>\n"
+            "<code>/take_sub 123456789 2 10</code>\n\n"
             "<i>Если дней больше чем осталось, подписка будет аннулирована</i>"
         )
         logger.warning(f"Admin {admin_id} /take_sub - wrong number of arguments: {len(parts)-1}")
         return
 
     try:
-        tg_id = int(parts[1])
-        days = int(parts[2])
+        tg_id, slot_number, days = _parse_admin_subscription_command(parts)
 
-        # Валидация значений
         if tg_id <= 0:
             await message.answer("❌ ID пользователя должен быть положительным числом")
+            return
+
+        if slot_number < 1 or slot_number > db.MAX_SUBSCRIPTIONS_PER_USER:
+            await message.answer(f"❌ Слот должен быть от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}")
             return
 
         if days <= 0:
@@ -312,9 +325,12 @@ async def admin_take_sub(message: Message):
         await message.answer(
             "❌ <b>Ошибка валидации</b>\n\n"
             "Убедитесь, что:\n"
-            "• ТГ_ИД и ДНЕЙ - целые числа\n"
-            "• Оба числа больше 0\n\n"
-            "<b>Пример:</b> /take_sub 123456789 10"
+            "• ТГ_ИД, СЛОТ и ДНЕЙ - целые числа\n"
+            "• СЛОТ от 1 до 3\n"
+            "• ДНЕЙ больше 0\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/take_sub 123456789 10</code>\n"
+            "<code>/take_sub 123456789 2 10</code>"
         )
         logger.warning(f"Admin {admin_id} /take_sub - parsing error for arguments: {parts[1:]}")
         return
@@ -325,7 +341,6 @@ async def admin_take_sub(message: Message):
         return
 
     try:
-        # Получаем информацию о пользователе
         user = await db.get_user(tg_id)
 
         if not user:
@@ -333,14 +348,18 @@ async def admin_take_sub(message: Message):
             logger.warning(f"Admin {admin_id} tried to take subscription from non-existent user {tg_id}")
             return
 
-        remnawave_uuid = user.get('remnawave_uuid')
-
-        if not remnawave_uuid:
-            await message.answer(f"❌ Пользователь {tg_id} не имеет активной подписки")
-            logger.info(f"Admin {admin_id} /take_sub - user {tg_id} has no Remnawave UUID")
+        subscription = await db.get_subscription_by_slot(tg_id, slot_number)
+        if not subscription:
+            await message.answer(f"❌ У пользователя {tg_id} нет подписки в слоте #{slot_number}")
             return
 
-        # Получаем актуальную информацию о подписке из Remnawave
+        remnawave_uuid = subscription.get('remnawave_uuid')
+
+        if not remnawave_uuid:
+            await message.answer(f"❌ В слоте #{slot_number} нет активной подписки")
+            logger.info(f"Admin {admin_id} /take_sub - user {tg_id} slot {slot_number} has no Remnawave UUID")
+            return
+
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
@@ -351,109 +370,69 @@ async def admin_take_sub(message: Message):
             logger.warning(f"Admin {admin_id} /take_sub - failed to get user info from Remnawave for {tg_id}")
             return
 
-        # Парсим дату окончания подписки из Remnawave (она в ISO формате)
         expire_at_str = user_info['expireAt']
         current_subscription_until = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-        # Конвертируем в naive UTC для сравнения
         current_subscription_until = current_subscription_until.replace(tzinfo=None)
 
-        # Рассчитываем новое время окончания подписки
         new_subscription_until = current_subscription_until - timedelta(days=days)
         now = datetime.utcnow()
 
-        # Логируем информацию для отладки
-        logger.info(f"Admin {admin_id} /take_sub user {tg_id}: current_until={current_subscription_until}, removing {days} days, new_until={new_subscription_until}, now={now}")
+        logger.info(f"Admin {admin_id} /take_sub user {tg_id} slot {slot_number}: current_until={current_subscription_until}, removing {days} days, new_until={new_subscription_until}, now={now}")
 
-        # Если новое время в прошлом, аннулируем подписку
         if new_subscription_until <= now:
-            # Сначала обновляем Remnawave если есть UUID
-            if remnawave_uuid:
-                connector = aiohttp.TCPConnector(ssl=False)
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                    # Устанавливаем дату окончания в прошлое чтобы деактивировать
-                    success = await remnawave_set_subscription_expiry(
-                        session,
-                        remnawave_uuid,
-                        now - timedelta(seconds=1)
-                    )
-                    if not success:
-                        logger.warning(f"Failed to update Remnawave for user {tg_id}, continuing")
+            connector = aiohttp.TCPConnector(ssl=False)
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                success = await remnawave_set_subscription_expiry(
+                    session,
+                    remnawave_uuid,
+                    now - timedelta(seconds=1)
+                )
+                if not success:
+                    logger.warning(f"Failed to update Remnawave for user {tg_id}, continuing")
 
-            # Обновляем БД - аннулируем подписку
-            pool = await db.get_pool()
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        UPDATE users
-                        SET remnawave_uuid = NULL,
-                            remnawave_username = NULL,
-                            subscription_until = NULL,
-                            squad_uuid = NULL,
-                            next_notification_time = NULL,
-                            notification_type = NULL
-                        WHERE tg_id = $1
-                        """,
-                        tg_id
-                    )
+            await db.delete_subscription_record(subscription['id'])
 
             await message.answer(
                 f"✅ <b>Подписка аннулирована</b>\n\n"
                 f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+                f"🔢 <b>Слот:</b> #{slot_number}\n"
                 f"📅 <b>Удалено дней:</b> {days}\n"
                 f"❌ <b>Статус:</b> подписка истекла"
             )
 
-            # Уведомляем пользователя
             try:
                 await message.bot.send_message(
                     tg_id,
                     f"❌ <b>Ваша подписка была аннулирована</b>\n\n"
-                    f"Администратор удалил подписку на {days} дней.\n\n"
+                    f"Администратор удалил подписку <b>#{slot_number}</b> на {days} дней.\n\n"
                     f"Ваш доступ закрыт. Пожалуйста, свяжитесь с поддержкой."
                 )
                 logger.info(f"User {tg_id} notified about subscription cancellation by admin {admin_id}")
             except Exception as e:
                 logger.warning(f"Failed to notify user {tg_id}: {e}")
 
-            logger.info(f"Admin {admin_id} cancelled subscription for user {tg_id} (removed {days} days)")
+            logger.info(f"Admin {admin_id} cancelled subscription for user {tg_id} slot {slot_number} (removed {days} days)")
 
         else:
-            # Сначала обновляем Remnawave если есть UUID
-            if remnawave_uuid:
-                connector = aiohttp.TCPConnector(ssl=False)
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                    success = await remnawave_set_subscription_expiry(
-                        session,
-                        remnawave_uuid,
-                        new_subscription_until
-                    )
-                    if not success:
-                        logger.warning(f"Failed to update Remnawave for user {tg_id}, but continuing with DB update")
+            connector = aiohttp.TCPConnector(ssl=False)
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                success = await remnawave_set_subscription_expiry(
+                    session,
+                    remnawave_uuid,
+                    new_subscription_until
+                )
+                if not success:
+                    logger.warning(f"Failed to update Remnawave for user {tg_id}, but continuing with DB update")
 
-            # Обновляем подписку в БД
-            # Пересчитываем следующее уведомление на основе нового времени подписки
-            next_notification = new_subscription_until - timedelta(days=1.5)
-            notification_type = "1day_left" if next_notification > now else None
-
-            pool = await db.get_pool()
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        UPDATE users
-                        SET subscription_until = $1,
-                            next_notification_time = $2,
-                            notification_type = $3
-                        WHERE tg_id = $4
-                        """,
-                        new_subscription_until,
-                        next_notification if next_notification > now else None,
-                        notification_type,
-                        tg_id
-                    )
+            await db.update_subscription_record(
+                subscription['id'],
+                subscription['remnawave_uuid'],
+                subscription['remnawave_username'],
+                new_subscription_until,
+                subscription['squad_uuid'] or DEFAULT_SQUAD_UUID,
+            )
 
             remaining_days = (new_subscription_until - now).days
             remaining_hours = ((new_subscription_until - now).seconds // 3600) % 24
@@ -461,24 +440,24 @@ async def admin_take_sub(message: Message):
             await message.answer(
                 f"✅ <b>Подписка обновлена</b>\n\n"
                 f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+                f"🔢 <b>Слот:</b> #{slot_number}\n"
                 f"📅 <b>Удалено дней:</b> {days}\n"
                 f"⏰ <b>Осталось:</b> {remaining_days}д {remaining_hours}ч\n"
                 f"🟢 <b>Статус:</b> активна"
             )
 
-            # Уведомляем пользователя
             try:
                 await message.bot.send_message(
                     tg_id,
                     f"⚠️ <b>Ваша подписка была сокращена</b>\n\n"
-                    f"Администратор удалил {days} дней из вашей подписки.\n\n"
+                    f"Администратор удалил {days} дней из подписки <b>#{slot_number}</b>.\n\n"
                     f"⏰ <b>Осталось:</b> <b>{remaining_days}д {remaining_hours}ч</b>"
                 )
                 logger.info(f"User {tg_id} notified about subscription reduction by admin {admin_id}")
             except Exception as e:
                 logger.warning(f"Failed to notify user {tg_id}: {e}")
 
-            logger.info(f"Admin {admin_id} took {days} days subscription from user {tg_id}, remaining: {remaining_days}д")
+            logger.info(f"Admin {admin_id} took {days} days from user {tg_id} slot {slot_number}, remaining: {remaining_days}д")
 
     except Exception as e:
         logger.error(f"Take subscription error: {e}", exc_info=True)

@@ -34,6 +34,22 @@ CREATE TABLE IF NOT EXISTS partnerships (
     updated_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    tg_id BIGINT NOT NULL,
+    slot_number INT NOT NULL,
+    remnawave_uuid UUID,
+    remnawave_username TEXT,
+    subscription_until TIMESTAMP,
+    squad_uuid UUID,
+    is_active BOOLEAN DEFAULT TRUE,
+    next_notification_time TIMESTAMP,
+    notification_type TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tg_id, slot_number)
+);
+
 CREATE TABLE IF NOT EXISTS partner_referrals (
     id BIGSERIAL PRIMARY KEY,
     partner_id BIGINT NOT NULL,
@@ -101,6 +117,9 @@ CREATE TABLE IF NOT EXISTS payments (
     updated_at TIMESTAMP DEFAULT now(),
     provider TEXT NOT NULL,
     invoice_id TEXT UNIQUE NOT NULL,
+    subscription_id BIGINT,
+    payment_target TEXT DEFAULT 'new',
+    target_slot_number INT,
     status TEXT DEFAULT 'pending'
 );
 
@@ -129,6 +148,9 @@ CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_partnerships_tg_id ON partnerships(tg_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_uuid ON subscriptions(remnawave_uuid);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_notification ON subscriptions(next_notification_time) WHERE next_notification_time IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_partner_referrals_partner_id ON partner_referrals(partner_id);
 CREATE INDEX IF NOT EXISTS idx_partner_earnings_partner_id ON partner_earnings(partner_id);
 CREATE INDEX IF NOT EXISTS idx_partner_withdrawals_partner_id ON partner_withdrawals(partner_id);
@@ -140,6 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_referral_withdrawals_referrer_id ON referral_with
 CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);
+CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);

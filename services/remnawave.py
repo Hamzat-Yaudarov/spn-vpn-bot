@@ -16,7 +16,8 @@ async def remnawave_get_or_create_user(
     session: aiohttp.ClientSession,
     tg_id: int,
     days: int = 30,
-    extend_if_exists: bool = False
+    extend_if_exists: bool = False,
+    remna_username: str | None = None,
 ) -> tuple[str | None, str | None]:
     """
     Получить или создать пользователя в Remnawave API с retry логикой
@@ -30,7 +31,7 @@ async def remnawave_get_or_create_user(
     Returns:
         Кортеж (UUID пользователя, имя пользователя) или (None, None)
     """
-    remna_username = f"tg_{tg_id}"
+    remna_username = remna_username or f"tg_{tg_id}"
 
     # Пытаемся получить существующего пользователя
     async def _get_existing_user():
