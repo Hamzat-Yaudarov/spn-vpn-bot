@@ -46,8 +46,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
-        [InlineKeyboardButton(text="💳 Оформить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscription")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription", style="success")],
         [InlineKeyboardButton(text="📲 Как подключиться", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],

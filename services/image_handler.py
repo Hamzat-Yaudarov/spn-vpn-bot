@@ -13,6 +13,7 @@ IMAGE_MAPPING = {
     "Как подключиться": "Connection.JPG",
     "Реферальная программа": "Referral_program.jpg",
     "Моя подписка": "My_subscription.jpg",
+    "Мои подписки": "My_subscription.jpg",
     "My-not_subscription": "My-not_subscription.jpg",
     "Выбери срок подписки": "Add_a_subscription.JPG",
     "Выбери способ оплаты": "Add_a_subscription.JPG",
@@ -62,6 +63,12 @@ async def edit_text_with_photo(
     """
     image_path = get_image_path(message_key)
 
+    async def _edit_without_photo():
+        if callback.message.photo:
+            await callback.message.edit_caption(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        else:
+            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
     if image_path:
         try:
             # Проверяем, содержит ли текущее сообщение медиа
@@ -86,15 +93,13 @@ async def edit_text_with_photo(
                 )
         except Exception as e:
             logging.error(f"Error editing media with photo: {e}")
-            # Если ошибка, просто редактируем текст без фото
             try:
-                await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+                await _edit_without_photo()
             except Exception as e2:
                 logging.error(f"Error editing text fallback: {e2}")
     else:
-        # Изображение не найдено, редактируем только текст
         try:
-            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await _edit_without_photo()
         except Exception as e:
             logging.error(f"Error editing text: {e}")
 
