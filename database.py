@@ -885,8 +885,8 @@ async def increment_active_referrals(tg_id: int):
     )
 
 
-async def get_referral_stats(tg_id: int):
-    """Получить статистику рефералов пользователя"""
+async def get_referral_counters(tg_id: int):
+    """Получить старые счётчики рефералов из users."""
     result = await db_execute(
         "SELECT referral_count, active_referrals FROM users WHERE tg_id = $1",
         (tg_id,),
@@ -1605,23 +1605,29 @@ async def add_referral_without_duplicates(referrer_id: int, referred_user_id: in
         )
         return False
 
-    # Защита от дубликатов - используем уникальный constraint
-    # Если пара (referrer_id, referred_user_id) уже существует, просто возвращаем True
     try:
-        # Проверяем есть ли уже такой реферал
-        existing = await db_execute(
-            """
-            SELECT 1 FROM referral_earnings
-            WHERE referrer_id = $1 AND referred_user_id = $2
-            LIMIT 1
-            """,
-            (referrer_id, referred_user_id),
-            fetch_one=True
-        )
+        user = await get_user(referred_user_id)
 
-        if existing is not None:
-            logging.debug(f"Referral pair ({referrer_id}, {referred_user_id}) already exists")
-            return True  # Уже добавлено, не считаем это ошибкой
+        if user is None:
+            # Для нового пользователя привязка будет записана при create_user(..., referrer_id)
+            return True
+
+        existing_referrer = user.get('referrer_id')
+        if existing_referrer is not None:
+            logging.warning(
+                f"User {referred_user_id} already has a referrer {existing_referrer}, "
+                f"cannot assign referrer {referrer_id}"
+            )
+            return existing_referrer == referrer_id
+
+        await db_execute(
+            """
+            UPDATE users
+            SET referrer_id = $1
+            WHERE tg_id = $2 AND referrer_id IS NULL
+            """,
+            (referrer_id, referred_user_id)
+        )
 
         return True
     except Exception as e:

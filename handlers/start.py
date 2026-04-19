@@ -20,6 +20,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     """Обработчик команды /start"""
     tg_id = message.from_user.id
     username = message.from_user.username
+    user_already_exists = await db.user_exists(tg_id)
 
     # Проверяем наличие реферальной ссылки или партнёрской ссылки
     args = message.text.split()
@@ -32,19 +33,10 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 referrer_id = int(args[1].split("_")[1])
                 # Проверяем что это не сам пользователь
                 if referrer_id != tg_id:
-                    # Проверяем защиту: пользователь не может быть рефералом нескольких людей
-                    existing_referrer = await db.db_execute(
-                        "SELECT referrer_id FROM users WHERE tg_id = $1 AND referrer_id IS NOT NULL",
-                        (tg_id,),
-                        fetch_one=True
-                    )
-
-                    if existing_referrer is None:
-                        # Пользователь ещё не имеет рефератора, можем назначить
-                        await db.update_referral_count(referrer_id)
+                    if not user_already_exists:
                         logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
                     else:
-                        logging.warning(f"User {tg_id} already has referrer {existing_referrer['referrer_id']}, cannot assign {referrer_id}")
+                        logging.warning(f"User {tg_id} is not new, ignoring referral link from {referrer_id}")
                         referrer_id = None
                 else:
                     logging.warning(f"User {tg_id} tried to use their own referral link")
@@ -64,6 +56,9 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     # Создаём пользователя если его нет
     await db.create_user(tg_id, username, referrer_id)
+
+    if referrer_id is not None and not user_already_exists:
+        await db.update_referral_count(referrer_id)
 
     # Проверяем принял ли пользователь условия
     if not await db.has_accepted_terms(tg_id):

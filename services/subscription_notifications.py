@@ -147,7 +147,7 @@ async def _send_notifications_for_expiring(bot):
                     expire_at = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
                     expire_at = ensure_utc_aware(expire_at)
 
-                    # Проверяем есть ли <24h до конца подписки
+                    # Проверяем есть ли <3d до конца подписки
                     time_left = expire_at - now
 
                     # Если подписка активна И закончится в ближайшие 3 дня
@@ -163,7 +163,7 @@ async def _send_notifications_for_expiring(bot):
                     error_count += 1
 
         if not users_to_notify:
-            logger.info("No users found with <24h left in Remnawave")
+            logger.info("No users found with <3d left in Remnawave")
             return
 
         logger.info(f"📤 Found {len(users_to_notify)} users with <3d left, sending notifications...")
