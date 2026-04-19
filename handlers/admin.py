@@ -33,6 +33,21 @@ def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
 
+def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
+    return f"tg_{tg_id}_{subscription_id}"
+
+
+def _parse_admin_subscription_command(parts: list[str]) -> tuple[int, int, int]:
+    """Распарсить /give_sub и /take_sub в формат tg_id, slot, days."""
+    if len(parts) == 3:
+        return int(parts[1]), 1, int(parts[2])
+
+    if len(parts) == 4:
+        return int(parts[1]), int(parts[2]), int(parts[3])
+
+    raise ValueError("Invalid arguments")
+
+
 @router.message(Command("new_code"))
 async def admin_new_code(message: Message):
     """Админ команда: создать новый промокод"""
@@ -176,45 +191,44 @@ async def admin_give_sub(message: Message):
         return
 
     try:
-        # Получаем существующего пользователя или создаём нового
         user = await db.get_user(tg_id)
+        subscription = await db.get_subscription_by_slot(tg_id, slot_number)
         new_until = None
+
+        if not user:
+            await db.create_user(tg_id, f"user_{tg_id}")
+            user = await db.get_user(tg_id)
+            logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
+
+        if subscription is None:
+            subscription = await db.create_subscription_record(tg_id, slot_number)
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Проверяем есть ли у пользователя UUID в Remnawave
-            remnawave_uuid = user.get('remnawave_uuid') if user else None
+            remnawave_uuid = subscription.get('remnawave_uuid')
 
             if remnawave_uuid:
-                # Пользователь существует в Remnawave - получаем актуальную дату окончания
                 user_info = await remnawave_get_user_info(session, remnawave_uuid)
                 if user_info and 'expireAt' in user_info:
-                    # Парсим дату окончания подписки
                     expire_at_str = user_info['expireAt']
                     current_until = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-                    # Конвертируем в naive UTC
                     current_until = current_until.replace(tzinfo=None)
-                    # Добавляем дни к существующей подписке
                     new_until = current_until + timedelta(days=days)
-                    logger.info(f"User {tg_id} has existing subscription in Remnawave until {current_until}, extending by {days} days to {new_until}")
+                    logger.info(f"User {tg_id} slot {slot_number} has existing subscription in Remnawave until {current_until}, extending by {days} days to {new_until}")
                 else:
-                    # Ошибка получения информации из Remnawave, используем БД или создаём новую
-                    logger.warning(f"Failed to get Remnawave info for {tg_id}, using default calculation")
+                    logger.warning(f"Failed to get Remnawave info for {tg_id} slot {slot_number}, using default calculation")
                     new_until = datetime.utcnow() + timedelta(days=days)
             else:
-                # Пользователя нет в Remnawave - создаём новую подписку
                 new_until = datetime.utcnow() + timedelta(days=days)
-                logger.info(f"User {tg_id} has no Remnawave account, setting new subscription to {new_until}")
+                logger.info(f"User {tg_id} slot {slot_number} has no Remnawave account, setting new subscription to {new_until}")
 
-            # Убедимся что пользователь существует в БД
-            if not user:
-                await db.create_user(tg_id, f"user_{tg_id}")
-                logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
-
-            # Создаём или получаем пользователя в Remnawave (с минимальными днями для создания)
             uuid, username = await remnawave_get_or_create_user(
-                session, tg_id, days=30, extend_if_exists=False
+                session,
+                tg_id,
+                days=30,
+                extend_if_exists=False,
+                remna_username=subscription.get('remnawave_username') or _build_remnawave_username(tg_id, subscription['id'])
             )
 
             if not uuid:
@@ -226,22 +240,20 @@ async def admin_give_sub(message: Message):
                 logger.error(f"Failed to get/create Remnawave user for TG {tg_id} by admin {admin_id}")
                 return
 
-            # Добавляем в сквад
             squad_added = await remnawave_add_to_squad(session, uuid)
             if not squad_added:
                 logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
 
-            # Устанавливаем точную дату окончания подписки в Remnawave
             success = await remnawave_set_subscription_expiry(session, uuid, new_until)
             if not success:
-                logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id}, but continuing")
+                logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id} slot {slot_number}, but continuing")
 
-            # Обновляем подписку в БД с рассчитанной датой
-            await db.update_subscription(tg_id, uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            await db.update_subscription_record(subscription['id'], uuid, username, new_until, DEFAULT_SQUAD_UUID)
 
         await message.answer(
             f"✅ <b>Подписка выдана успешно!</b>\n\n"
             f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
+            f"🔢 <b>Слот:</b> #{slot_number}\n"
             f"📅 <b>Дней:</b> {days}\n"
             f"🔑 <b>UUID:</b> <code>{uuid}</code>"
         )
@@ -251,7 +263,7 @@ async def admin_give_sub(message: Message):
             await message.bot.send_message(
                 tg_id,
                 f"🎉 <b>Поздравляем!</b>\n\n"
-                f"Вам выдана подписка SPN VPN на <b>{days} дней</b>\n\n"
+                f"Вам выдана/продлена подписка <b>#{slot_number}</b> на <b>{days} дней</b>\n\n"
                 f"Спасибо за использование нашего сервиса! 🚀"
             )
             logger.info(f"User {tg_id} notified about subscription by admin {admin_id}")
@@ -262,7 +274,7 @@ async def admin_give_sub(message: Message):
                 f"(Ошибка: {str(e)[:50]})"
             )
 
-        logger.info(f"Admin {admin_id} gave {days} days subscription to user {tg_id}")
+        logger.info(f"Admin {admin_id} gave {days} days subscription to user {tg_id} slot {slot_number}")
 
     except Exception as e:
         logger.error(f"Give subscription error: {e}")
