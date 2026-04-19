@@ -3,25 +3,19 @@ import logging
 import asyncio
 import base64
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from config import (
     YOOKASSA_SHOP_ID,
     YOOKASSA_SECRET_KEY,
     YOOKASSA_API_URL,
-    TARIFFS,
     PAYMENT_CHECK_INTERVAL,
     CLEANUP_CHECK_INTERVAL,
     API_REQUEST_TIMEOUT,
     WEBHOOK_USE_POLLING
 )
 import database as db
-from utils import retry_with_backoff, safe_api_call
-from services.remnawave import (
-    remnawave_get_or_create_user,
-    remnawave_add_to_squad,
-    remnawave_get_subscription_url,
-    remnawave_extend_subscription
-)
+from utils import safe_api_call
+from services.payment_processing import process_paid_payment
 
 
 async def create_yookassa_payment(
@@ -143,142 +137,7 @@ async def process_paid_yookassa_payment(bot, tg_id: int, payment_id: str, tariff
     Returns:
         True если успешно, False иначе
     """
-    try:
-        days = TARIFFS[tariff_code]["days"]
-        uuid = None
-        sub_url = None
-
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            # Создаём или получаем пользователя в Remnawave
-            uuid, username = await remnawave_get_or_create_user(
-                session, tg_id, days, extend_if_exists=True
-            )
-
-            if not uuid:
-                logging.error(f"Failed to create/get Remnawave user for {tg_id}")
-                # Откат: оставляем платеж в pending статусе для повторной попытки
-                return False
-
-            # Добавляем в сквад
-            squad_added = await remnawave_add_to_squad(session, uuid)
-            if not squad_added:
-                logging.warning(f"Failed to add user {uuid} to squad")
-
-            # Получаем ссылку подписки
-            sub_url = await remnawave_get_subscription_url(session, uuid)
-            if not sub_url:
-                logging.warning(f"Failed to get subscription URL for {uuid}")
-
-            # Обрабатываем реферальную программу (NEW: проценты вместо дней)
-            try:
-                referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0]:  # есть рефератор
-                    referrer_id = referrer[0]
-                    amount = TARIFFS[tariff_code]["price"]
-
-                    # Проверяем это первая покупка реферала или повторная
-                    is_first_purchase = await db.check_first_referral_purchase(tg_id, referrer_id)
-                    percentage = 35 if is_first_purchase else 15
-
-                    # Записываем заработок рефератора
-                    await db.add_referral_earning(
-                        referrer_id,
-                        tg_id,
-                        tariff_code,
-                        amount,
-                        is_first_purchase=is_first_purchase
-                    )
-
-                    referral_share = amount * percentage / 100
-                    purchase_type = "первую покупку" if is_first_purchase else "повторную покупку"
-                    logging.info(
-                        f"✅ Referral earning recorded: {referrer_id} earned {referral_share}₽ "
-                        f"from {tg_id} ({purchase_type}: {amount}₽ × {percentage}%)"
-                    )
-
-                    await db.mark_first_payment(tg_id)
-            except Exception as e:
-                logging.error(f"Error processing referral for user {tg_id}: {e}")
-                # Реферальная ошибка не должна блокировать основной платеж
-
-            # Обрабатываем партнёрскую программу
-            try:
-                amount = TARIFFS[tariff_code]["price"]
-                logging.info(f"Checking for partner referral for user {tg_id}")
-
-                # Проверяем, был ли пользователь приведён партнёром
-                partner_result = await db.db_execute(
-                    """
-                    SELECT DISTINCT partner_id FROM partner_referrals
-                    WHERE referred_user_id = $1
-                    LIMIT 1
-                    """,
-                    (tg_id,),
-                    fetch_one=True
-                )
-
-                if partner_result:
-                    partner_id = partner_result['partner_id']
-                    logging.info(f"Found partner {partner_id} for referred user {tg_id}")
-
-                    partnership = await db.get_partnership(partner_id)
-                    if partnership:
-                        logging.info(f"Partnership found: partner_id={partner_id}, percentage={partnership['percentage']}")
-
-                        # Добавляем заработок партнёру
-                        await db.add_partner_earning(
-                            partner_id,
-                            tg_id,
-                            tariff_code,
-                            amount,
-                            partnership['percentage']
-                        )
-                        logging.info(f"✅ Partner earning recorded: {partner_id} earned {amount * partnership['percentage'] / 100}₽ from {tg_id} ({amount}₽ × {partnership['percentage']}%)")
-                    else:
-                        logging.warning(f"Partnership not found for partner_id {partner_id}")
-                else:
-                    logging.debug(f"No partner referral found for user {tg_id}")
-            except Exception as e:
-                logging.error(f"Error processing partner earnings for user {tg_id}: {e}", exc_info=True)
-                # Партнёрская ошибка не должна блокировать основной платеж
-
-            # Обновляем подписку пользователя (ПЕРЕД отметкой платежа как paid)
-            # Если уже есть активная подписка, добавляем дни к ней
-            # Если подписки нет, создаём новую
-            user = await db.get_user(tg_id)
-            existing_subscription = user.get('subscription_until') if user else None
-            now = datetime.utcnow()
-
-            if existing_subscription and existing_subscription > now:
-                # Активная подписка есть - добавляем дни к ней
-                new_until = existing_subscription + timedelta(days=days)
-                logging.info(f"User {tg_id} has active subscription, extending from {existing_subscription} by {days} days to {new_until}")
-            else:
-                # Подписки нет или она истекла - создаём новую
-                new_until = now + timedelta(days=days)
-                logging.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
-
-            await db.update_subscription(tg_id, uuid, username, new_until, None)
-
-            # Только после успешных операций отмечаем платеж как paid
-            await db.update_payment_status_by_invoice(payment_id, 'paid')
-
-            # Отправляем сообщение пользователю
-            text = (
-                "✅ <b>Оплата прошла успешно!</b>\n\n"
-                f"Тариф: {tariff_code} ({days} дней)\n"
-                f"<b>Ваш ключ:</b>\n"f"{sub_url or 'Ошибка получения ссылки'}"
-            )
-            await bot.send_message(tg_id, text)
-
-            return True
-
-    except Exception as e:
-        logging.error(f"Process Yookassa payment exception: {e}")
-        # Откат: платеж остаётся в pending статусе для повторной попытки
-        return False
+    return await process_paid_payment(bot, tg_id, payment_id, tariff_code, acquire_lock=False)
 
 
 async def check_yookassa_payments(bot):
