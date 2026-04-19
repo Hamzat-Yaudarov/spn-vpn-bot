@@ -1,2 +1,7 @@
-
+.env
+.env.*
+!.env.example
+.DS_Store
 .builder/config/data.json
+__pycache__/
+*.pyc

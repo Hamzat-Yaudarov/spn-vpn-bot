@@ -44,6 +44,7 @@ async def create_yookassa_payment(
     """
     async def _create_payment():
         url = f"{YOOKASSA_API_URL}/payments"
+        bot_username = (await bot.get_me()).username
 
         # Базовая авторизация: base64(shop_id:secret_key)
         credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
@@ -63,10 +64,10 @@ async def create_yookassa_payment(
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/WaySPN_robot"  # После оплаты вернёт в бот
+                "return_url": f"https://t.me/{bot_username}"
             },
             "capture": True,
-            "description": f"Подписка Way SPN — {tariff_code}",
+            "description": f"Подписка SPN VPN — {tariff_code}",
             "metadata": {
                 "tg_id": str(tg_id),
                 "tariff_code": tariff_code

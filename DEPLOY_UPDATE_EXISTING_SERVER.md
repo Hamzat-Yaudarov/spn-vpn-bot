@@ -10,9 +10,9 @@
 
 Найди в письме и скопируй эти значения (подставишь в команды ниже):
 ```
-SUPABASE_URL=https://rpzupbtpfcqnwlxzhndd.supabase.co
-SUPABASE_KEY=sb_publishable_rAPEhWLXaexhMaKBbOvg-A_Xo1tz12I
-DATABASE_URL=postgresql://postgres:PASSWORD@db.rpzupbtpfcqnwlxzhndd.supabase.co:5432/postgres
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_key
+DATABASE_URL=postgresql://postgres:PASSWORD@db.your-project.supabase.co:5432/postgres
 ```
 
 ⚠️ В DATABASE_URL замени `PASSWORD` на реальный пароль из Supabase
@@ -41,7 +41,7 @@ DATABASE_URL=postgresql://postgres:PASSWORD@db.rpzupbtpfcqnwlxzhndd.supabase.co:
 
 ```bash
 # На своем ПК (НЕ на VPS):
-psql -h db.rpzupbtpfcqnwlxzhndd.supabase.co \
+psql -h db.your-project.supabase.co \
      -U postgres \
      -d postgres \
      -f /path/to/schema.sql
@@ -126,9 +126,9 @@ nano /root/spn-vpn-bot/.env
 # DB_FILE=spn_vpn_bot.db
 
 # ДОБАВЬ ЭТИ СТРОКИ в конец файла:
-SUPABASE_URL=https://rpzupbtpfcqnwlxzhndd.supabase.co
-SUPABASE_KEY=sb_publishable_rAPEhWLXaexhMaKBbOvg-A_Xo1tz12I
-DATABASE_URL=postgresql://postgres:PASSWORD@db.rpzupbtpfcqnwlxzhndd.supabase.co:5432/postgres
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_key
+DATABASE_URL=postgresql://postgres:PASSWORD@db.your-project.supabase.co:5432/postgres
 ```
 
 ⚠️ **ЗАМЕНИ `PASSWORD` на реальный пароль!**

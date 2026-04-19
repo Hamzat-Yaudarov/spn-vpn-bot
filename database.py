@@ -1,3 +1,4 @@
+import asyncio
 import asyncpg
 import logging
 from config import (
@@ -11,6 +12,12 @@ from config import (
 
 # Глобальный пул подключений
 _pool = None
+
+# Блокировки пользователя на уровне процесса.
+# Бот, webhook-сервер и фоновые задачи работают в одном процессе,
+# поэтому asyncio.Lock надёжнее, чем advisory lock через разные соединения пула.
+_user_locks: dict[int, asyncio.Lock] = {}
+_user_locks_guard = asyncio.Lock()
 
 
 async def get_table_columns(conn, table_name: str) -> dict:
@@ -576,18 +583,21 @@ async def acquire_user_lock(tg_id: int) -> bool:
     Returns:
         True если удалось получить блокировку, False иначе
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
-            # Используем advisory lock с ID пользователя
-            result = await conn.fetchval(
-                "SELECT pg_try_advisory_lock($1);",
-                tg_id
-            )
-            return result is True
-        except Exception as e:
-            logging.error(f"Lock error: {e}")
-            return False
+    try:
+        async with _user_locks_guard:
+            lock = _user_locks.get(tg_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                _user_locks[tg_id] = lock
+
+            if lock.locked():
+                return False
+
+            await lock.acquire()
+            return True
+    except Exception as e:
+        logging.error(f"Lock error: {e}")
+        return False
 
 
 async def release_user_lock(tg_id: int):
@@ -597,15 +607,13 @@ async def release_user_lock(tg_id: int):
     Args:
         tg_id: ID пользователя Telegram
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
-            await conn.execute(
-                "SELECT pg_advisory_unlock($1);",
-                tg_id
-            )
-        except Exception as e:
-            logging.error(f"Unlock error: {e}")
+    try:
+        async with _user_locks_guard:
+            lock = _user_locks.get(tg_id)
+            if lock and lock.locked():
+                lock.release()
+    except Exception as e:
+        logging.error(f"Unlock error: {e}")
 
 
 # ────────────────────────────────────────────────

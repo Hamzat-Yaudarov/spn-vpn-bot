@@ -36,17 +36,19 @@ nano .env
 
 Вставьте ваши переменные (те же что были на macOS):
 ```env
-BOT_TOKEN=8520411926:AAFcduqngB2ZMCp3RS4yZ8hwkcyf-yOmWyU
-ADMIN_ID=6910097562
-SUPPORT_URL=https://t.me/Youdarov
-NEWS_CHANNEL_USERNAME=spn_newsvpn
-TELEGRAPH_AGREEMENT_URL=https://telegra.ph/Polzovatelskoe-soglashenie-dlya-servisa-SPN-Uskoritel-interneta-01-01
-REMNAWAVE_BASE_URL=https://spn.idlebat.online/api
-REMNAWAVE_API_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1dWlkIjoiM2FkMmM4YmQtNDQ2Yy00YzE0LThhZGItMzViODdjZTVkNDc3IiwidXNlcm5hbWUiOm51bGwsInJvbGUiOiJBUEkiLCJpYXQiOjE3Njc5NzM4ODQsImV4cCI6MTA0MDc4ODc0ODR9.7T-2_nK8I3k7fgtlu1O0mt7WyWBNwsCItYsEJSD2SbI
-DEFAULT_SQUAD_UUID=1fa28b9d-b745-4fd7-b93c-ce66f7ff4934
-CRYPTOBOT_TOKEN=508663:AAZcVJabRaP6NTah1LVJVl3p1E0GYTid9GK
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_ID=your_admin_id
+SUPPORT_URL=https://t.me/your_support
+NEWS_CHANNEL_USERNAME=your_channel_username
+TELEGRAPH_AGREEMENT_URL=https://telegra.ph/your-agreement
+REMNAWAVE_BASE_URL=https://your-remnawave.example/api
+REMNAWAVE_API_TOKEN=your_remnawave_api_token
+DEFAULT_SQUAD_UUID=your_default_squad_uuid
+CRYPTOBOT_TOKEN=your_cryptobot_token
 CRYPTOBOT_API_URL=https://pay.crypt.bot/api
-DB_FILE=spn_vpn_bot.db
+YOOKASSA_SHOP_ID=your_yookassa_shop_id
+YOOKASSA_SECRET_KEY=your_yookassa_secret_key
+DATABASE_URL=postgresql://postgres:password@db.your-project.supabase.co:5432/postgres
 LOG_LEVEL=INFO
 ```
 
@@ -193,12 +195,12 @@ sudo systemctl restart spn-vpn-bot
 
 ## Резервная копия БД
 
-База данных SQLite хранится в `spn_vpn_bot.db`.
+Основные данные хранятся в PostgreSQL/Supabase. Резервные копии базы делаются средствами провайдера БД.
 
-Для резервной копии:
+Для локальной резервной копии конфигурации полезно сохранить `.env`:
 
 ```bash
-cp /home/bot/spn-vpn-bot/spn_vpn_bot.db /home/bot/spn-vpn-bot/backups/spn_vpn_bot.db.$(date +%Y%m%d_%H%M%S)
+cp /home/bot/spn-vpn-bot/.env /home/bot/spn-vpn-bot/.env.backup.$(date +%Y%m%d_%H%M%S)
 ```
 
 ---
@@ -211,8 +213,8 @@ cp /home/bot/spn-vpn-bot/spn_vpn_bot.db /home/bot/spn-vpn-bot/backups/spn_vpn_bo
 # Использование памяти
 ps aux | grep "[p]ython3 main.py"
 
-# Размер БД
-du -h /home/bot/spn-vpn-bot/spn_vpn_bot.db
+# Проверка файла конфигурации
+ls -lh /home/bot/spn-vpn-bot/.env
 
 # Свободное место на диске
 df -h

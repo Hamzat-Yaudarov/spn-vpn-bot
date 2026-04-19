@@ -17,15 +17,15 @@ SSH ключ (опционально): /path/to/key.pem
 
 ### 2. Supabase Значения
 ```
-SUPABASE_URL=https://rpzupbtpfcqnwlxzhndd.supabase.co
-SUPABASE_KEY=sb_publishable_rAPEhWLXaexhMaKBbOvg-A_Xo1tz12I
-DATABASE_URL=postgresql://postgres:PASSWORD@db.rpzupbtpfcqnwlxzhndd.supabase.co:5432/postgres
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_key
+DATABASE_URL=postgresql://postgres:PASSWORD@db.your-project.supabase.co:5432/postgres
 ```
 
 ### 3. Bot Значения (из BotFather в Telegram)
 ```
-BOT_TOKEN=8520411926:AAFcduqngB2ZMCp3RS4yZ8hwkcyf-yOmWyU
-ADMIN_ID=6910097562
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_ID=your_admin_id
 ```
 
 ### 4. API Значения
@@ -33,7 +33,7 @@ ADMIN_ID=6910097562
 SUPPORT_URL=https://t.me/your_support
 NEWS_CHANNEL_USERNAME=your_channel
 TELEGRAPH_AGREEMENT_URL=https://telegra.ph/your-url
-REMNAWAVE_BASE_URL=https://spn.idlebat.online/api
+REMNAWAVE_BASE_URL=https://your-remnawave.example/api
 REMNAWAVE_API_TOKEN=your_token
 DEFAULT_SQUAD_UUID=your_uuid
 CRYPTOBOT_TOKEN=your_token
@@ -64,7 +64,7 @@ CRYPTOBOT_API_URL=https://pay.crypt.bot/api
 
 ```bash
 # На своём ПК (НЕ на VPS):
-psql -h db.rpzupbtpfcqnwлхzhndd.supabase.co \
+psql -h db.your-project.supabase.co \
      -U postgres \
      -d postgres \
      -f /path/to/schema.sql
@@ -166,8 +166,8 @@ nano /root/spn-vpn-bot/.env
 #                TELEGRAM BOT
 # ────────────────────────────────────────────────
 
-BOT_TOKEN=8520411926:AAFcduqngB2ZMCp3RS4yZ8hwkcyf-yOmWyU
-ADMIN_ID=6910097562
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_ID=your_admin_id
 
 # ────────────────────────────────────────────────
 #           SUPPORT & NEWS CHANNELS
@@ -181,7 +181,7 @@ TELEGRAPH_AGREEMENT_URL=https://telegra.ph/your-agreement-url
 #              REMNAWAVE API CONFIG
 # ────────────────────────────────────────────────
 
-REMNAWAVE_BASE_URL=https://spn.idlebat.online/api
+REMNAWAVE_BASE_URL=https://your-remnawave.example/api
 REMNAWAVE_API_TOKEN=your_remnawave_token
 DEFAULT_SQUAD_UUID=your_squad_uuid
 
@@ -196,9 +196,9 @@ CRYPTOBOT_API_URL=https://pay.crypt.bot/api
 #          SUPABASE DATABASE CONFIG
 # ────────────────────────────────────────────────
 
-SUPABASE_URL=https://rpzupbtpfcqnwlxzhndd.supabase.co
-SUPABASE_KEY=sb_publishable_rAPEhWLXaexhMaKBbOvg-A_Xo1tz12I
-DATABASE_URL=postgresql://postgres:PASSWORD@db.rpzupbtpfcqnwlxzhndd.supabase.co:5432/postgres
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_key
+DATABASE_URL=postgresql://postgres:PASSWORD@db.your-project.supabase.co:5432/postgres
 
 # ────────────────────────────────────────────────
 #                LOGGING CONFIG
@@ -365,7 +365,7 @@ cat /root/spn-vpn-bot/.env | grep DATABASE_URL
 
 # 2. Тестируй подключение (если psql установлен на VPS)
 apt install -y postgresql-client
-psql -h db.rpzupbtpfcqnwlxzhndd.supabase.co \
+psql -h db.your-project.supabase.co \
      -U postgres \
      -d postgres \
      -c "SELECT 1"
