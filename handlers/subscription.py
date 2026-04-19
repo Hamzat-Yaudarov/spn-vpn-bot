@@ -29,6 +29,15 @@ def _subscription_name(subscription) -> str:
     return f"Подписка #{subscription['slot_number']}"
 
 
+def _subscription_short_status(subscription) -> str:
+    until = subscription.get('subscription_until')
+    if not until:
+        return "без срока"
+    if until > datetime.utcnow():
+        return "активна"
+    return "истекла"
+
+
 def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
     return f"tg_{tg_id}_{subscription_id}"
 
@@ -70,7 +79,7 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     for subscription in subscriptions:
         keyboard.append([
             InlineKeyboardButton(
-                text=_subscription_name(subscription),
+                text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}",
                 callback_data=f"subscription_view_{subscription['id']}",
             )
         ])
@@ -140,6 +149,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
     text = (
         f"🔐 <b>{_subscription_name(subscription)}</b>\n\n"
         "<blockquote>"
+        f"📍 Статус: <b>{_subscription_short_status(subscription)}</b>\n"
         f"📆 Осталось времени: <b>{remaining_str}</b>\n"
         f"🌐 Группа подключения: <b>SPN-Squad</b>"
         "</blockquote>\n\n"

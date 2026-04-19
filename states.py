@@ -12,6 +12,7 @@ class UserStates(StatesGroup):
     choosing_payment = State()
 
     # Ввод промокода
+    waiting_for_promo_target = State()
     waiting_for_promo = State()
 
     # Выбор устройства для инструкции подключения
