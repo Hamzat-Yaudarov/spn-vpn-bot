@@ -645,6 +645,7 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
         sent_count = 0
         error_count = 0
         blocked_count = 0
+        unreachable_count = 0
         rate_limited_delay = 0.3
 
         await message.answer(
@@ -665,19 +666,21 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
                 logger.info(f"Broadcast message copied to user {user_id}")
                 rate_limited_delay = 0.3
             except Exception as e:
-                error_msg = str(e)
-                if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
+                status, retry_after = _classify_broadcast_exception(e)
+                if status == "blocked":
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                elif "429" in error_msg or "too many requests" in error_msg.lower():
-                    error_count += 1
-                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)
-                    logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
+                elif status == "unreachable":
+                    unreachable_count += 1
+                    logger.info(f"User {user_id} is unreachable for broadcast: {str(e)[:100]}")
+                elif status == "rate_limited":
+                    rate_limited_delay = min(max(retry_after or rate_limited_delay * 1.5, 0.5), 5.0)
+                    logger.warning(f"Rate limited during broadcast for user {user_id}. New delay: {rate_limited_delay}s")
                     await asyncio.sleep(rate_limited_delay)
                     continue
                 else:
                     error_count += 1
-                    logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
+                    logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
 
             await asyncio.sleep(rate_limited_delay)
 
@@ -686,10 +689,11 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
             f"📊 <b>Статистика:</b>\n"
             f"• ✅ Отправлено: {sent_count}/{total_users}\n"
             f"• 🚫 Заблокировано: {blocked_count}\n"
+            f"• 📴 Недоступно: {unreachable_count}\n"
             f"• ❌ Ошибок: {error_count}"
         )
 
-        logger.info(f"Admin {admin_id} completed /all_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
+        logger.info(f"Admin {admin_id} completed /all_sms broadcast: sent={sent_count}, blocked={blocked_count}, unreachable={unreachable_count}, errors={error_count}")
 
     except Exception as e:
         logger.error(f"Broadcast all error: {e}", exc_info=True)
@@ -754,6 +758,7 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
         sent_count = 0
         error_count = 0
         blocked_count = 0
+        unreachable_count = 0
         rate_limited_delay = 0.3
 
         await message.answer(
@@ -774,19 +779,21 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
                 logger.info(f"Broadcast message copied to user {user_id} (no subscription)")
                 rate_limited_delay = 0.3
             except Exception as e:
-                error_msg = str(e)
-                if "blocked user" in error_msg.lower() or "user is deactivated" in error_msg.lower():
+                status, retry_after = _classify_broadcast_exception(e)
+                if status == "blocked":
                     blocked_count += 1
                     logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                elif "429" in error_msg or "too many requests" in error_msg.lower():
-                    error_count += 1
-                    rate_limited_delay = min(rate_limited_delay * 1.5, 3.0)
-                    logger.warning(f"Rate limited (429) for user {user_id}. New delay: {rate_limited_delay}s")
+                elif status == "unreachable":
+                    unreachable_count += 1
+                    logger.info(f"User {user_id} is unreachable for broadcast: {str(e)[:100]}")
+                elif status == "rate_limited":
+                    rate_limited_delay = min(max(retry_after or rate_limited_delay * 1.5, 0.5), 5.0)
+                    logger.warning(f"Rate limited during broadcast for user {user_id}. New delay: {rate_limited_delay}s")
                     await asyncio.sleep(rate_limited_delay)
                     continue
                 else:
                     error_count += 1
-                    logger.warning(f"Failed to send broadcast to user {user_id}: {error_msg[:100]}")
+                    logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
 
             await asyncio.sleep(rate_limited_delay)
 
@@ -795,10 +802,11 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
             f"📊 <b>Статистика:</b>\n"
             f"• ✅ Отправлено: {sent_count}/{total_users}\n"
             f"• 🚫 Заблокировано: {blocked_count}\n"
+            f"• 📴 Недоступно: {unreachable_count}\n"
             f"• ❌ Ошибок: {error_count}"
         )
 
-        logger.info(f"Admin {admin_id} completed /not_sub_sms broadcast: sent={sent_count}, blocked={blocked_count}, errors={error_count}")
+        logger.info(f"Admin {admin_id} completed /not_sub_sms broadcast: sent={sent_count}, blocked={blocked_count}, unreachable={unreachable_count}, errors={error_count}")
 
     except Exception as e:
         logger.error(f"Broadcast no subscription error: {e}", exc_info=True)
