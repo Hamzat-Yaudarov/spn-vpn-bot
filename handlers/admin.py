@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 from datetime import datetime, timedelta, timezone
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
@@ -46,6 +47,42 @@ def _parse_admin_subscription_command(parts: list[str]) -> tuple[int, int, int]:
         return int(parts[1]), int(parts[2]), int(parts[3])
 
     raise ValueError("Invalid arguments")
+
+
+def _classify_broadcast_exception(exc: Exception) -> tuple[str, float | None]:
+    """Классифицировать типовую ошибку Telegram при рассылке."""
+    if isinstance(exc, TelegramRetryAfter):
+        retry_after = float(getattr(exc, "retry_after", 1.0) or 1.0)
+        return "rate_limited", retry_after
+
+    if isinstance(exc, TelegramForbiddenError):
+        error_msg = str(exc).lower()
+        if "blocked" in error_msg or "deactivated" in error_msg:
+            return "blocked", None
+        return "unreachable", None
+
+    if isinstance(exc, TelegramBadRequest):
+        error_msg = str(exc).lower()
+        if (
+            "chat not found" in error_msg
+            or "user not found" in error_msg
+            or "private chat not found" in error_msg
+            or "have no rights to send a message" in error_msg
+            or "can't initiate conversation" in error_msg
+            or "bot can't initiate conversation" in error_msg
+            or "peers not found" in error_msg
+        ):
+            return "unreachable", None
+
+    error_msg = str(exc).lower()
+    if "429" in error_msg or "too many requests" in error_msg:
+        return "rate_limited", 1.0
+    if "blocked" in error_msg or "user is deactivated" in error_msg or "bot was blocked" in error_msg:
+        return "blocked", None
+    if "chat not found" in error_msg or "can't initiate conversation" in error_msg:
+        return "unreachable", None
+
+    return "error", None
 
 
 @router.message(Command("new_code"))
