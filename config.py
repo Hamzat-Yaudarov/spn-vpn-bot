@@ -78,13 +78,13 @@ BYPASS_BASE_TRAFFIC_GB = 50
 GB_BYTES = 1024 ** 3
 
 REGULAR_TARIFFS = {
-    "regular_1m": {"days": 30, "price": 200, "kind": "regular", "title": "Обычная — 1 месяц"},
-    "regular_3m": {"days": 90, "price": 500, "kind": "regular", "title": "Обычная — 3 месяца"},
+    "regular_1m": {"days": 30, "price": 200, "kind": "regular", "title": "Обычная 1 месяц"},
+    "regular_3m": {"days": 90, "price": 500, "kind": "regular", "title": "Обычная 3 месяца"},
 }
 
 BYPASS_TARIFFS = {
-    "bypass_1m": {"days": 30, "price": 300, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой — 1 месяц"},
-    "bypass_3m": {"days": 90, "price": 800, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой — 3 месяца"},
+    "bypass_1m": {"days": 30, "price": 300, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой 1 месяц"},
+    "bypass_3m": {"days": 90, "price": 800, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой 3 месяца"},
 }
 
 BYPASS_TRAFFIC_PACKAGES = {
