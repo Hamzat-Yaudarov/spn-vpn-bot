@@ -779,8 +779,14 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
             users = await conn.fetch(
                 """
                 SELECT tg_id FROM users
-                WHERE subscription_until IS NULL
-                   OR subscription_until <= now() AT TIME ZONE 'UTC'
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM subscriptions
+                    WHERE subscriptions.tg_id = users.tg_id
+                      AND subscriptions.generation = 'v2'
+                      AND subscriptions.is_visible = TRUE
+                      AND subscriptions.subscription_until IS NOT NULL
+                      AND subscriptions.subscription_until > now() AT TIME ZONE 'UTC'
+                )
                 ORDER BY tg_id
                 """
             )

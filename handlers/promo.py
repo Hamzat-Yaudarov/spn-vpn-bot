@@ -4,12 +4,11 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import DEFAULT_SQUAD_UUID
+from config import BYPASS_SQUAD_UUID, HWID_DEVICE_LIMIT, REGULAR_SQUAD_UUID
 from states import UserStates
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
-    remnawave_add_to_squad,
     remnawave_get_subscription_url
 )
 from handlers.start import show_main_menu
@@ -21,12 +20,14 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
-    return f"tg_{tg_id}_{subscription_id}"
+def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) -> str:
+    return f"tg_{tg_id}_{plan_kind}_{type_index}"
 
 
 def _subscription_name(subscription) -> str:
-    return f"Подписка #{subscription['slot_number']}"
+    plan_kind = subscription.get("plan_kind") or "regular"
+    title = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
+    return f"{title} #{subscription.get('type_index') or subscription['slot_number']}"
 
 
 async def _prompt_promo_input(message_or_callback, state: FSMContext, text: str = "Введи промокод:"):
@@ -43,15 +44,15 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} initiated promo code entry")
 
-    subscriptions = await db.get_user_subscriptions(tg_id)
-    next_slot = await db.get_next_subscription_slot(tg_id)
+    subscriptions = await db.get_renewable_subscriptions(tg_id)
+    next_type_index = await db.get_next_type_index(tg_id, "regular")
 
     if not subscriptions:
-        await state.update_data(promo_target_mode="new", promo_target_slot=1)
-        await _prompt_promo_input(callback, state, "Введи промокод для новой подписки #1:")
+        await state.update_data(promo_target_mode="new", promo_target_type_index=next_type_index or 1)
+        await _prompt_promo_input(callback, state, "Введи промокод для новой обычной подписки #1:")
         return
 
-    if len(subscriptions) == 1 and next_slot is None:
+    if len(subscriptions) == 1 and next_type_index is None:
         await state.update_data(
             promo_target_mode="existing",
             promo_target_subscription_id=subscriptions[0]["id"],
@@ -59,14 +60,14 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
         await _prompt_promo_input(callback, state, f"Введи промокод для {_subscription_name(subscriptions[0]).lower()}:")
         return
 
-    if len(subscriptions) == 1 and next_slot is not None:
+    if len(subscriptions) == 1 and next_type_index is not None:
         await state.update_data(
             promo_target_mode="existing",
             promo_target_subscription_id=subscriptions[0]["id"],
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}")],
-            [InlineKeyboardButton(text=f"Активировать новую подписку #{next_slot}", callback_data=f"promo_target_new_{next_slot}")],
+            [InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
         ])
         await callback.message.answer("Куда применить промокод?", reply_markup=kb)
@@ -77,8 +78,8 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}")]
         for subscription in subscriptions
     ]
-    if next_slot is not None:
-        keyboard.append([InlineKeyboardButton(text=f"Активировать новую подписку #{next_slot}", callback_data=f"promo_target_new_{next_slot}")])
+    if next_type_index is not None:
+        keyboard.append([InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}")])
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")])
 
     await callback.message.answer(
@@ -94,27 +95,27 @@ async def process_promo_target_existing(callback: CallbackQuery, state: FSMConte
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription:
+    if not subscription or subscription.get("generation") != "v2" or not subscription.get("is_visible") or not subscription.get("is_renewable"):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
     await state.update_data(
         promo_target_mode="existing",
         promo_target_subscription_id=subscription_id,
-        promo_target_slot=subscription["slot_number"],
+        promo_target_type_index=subscription.get("type_index"),
     )
     await _prompt_promo_input(callback, state, f"Введи промокод для {_subscription_name(subscription).lower()}:")
 
 
 @router.callback_query(F.data.startswith("promo_target_new_"))
 async def process_promo_target_new(callback: CallbackQuery, state: FSMContext):
-    slot_number = int(callback.data.split("_")[-1])
+    type_index = int(callback.data.split("_")[-1])
     await state.update_data(
         promo_target_mode="new",
         promo_target_subscription_id=None,
-        promo_target_slot=slot_number,
+        promo_target_type_index=type_index,
     )
-    await _prompt_promo_input(callback, state, f"Введи промокод для новой подписки #{slot_number}:")
+    await _prompt_promo_input(callback, state, f"Введи промокод для новой обычной подписки #{type_index}:")
 
 
 @router.message(UserStates.waiting_for_promo)
@@ -164,39 +165,56 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         promo_target_mode = state_data.get("promo_target_mode", "existing")
         target_subscription_id = state_data.get("promo_target_subscription_id")
-        target_slot = state_data.get("promo_target_slot")
+        target_type_index = state_data.get("promo_target_type_index")
 
         if promo_target_mode == "existing":
             subscription = await db.get_subscription_by_id(target_subscription_id, tg_id)
-            if not subscription:
+            if not subscription or subscription.get("generation") != "v2" or not subscription.get("is_visible") or not subscription.get("is_renewable"):
                 await message.answer("❌ Выбранная подписка не найдена")
                 await state.clear()
                 await show_main_menu(message)
                 return
         else:
-            if target_slot is None:
-                target_slot = await db.get_next_subscription_slot(tg_id)
+            if target_type_index is None:
+                target_type_index = await db.get_next_type_index(tg_id, "regular")
 
-            if target_slot is None:
-                await message.answer("❌ У тебя уже максимум подписок")
+            target_slot = await db.get_next_subscription_slot(tg_id)
+            if target_type_index is None or target_slot is None:
+                await message.answer("❌ У тебя уже максимум обычных подписок")
                 await state.clear()
                 await show_main_menu(message)
                 return
 
-            subscription = await db.get_subscription_by_slot(tg_id, target_slot)
-            if subscription is None:
-                subscription = await db.create_subscription_record(tg_id, target_slot)
+            subscription = await db.create_subscription_record(
+                tg_id,
+                target_slot,
+                plan_kind="regular",
+                type_index=target_type_index,
+                generation="v2",
+                is_visible=True,
+                is_renewable=True,
+                purchase_days=days,
+            )
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            remna_username = subscription.get("remnawave_username") or _build_remnawave_username(tg_id, subscription["id"])
+            plan_kind = subscription.get("plan_kind") or "regular"
+            squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+            remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(
+                tg_id,
+                plan_kind,
+                subscription.get("type_index") or subscription["id"],
+            )
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,
                 days=days,
                 extend_if_exists=promo_target_mode == "existing" and bool(subscription.get("remnawave_uuid")),
                 remna_username=remna_username,
+                active_internal_squads=[squad_uuid],
+                hwid_device_limit=HWID_DEVICE_LIMIT,
+                telegram_id=tg_id,
             )
 
             if not uuid:
@@ -204,8 +222,6 @@ async def process_promo_input(message: Message, state: FSMContext):
                 await state.clear()
                 await show_main_menu(message)
                 return
-
-            await remnawave_add_to_squad(session, uuid, subscription.get("squad_uuid") or DEFAULT_SQUAD_UUID)
 
             # Получаем ссылку подписки
             sub_url = await remnawave_get_subscription_url(session, uuid)
@@ -233,7 +249,7 @@ async def process_promo_input(message: Message, state: FSMContext):
             uuid,
             username,
             new_until,
-            subscription.get('squad_uuid') or DEFAULT_SQUAD_UUID,
+            squad_uuid,
         )
 
         # Отправляем успешное сообщение

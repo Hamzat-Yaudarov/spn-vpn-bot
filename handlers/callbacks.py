@@ -45,11 +45,17 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
 
     keyboard = [
         [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription", style="success")],
+    ]
+    active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
+    if active_bypass_subscriptions:
+        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb")])
+
+    keyboard.extend([
         [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
-    ]
+    ])
 
     # Добавляем кнопку партнёрства если пользователь партнёр
     if is_partner:

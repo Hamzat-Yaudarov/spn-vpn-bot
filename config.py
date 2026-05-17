@@ -37,6 +37,8 @@ PARTNERSHIP_AGREEMENTS = {
 REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "")
 REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")
+REGULAR_SQUAD_UUID = os.getenv("REGULAR_SQUAD_UUID", "89902b23-6765-425c-ae27-9bb43c121a70")
+BYPASS_SQUAD_UUID = os.getenv("BYPASS_SQUAD_UUID", "3766e220-ebe1-4a0c-b53f-a4731f805d7e")
 
 # ────────────────────────────────────────────────
 #            CRYPTOBOT PAYMENT CONFIG
@@ -71,12 +73,29 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 #                TARIFFS CONFIG
 # ────────────────────────────────────────────────
 
-TARIFFS = {
-    "1m": {"days": 30, "price": 200},
-    "3m": {"days": 90, "price": 500},
-    "6m": {"days": 180, "price": 900},
-    "12m": {"days": 365, "price": 1550}
+HWID_DEVICE_LIMIT = 5
+BYPASS_BASE_TRAFFIC_GB = 50
+GB_BYTES = 1024 ** 3
+
+REGULAR_TARIFFS = {
+    "regular_1m": {"days": 30, "price": 200, "kind": "regular", "title": "Обычная — 1 месяц"},
+    "regular_3m": {"days": 90, "price": 500, "kind": "regular", "title": "Обычная — 3 месяца"},
 }
+
+BYPASS_TARIFFS = {
+    "bypass_1m": {"days": 30, "price": 300, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой — 1 месяц"},
+    "bypass_3m": {"days": 90, "price": 800, "kind": "bypass", "base_gb": BYPASS_BASE_TRAFFIC_GB, "title": "С антиглушилкой — 3 месяца"},
+}
+
+BYPASS_TRAFFIC_PACKAGES = {
+    "gb_10": {"gb": 10, "price": 49},
+    "gb_20": {"gb": 20, "price": 94},
+    "gb_40": {"gb": 40, "price": 180},
+    "gb_80": {"gb": 80, "price": 349},
+    "gb_150": {"gb": 150, "price": 699},
+}
+
+TARIFFS = {**REGULAR_TARIFFS, **BYPASS_TARIFFS}
 
 # ────────────────────────────────────────────────
 #             TASK CONFIGURATION

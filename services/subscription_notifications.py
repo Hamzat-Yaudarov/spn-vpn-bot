@@ -107,6 +107,9 @@ async def _send_notifications_for_expiring(bot):
             SELECT id, tg_id, slot_number, remnawave_uuid
             FROM subscriptions
             WHERE remnawave_uuid IS NOT NULL
+              AND generation = 'v2'
+              AND is_visible = TRUE
+              AND is_renewable = TRUE
             ORDER BY tg_id ASC, slot_number ASC
             """,
             fetch_all=True
@@ -263,7 +266,7 @@ async def _send_notifications_for_expired(bot):
             for user in all_users:
                 try:
                     tg_id = user['tg_id']
-                    subscriptions = await db.get_user_subscriptions(tg_id)
+                    subscriptions = await db.get_visible_subscriptions(tg_id)
 
                     has_active_subscription = False
                     message_type = None

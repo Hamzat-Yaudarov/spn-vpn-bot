@@ -149,6 +149,8 @@ async def run_migrations():
                 'subscription_id': {'type': 'BIGINT', 'nullable': True},
                 'payment_target': {'type': 'TEXT', 'nullable': False, 'default': "'new'"},
                 'target_slot_number': {'type': 'INT', 'nullable': True},
+                'payment_kind': {'type': 'TEXT', 'nullable': False, 'default': "'subscription'"},
+                'traffic_package_code': {'type': 'TEXT', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
@@ -160,6 +162,21 @@ async def run_migrations():
                 'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
                 'squad_uuid': {'type': 'UUID', 'nullable': True},
                 'is_active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
+                'plan_kind': {'type': 'TEXT', 'nullable': True},
+                'generation': {'type': 'TEXT', 'nullable': False, 'default': "'legacy'"},
+                'is_visible': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'is_renewable': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'type_index': {'type': 'INT', 'nullable': True},
+                'purchase_days': {'type': 'INT', 'nullable': True},
+                'traffic_enabled': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'base_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'current_paid_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'carried_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'current_period_limit_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'traffic_reset_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'last_known_used_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'last_traffic_sync_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'hwid_device_limit': {'type': 'INT', 'nullable': False, 'default': '5'},
                 'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
                 'notification_type': {'type': 'TEXT', 'nullable': True},
             }
@@ -224,6 +241,29 @@ async def run_migrations():
                 'phone_number': {'type': 'TEXT', 'nullable': True},
                 'usdt_address': {'type': 'TEXT', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+            }
+
+            expected_traffic_purchases_columns = {
+                'subscription_id': {'type': 'BIGINT', 'nullable': False},
+                'package_code': {'type': 'TEXT', 'nullable': False},
+                'traffic_bytes': {'type': 'BIGINT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'provider': {'type': 'TEXT', 'nullable': True},
+                'invoice_id': {'type': 'TEXT', 'nullable': True},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+                'activated_at': {'type': 'TIMESTAMP', 'nullable': True},
+            }
+
+            expected_traffic_cycles_columns = {
+                'subscription_id': {'type': 'BIGINT', 'nullable': False},
+                'period_start': {'type': 'TIMESTAMP', 'nullable': False},
+                'period_end': {'type': 'TIMESTAMP', 'nullable': False},
+                'base_traffic_bytes': {'type': 'BIGINT', 'nullable': False},
+                'carried_traffic_bytes': {'type': 'BIGINT', 'nullable': False},
+                'paid_traffic_bytes': {'type': 'BIGINT', 'nullable': False},
+                'used_traffic_bytes_before_reset': {'type': 'BIGINT', 'nullable': False},
+                'remaining_paid_traffic_bytes': {'type': 'BIGINT', 'nullable': False},
+                'reset_processed_at': {'type': 'TIMESTAMP', 'nullable': True},
             }
 
             # ═══════════════════════════════════════════════════════════
@@ -291,6 +331,21 @@ async def run_migrations():
                     subscription_until TIMESTAMP,
                     squad_uuid UUID,
                     is_active BOOLEAN DEFAULT TRUE,
+                    plan_kind TEXT,
+                    generation TEXT DEFAULT 'legacy',
+                    is_visible BOOLEAN DEFAULT FALSE,
+                    is_renewable BOOLEAN DEFAULT FALSE,
+                    type_index INT,
+                    purchase_days INT,
+                    traffic_enabled BOOLEAN DEFAULT FALSE,
+                    base_traffic_bytes BIGINT DEFAULT 0,
+                    current_paid_traffic_bytes BIGINT DEFAULT 0,
+                    carried_traffic_bytes BIGINT DEFAULT 0,
+                    current_period_limit_bytes BIGINT DEFAULT 0,
+                    traffic_reset_at TIMESTAMP,
+                    last_known_used_traffic_bytes BIGINT DEFAULT 0,
+                    last_traffic_sync_at TIMESTAMP,
+                    hwid_device_limit INT DEFAULT 5,
                     next_notification_time TIMESTAMP,
                     notification_type TEXT,
                     created_at TIMESTAMP DEFAULT now(),
@@ -378,6 +433,39 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'referral_withdrawals' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS traffic_purchases (
+                    id BIGSERIAL PRIMARY KEY,
+                    subscription_id BIGINT NOT NULL,
+                    package_code TEXT NOT NULL,
+                    traffic_bytes BIGINT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    provider TEXT,
+                    invoice_id TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT now(),
+                    activated_at TIMESTAMP
+                )
+            """)
+            logging.info("✅ Таблица 'traffic_purchases' создана или уже существует")
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscription_traffic_cycles (
+                    id BIGSERIAL PRIMARY KEY,
+                    subscription_id BIGINT NOT NULL,
+                    period_start TIMESTAMP NOT NULL,
+                    period_end TIMESTAMP NOT NULL,
+                    base_traffic_bytes BIGINT NOT NULL,
+                    carried_traffic_bytes BIGINT NOT NULL,
+                    paid_traffic_bytes BIGINT NOT NULL,
+                    used_traffic_bytes_before_reset BIGINT NOT NULL,
+                    remaining_paid_traffic_bytes BIGINT NOT NULL,
+                    reset_processed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблица 'subscription_traffic_cycles' создана или уже существует")
+
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -392,6 +480,8 @@ async def run_migrations():
                     subscription_id BIGINT,
                     payment_target TEXT DEFAULT 'new',
                     target_slot_number INT,
+                    payment_kind TEXT DEFAULT 'subscription',
+                    traffic_package_code TEXT,
                     status TEXT DEFAULT 'pending'
                 )
             """)
@@ -438,6 +528,7 @@ async def run_migrations():
                 # subscriptions индексы
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);",
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_uuid ON subscriptions(remnawave_uuid);",
+                "CREATE INDEX IF NOT EXISTS idx_subscriptions_kind_visible ON subscriptions(tg_id, plan_kind, is_visible);",
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_notification ON subscriptions(next_notification_time) WHERE next_notification_time IS NOT NULL;",
 
                 # payments индексы
@@ -462,6 +553,8 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referrer_id ON referral_earnings(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referred_user_id ON referral_earnings(referred_user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_referral_withdrawals_referrer_id ON referral_withdrawals(referrer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);",
+                "CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_traffic_cycles(subscription_id);",
             ]
 
             for query in index_queries:
@@ -486,6 +579,8 @@ async def run_migrations():
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscription_id BIGINT;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_target TEXT DEFAULT 'new';",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS target_slot_number INT;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_kind TEXT DEFAULT 'subscription';",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS traffic_package_code TEXT;",
             ]
 
             for query in alter_queries:
@@ -545,6 +640,8 @@ async def run_migrations():
             await sync_table_schema(conn, 'partner_withdrawals', expected_partner_withdrawals_columns)
             await sync_table_schema(conn, 'referral_earnings', expected_referral_earnings_columns)
             await sync_table_schema(conn, 'referral_withdrawals', expected_referral_withdrawals_columns)
+            await sync_table_schema(conn, 'traffic_purchases', expected_traffic_purchases_columns)
+            await sync_table_schema(conn, 'subscription_traffic_cycles', expected_traffic_cycles_columns)
 
             await conn.execute(
                 """
@@ -556,6 +653,9 @@ async def run_migrations():
                     subscription_until,
                     squad_uuid,
                     is_active,
+                    generation,
+                    is_visible,
+                    is_renewable,
                     next_notification_time,
                     notification_type
                 )
@@ -567,6 +667,9 @@ async def run_migrations():
                     u.subscription_until,
                     u.squad_uuid,
                     TRUE,
+                    'legacy',
+                    FALSE,
+                    FALSE,
                     u.next_notification_time,
                     u.notification_type
                 FROM users u
@@ -575,6 +678,17 @@ async def run_migrations():
                       SELECT 1 FROM subscriptions s
                       WHERE s.tg_id = u.tg_id AND s.slot_number = 1
                   )
+                """
+            )
+
+            await conn.execute(
+                """
+                UPDATE subscriptions
+                SET generation = 'legacy',
+                    is_visible = FALSE,
+                    is_renewable = FALSE
+                WHERE generation = 'legacy'
+                   OR generation IS NULL
                 """
             )
 
@@ -793,6 +907,92 @@ async def get_user_subscriptions(tg_id: int):
     )
 
 
+async def get_visible_subscriptions(tg_id: int):
+    """Получить видимые пользователю подписки новой модели."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE tg_id = $1 AND generation = 'v2' AND is_visible = TRUE
+        ORDER BY plan_kind ASC, type_index ASC, id ASC
+        """,
+        (tg_id,),
+        fetch_all=True
+    )
+
+
+async def get_renewable_subscriptions(tg_id: int):
+    """Получить подписки, которые можно продлевать."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE tg_id = $1
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
+        ORDER BY plan_kind ASC, type_index ASC, id ASC
+        """,
+        (tg_id,),
+        fetch_all=True
+    )
+
+
+async def get_active_bypass_subscriptions(tg_id: int):
+    """Получить активные bypass-подписки пользователя."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE tg_id = $1
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
+          AND plan_kind = 'bypass'
+          AND subscription_until IS NOT NULL
+          AND subscription_until > now() AT TIME ZONE 'UTC'
+        ORDER BY type_index ASC, id ASC
+        """,
+        (tg_id,),
+        fetch_all=True
+    )
+
+
+async def get_next_type_index(tg_id: int, plan_kind: str) -> int | None:
+    """Получить следующий номер подписки внутри типа regular/bypass."""
+    rows = await db_execute(
+        """
+        SELECT type_index FROM subscriptions
+        WHERE tg_id = $1
+          AND plan_kind = $2
+          AND generation = 'v2'
+          AND is_visible = TRUE
+        """,
+        (tg_id, plan_kind),
+        fetch_all=True
+    )
+    taken = {row['type_index'] for row in rows if row['type_index'] is not None}
+
+    for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1):
+        if index not in taken:
+            return index
+
+    return None
+
+
+async def count_visible_subscriptions_by_kind(tg_id: int, plan_kind: str) -> int:
+    """Посчитать видимые подписки конкретного типа."""
+    result = await db_execute(
+        """
+        SELECT COUNT(*) AS count FROM subscriptions
+        WHERE tg_id = $1
+          AND plan_kind = $2
+          AND generation = 'v2'
+          AND is_visible = TRUE
+        """,
+        (tg_id, plan_kind),
+        fetch_one=True
+    )
+    return result['count'] if result else 0
+
+
 async def get_subscription_by_id(subscription_id: int, tg_id: int | None = None):
     """Получить подписку по ID."""
     if tg_id is None:
@@ -832,22 +1032,42 @@ async def get_next_subscription_slot(tg_id: int) -> int | None:
     subscriptions = await get_user_subscriptions(tg_id)
     taken_slots = {sub['slot_number'] for sub in subscriptions}
 
-    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1):
+    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER * 2 + 1):
         if slot not in taken_slots:
             return slot
 
     return None
 
 
-async def create_subscription_record(tg_id: int, slot_number: int):
+async def create_subscription_record(
+    tg_id: int,
+    slot_number: int,
+    *,
+    plan_kind: str | None = None,
+    type_index: int | None = None,
+    generation: str = 'legacy',
+    is_visible: bool = False,
+    is_renewable: bool = False,
+    purchase_days: int | None = None,
+):
     """Создать запись подписки без VPN-данных."""
     return await db_execute(
         """
-        INSERT INTO subscriptions (tg_id, slot_number, is_active)
-        VALUES ($1, $2, TRUE)
+        INSERT INTO subscriptions (
+            tg_id,
+            slot_number,
+            is_active,
+            plan_kind,
+            type_index,
+            generation,
+            is_visible,
+            is_renewable,
+            purchase_days
+        )
+        VALUES ($1, $2, TRUE, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
-        (tg_id, slot_number),
+        (tg_id, slot_number, plan_kind, type_index, generation, is_visible, is_renewable, purchase_days),
         fetch_one=True
     )
 
@@ -987,6 +1207,8 @@ async def create_payment(
     subscription_id: int | None = None,
     payment_target: str = 'new',
     target_slot_number: int | None = None,
+    payment_kind: str = 'subscription',
+    traffic_package_code: str | None = None,
 ):
     """Создать запись о платеже"""
     from datetime import datetime
@@ -1001,9 +1223,11 @@ async def create_payment(
             invoice_id,
             subscription_id,
             payment_target,
-            target_slot_number
+            target_slot_number,
+            payment_kind,
+            traffic_package_code
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         """,
         (
             tg_id,
@@ -1015,6 +1239,8 @@ async def create_payment(
             subscription_id,
             payment_target,
             target_slot_number,
+            payment_kind,
+            traffic_package_code,
         )
     )
 
@@ -1022,7 +1248,7 @@ async def create_payment(
 async def get_pending_payments():
     """Получить все ожидающие платежи"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number, payment_kind, traffic_package_code FROM payments WHERE status = 'pending' AND provider = 'cryptobot' ORDER BY id",
         fetch_all=True
     )
 
@@ -1030,7 +1256,7 @@ async def get_pending_payments():
 async def get_pending_payments_by_provider(provider: str):
     """Получить все ожидающие платежи по конкретному провайдеру"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number, payment_kind, traffic_package_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
         (provider,),
         fetch_all=True
     )
@@ -1123,7 +1349,7 @@ async def get_last_pending_payment(tg_id: int):
     """Получить последний ожидающий платеж пользователя"""
     result = await db_execute(
         """
-        SELECT invoice_id, tariff_code, provider, subscription_id, payment_target, target_slot_number
+        SELECT invoice_id, tariff_code, provider, subscription_id, payment_target, target_slot_number, payment_kind, traffic_package_code
         FROM payments 
         WHERE tg_id = $1 AND status = 'pending'
         ORDER BY id DESC 
@@ -1141,6 +1367,123 @@ async def get_payment_by_invoice(invoice_id: str):
         "SELECT * FROM payments WHERE invoice_id = $1 LIMIT 1",
         (invoice_id,),
         fetch_one=True
+    )
+
+
+async def create_traffic_purchase(subscription_id: int, package_code: str, traffic_bytes: int, amount: float, provider: str, invoice_id: str):
+    """Создать запись покупки трафика."""
+    return await db_execute(
+        """
+        INSERT INTO traffic_purchases (subscription_id, package_code, traffic_bytes, amount, provider, invoice_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+        """,
+        (subscription_id, package_code, traffic_bytes, amount, provider, str(invoice_id)),
+        fetch_one=True
+    )
+
+
+async def activate_traffic_purchase(invoice_id: str) -> bool:
+    """Отметить покупку трафика активированной."""
+    await db_execute(
+        """
+        UPDATE traffic_purchases
+        SET status = 'paid', activated_at = now()
+        WHERE invoice_id = $1 AND status != 'paid'
+        """,
+        (str(invoice_id),)
+    )
+    return True
+
+
+async def add_traffic_to_subscription(subscription_id: int, traffic_bytes: int) -> None:
+    """Добавить купленный трафик к текущему периоду bypass-подписки."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET current_paid_traffic_bytes = current_paid_traffic_bytes + $1,
+            current_period_limit_bytes = current_period_limit_bytes + $1,
+            updated_at = now()
+        WHERE id = $2
+        """,
+        (traffic_bytes, subscription_id)
+    )
+
+
+async def get_bypass_subscriptions_for_traffic_reset():
+    """Получить bypass-подписки, которым пора сбросить трафик."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE generation = 'v2'
+          AND plan_kind = 'bypass'
+          AND is_visible = TRUE
+          AND traffic_enabled = TRUE
+          AND remnawave_uuid IS NOT NULL
+          AND subscription_until IS NOT NULL
+          AND subscription_until > now() AT TIME ZONE 'UTC'
+          AND traffic_reset_at IS NOT NULL
+          AND traffic_reset_at <= now() AT TIME ZONE 'UTC'
+        ORDER BY traffic_reset_at ASC
+        """,
+        fetch_all=True
+    )
+
+
+async def record_traffic_cycle(
+    subscription_id: int,
+    period_start,
+    period_end,
+    base_traffic_bytes: int,
+    carried_traffic_bytes: int,
+    paid_traffic_bytes: int,
+    used_traffic_bytes_before_reset: int,
+    remaining_paid_traffic_bytes: int,
+):
+    """Записать историю traffic-cycle перед сбросом."""
+    await db_execute(
+        """
+        INSERT INTO subscription_traffic_cycles (
+            subscription_id,
+            period_start,
+            period_end,
+            base_traffic_bytes,
+            carried_traffic_bytes,
+            paid_traffic_bytes,
+            used_traffic_bytes_before_reset,
+            remaining_paid_traffic_bytes,
+            reset_processed_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+        """,
+        (
+            subscription_id,
+            period_start,
+            period_end,
+            base_traffic_bytes,
+            carried_traffic_bytes,
+            paid_traffic_bytes,
+            used_traffic_bytes_before_reset,
+            remaining_paid_traffic_bytes,
+        )
+    )
+
+
+async def apply_traffic_reset(subscription_id: int, remaining_paid_traffic_bytes: int, next_reset_at, new_limit_bytes: int):
+    """Применить новый traffic-cycle после сброса."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET carried_traffic_bytes = $1,
+            current_paid_traffic_bytes = 0,
+            current_period_limit_bytes = $2,
+            last_known_used_traffic_bytes = 0,
+            traffic_reset_at = $3,
+            last_traffic_sync_at = now(),
+            updated_at = now()
+        WHERE id = $4
+        """,
+        (remaining_paid_traffic_bytes, new_limit_bytes, next_reset_at, subscription_id)
     )
 
 

@@ -43,6 +43,21 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     subscription_until TIMESTAMP,
     squad_uuid UUID,
     is_active BOOLEAN DEFAULT TRUE,
+    plan_kind TEXT,
+    generation TEXT DEFAULT 'legacy',
+    is_visible BOOLEAN DEFAULT FALSE,
+    is_renewable BOOLEAN DEFAULT FALSE,
+    type_index INT,
+    purchase_days INT,
+    traffic_enabled BOOLEAN DEFAULT FALSE,
+    base_traffic_bytes BIGINT DEFAULT 0,
+    current_paid_traffic_bytes BIGINT DEFAULT 0,
+    carried_traffic_bytes BIGINT DEFAULT 0,
+    current_period_limit_bytes BIGINT DEFAULT 0,
+    traffic_reset_at TIMESTAMP,
+    last_known_used_traffic_bytes BIGINT DEFAULT 0,
+    last_traffic_sync_at TIMESTAMP,
+    hwid_device_limit INT DEFAULT 5,
     next_notification_time TIMESTAMP,
     notification_type TEXT,
     created_at TIMESTAMP DEFAULT now(),
@@ -120,6 +135,8 @@ CREATE TABLE IF NOT EXISTS payments (
     subscription_id BIGINT,
     payment_target TEXT DEFAULT 'new',
     target_slot_number INT,
+    payment_kind TEXT DEFAULT 'subscription',
+    traffic_package_code TEXT,
     status TEXT DEFAULT 'pending'
 );
 
@@ -142,6 +159,33 @@ CREATE TABLE IF NOT EXISTS promo_code_users (
     FOREIGN KEY (promo_code) REFERENCES promo_codes(code) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS traffic_purchases (
+    id BIGSERIAL PRIMARY KEY,
+    subscription_id BIGINT NOT NULL,
+    package_code TEXT NOT NULL,
+    traffic_bytes BIGINT NOT NULL,
+    amount NUMERIC NOT NULL,
+    provider TEXT,
+    invoice_id TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT now(),
+    activated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS subscription_traffic_cycles (
+    id BIGSERIAL PRIMARY KEY,
+    subscription_id BIGINT NOT NULL,
+    period_start TIMESTAMP NOT NULL,
+    period_end TIMESTAMP NOT NULL,
+    base_traffic_bytes BIGINT NOT NULL,
+    carried_traffic_bytes BIGINT NOT NULL,
+    paid_traffic_bytes BIGINT NOT NULL,
+    used_traffic_bytes_before_reset BIGINT NOT NULL,
+    remaining_paid_traffic_bytes BIGINT NOT NULL,
+    reset_processed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
@@ -150,6 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notificatio
 CREATE INDEX IF NOT EXISTS idx_partnerships_tg_id ON partnerships(tg_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_uuid ON subscriptions(remnawave_uuid);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_kind_visible ON subscriptions(tg_id, plan_kind, is_visible);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_notification ON subscriptions(next_notification_time) WHERE next_notification_time IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_partner_referrals_partner_id ON partner_referrals(partner_id);
 CREATE INDEX IF NOT EXISTS idx_partner_earnings_partner_id ON partner_earnings(partner_id);
@@ -168,3 +213,5 @@ CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);
 CREATE INDEX IF NOT EXISTS idx_promo_code_users_tg_id ON promo_code_users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_promo_code_users_code ON promo_code_users(promo_code);
+CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_traffic_cycles(subscription_id);

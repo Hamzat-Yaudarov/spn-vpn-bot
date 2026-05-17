@@ -7,11 +7,20 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
-from config import DEFAULT_SQUAD_UUID, TARIFFS
+from config import (
+    BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_SQUAD_UUID,
+    BYPASS_TRAFFIC_PACKAGES,
+    BYPASS_TARIFFS,
+    GB_BYTES,
+    HWID_DEVICE_LIMIT,
+    REGULAR_SQUAD_UUID,
+    REGULAR_TARIFFS,
+    TARIFFS,
+)
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
 from services.image_handler import edit_text_with_photo
 from services.remnawave import (
-    remnawave_add_to_squad,
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
     remnawave_get_user_info,
@@ -26,7 +35,10 @@ router = Router()
 
 
 def _subscription_name(subscription) -> str:
-    return f"Подписка #{subscription['slot_number']}"
+    plan_kind = subscription.get('plan_kind') or 'regular'
+    type_index = subscription.get('type_index') or subscription.get('slot_number')
+    label = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
+    return f"{label} #{type_index}"
 
 
 def _subscription_short_status(subscription) -> str:
@@ -36,6 +48,12 @@ def _subscription_short_status(subscription) -> str:
     if until > datetime.utcnow():
         return "активна"
     return "истекла"
+
+
+def _format_traffic_gb(bytes_value: int | None) -> str:
+    if not bytes_value:
+        return "0 ГБ"
+    return f"{bytes_value / GB_BYTES:.1f} ГБ"
 
 
 async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
@@ -80,6 +98,10 @@ def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
     return f"tg_{tg_id}_{subscription_id}"
 
 
+def _build_new_remnawave_username(tg_id: int, plan_kind: str, type_index: int) -> str:
+    return f"tg_{tg_id}_{plan_kind}_{type_index}"
+
+
 def _format_remaining(expire_at_str: str | None) -> str:
     if not expire_at_str:
         return "неизвестно"
@@ -97,13 +119,18 @@ def _format_remaining(expire_at_str: str | None) -> str:
 
 
 async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, title: str):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 месяц — 200₽", callback_data="tariff_1m")],
-        [InlineKeyboardButton(text="3 месяца — 500₽", callback_data="tariff_3m")],
-        [InlineKeyboardButton(text="6 месяцев — 900₽", callback_data="tariff_6m")],
-        [InlineKeyboardButton(text="12 месяцев — 1550₽", callback_data="tariff_12m")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
-    ])
+    data = await state.get_data()
+    plan_kind = data.get("plan_kind", "regular")
+    tariffs = REGULAR_TARIFFS if plan_kind == "regular" else BYPASS_TARIFFS
+
+    keyboard = []
+    for tariff_code, tariff in tariffs.items():
+        devices = "5 устройств"
+        label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}")])
+
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await edit_text_with_photo(callback, title, kb, "Выбери срок подписки")
     await state.set_state(UserStates.choosing_tariff)
@@ -111,36 +138,28 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
 
 async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
-    subscriptions = await db.get_user_subscriptions(tg_id)
+    subscriptions = await db.get_visible_subscriptions(tg_id)
+    renewable_subscriptions = await db.get_renewable_subscriptions(tg_id)
 
     keyboard = []
-    for subscription in subscriptions:
-        keyboard.append([
-            InlineKeyboardButton(
-                text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}",
-                callback_data=f"subscription_view_{subscription['id']}",
-            )
-        ])
+
+    if renewable_subscriptions:
+        keyboard.append([InlineKeyboardButton(text="Продлить имеющуюся подписку", callback_data="renew_existing_subscription")])
+
+    buy_text = "Купить первую подписку" if not subscriptions else "Купить новую подписку"
+    keyboard.append([InlineKeyboardButton(text=buy_text, callback_data="buy_new_subscription", style="success")])
 
     if not subscriptions:
-        keyboard.append([
-            InlineKeyboardButton(text="Купить первую подписку", callback_data="buy_new_subscription", style="success")
-        ])
         text = (
             "🔐 <b>Мои подписки</b>\n\n"
             "У тебя пока нет подписок.\n"
-            "Купи первую подписку и при необходимости потом добавь ещё для близких."
+            "Купи первую подписку: обычную или с антиглушилкой."
         )
     else:
-        if len(subscriptions) < db.MAX_SUBSCRIPTIONS_PER_USER:
-            keyboard.append([
-                InlineKeyboardButton(text="Купить ещё подписку", callback_data="buy_new_subscription", style="success")
-            ])
-
         text = (
             "🔐 <b>Мои подписки</b>\n\n"
-            f"У тебя оформлено подписок: <b>{len(subscriptions)}</b> из <b>{db.MAX_SUBSCRIPTIONS_PER_USER}</b>.\n"
-            "Открой нужную подписку или оформи новую."
+            f"Активных новых подписок: <b>{len(subscriptions)}</b>.\n"
+            "Можно продлить существующую или купить новую."
         )
 
     keyboard.append([InlineKeyboardButton(text="Закрыть", callback_data="back_to_menu", style="danger")])
@@ -159,6 +178,27 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
         return
 
     sub_url, remaining_str = await _get_subscription_access_data(subscription)
+    traffic_text = ""
+
+    if subscription.get('plan_kind') == 'bypass':
+        used_bytes = subscription.get('last_known_used_traffic_bytes') or 0
+        try:
+            if subscription.get('remnawave_uuid'):
+                connector = aiohttp.TCPConnector(ssl=False)
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    user_info = await remnawave_get_user_info(session, subscription['remnawave_uuid'])
+                    used_bytes = (user_info.get('userTraffic') or {}).get('usedTrafficBytes') or used_bytes if user_info else used_bytes
+        except Exception as e:
+            logging.warning(f"Failed to fetch traffic for subscription {subscription_id}: {e}")
+
+        limit_bytes = subscription.get('current_period_limit_bytes') or subscription.get('base_traffic_bytes') or 0
+        reset_at = subscription.get('traffic_reset_at')
+        reset_text = reset_at.strftime('%d.%m.%Y') if reset_at else 'неизвестно'
+        traffic_text = (
+            f"\n📦 Трафик: <b>{_format_traffic_gb(used_bytes)} / {_format_traffic_gb(limit_bytes)}</b>\n"
+            f"🔄 Сброс трафика: <b>{reset_text}</b>"
+        )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}")],
@@ -171,7 +211,8 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
         "<blockquote>"
         f"📍 Статус: <b>{_subscription_short_status(subscription)}</b>\n"
         f"📆 Осталось времени: <b>{remaining_str}</b>\n"
-        f"🌐 Группа подключения: <b>SPN-Squad</b>"
+        f"🌐 Тип: <b>{'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'}</b>"
+        f"{traffic_text}"
         "</blockquote>\n\n"
         "<b>Ваш ключ:</b>\n"
         f"{sub_url or '<i>Ошибка получения ссылки</i>'}"
@@ -211,21 +252,35 @@ async def _get_or_create_target_subscription_for_direct_flow(tg_id: int, state_d
     purchase_mode = state_data.get("purchase_mode", "new")
     target_subscription_id = state_data.get("target_subscription_id")
     target_slot_number = state_data.get("target_slot_number")
+    plan_kind = state_data.get("plan_kind", "regular")
+    type_index = state_data.get("type_index")
+    tariff_code = state_data.get("tariff_code")
+    tariff = TARIFFS.get(tariff_code, {}) if tariff_code else {}
 
     if purchase_mode == "renew":
         subscription = await db.get_subscription_by_id(target_subscription_id, tg_id)
         return subscription, purchase_mode
 
-    if target_slot_number is None:
-        target_slot_number = await db.get_next_subscription_slot(tg_id)
-        state_data["target_slot_number"] = target_slot_number
+    if type_index is None:
+        type_index = await db.get_next_type_index(tg_id, plan_kind)
 
-    if target_slot_number is None:
+    if type_index is None:
         return None, purchase_mode
 
-    subscription = await db.get_subscription_by_slot(tg_id, target_slot_number)
-    if subscription is None:
-        subscription = await db.create_subscription_record(tg_id, target_slot_number)
+    storage_slot = await db.get_next_subscription_slot(tg_id)
+    if storage_slot is None:
+        return None, purchase_mode
+
+    subscription = await db.create_subscription_record(
+        tg_id,
+        storage_slot,
+        plan_kind=plan_kind,
+        type_index=type_index,
+        generation="v2",
+        is_visible=True,
+        is_renewable=True,
+        purchase_days=tariff.get("days"),
+    )
 
     return subscription, purchase_mode
 
@@ -241,19 +296,63 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "buy_new_subscription")
 async def process_buy_new_subscription(callback: CallbackQuery, state: FSMContext):
     """Начать покупку новой подписки."""
-    tg_id = callback.from_user.id
-    slot_number = await db.get_next_subscription_slot(tg_id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Обычная (Без антиглушилки)", callback_data="plan_regular")],
+        [InlineKeyboardButton(text="С антиглушилкой", callback_data="plan_bypass")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+    ])
+    text = "Выбери тип новой подписки:"
+    await state.update_data(purchase_mode="new", target_subscription_id=None, target_slot_number=None)
+    await edit_text_with_photo(callback, text, kb, "Выбери срок подписки")
 
-    if slot_number is None:
-        await callback.answer("У тебя уже максимум 3 подписки", show_alert=True)
+
+@router.callback_query(F.data.startswith("plan_"))
+async def process_plan_choice(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    plan_kind = callback.data.split("_", 1)[1]
+
+    if plan_kind not in {"regular", "bypass"}:
+        await callback.answer("Неизвестный тип подписки", show_alert=True)
+        return
+
+    type_index = await db.get_next_type_index(tg_id, plan_kind)
+    if type_index is None:
+        plan_name = "обычных" if plan_kind == "regular" else "подписок с антиглушилкой"
+        await callback.answer(f"У тебя уже максимум 3 {plan_name}", show_alert=True)
         return
 
     await state.update_data(
         purchase_mode="new",
+        plan_kind=plan_kind,
+        type_index=type_index,
         target_subscription_id=None,
-        target_slot_number=slot_number,
+        target_slot_number=type_index,
     )
-    await _show_tariff_selection(callback, state, f"Выбери срок для новой подписки #{slot_number}:")
+    plan_title = "обычной подписки" if plan_kind == "regular" else "подписки с антиглушилкой"
+    await _show_tariff_selection(callback, state, f"Выбери срок для {plan_title} #{type_index}:")
+
+
+@router.callback_query(F.data == "renew_existing_subscription")
+async def process_renew_existing_subscription(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    subscriptions = await db.get_renewable_subscriptions(tg_id)
+
+    if not subscriptions:
+        await callback.answer("Нет подписок для продления", show_alert=True)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}")]
+        for subscription in subscriptions
+    ]
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
+
+    await edit_text_with_photo(
+        callback,
+        "Выбери подписку, которую хочешь продлить:",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Мои подписки",
+    )
 
 
 @router.callback_query(F.data.startswith("subscription_view_"))
@@ -280,17 +379,173 @@ async def process_subscription_renew(callback: CallbackQuery, state: FSMContext)
 
     await state.update_data(
         purchase_mode="renew",
+        plan_kind=subscription.get('plan_kind') or 'regular',
         target_subscription_id=subscription_id,
         target_slot_number=subscription['slot_number'],
+        type_index=subscription.get('type_index'),
     )
-    await _show_tariff_selection(callback, state, f"Выбери срок для продления подписки #{subscription['slot_number']}:")
+    await _show_tariff_selection(callback, state, f"Выбери срок для продления {_subscription_name(subscription).lower()}:")
+
+
+@router.callback_query(F.data == "buy_gb")
+async def process_buy_gb(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    subscriptions = await db.get_active_bypass_subscriptions(tg_id)
+
+    if not subscriptions:
+        await callback.answer("Нет активных подписок с антиглушилкой", show_alert=True)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}")]
+        for subscription in subscriptions
+    ]
+    keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
+
+    await edit_text_with_photo(
+        callback,
+        "📦 <b>Купить ГБ</b>\n\nВыбери подписку с антиглушилкой:",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Мои подписки",
+    )
+
+
+@router.callback_query(F.data.startswith("gb_sub_"))
+async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    subscription_id = int(callback.data.split("_")[-1])
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not subscription or subscription.get('plan_kind') != 'bypass':
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    keyboard = []
+    for package_code, package in BYPASS_TRAFFIC_PACKAGES.items():
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{package['gb']} ГБ — {package['price']}₽",
+                callback_data=f"gb_package_{package_code}",
+            )
+        ])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")])
+
+    await state.update_data(gb_subscription_id=subscription_id)
+    await edit_text_with_photo(
+        callback,
+        f"📦 <b>{_subscription_name(subscription)}</b>\n\nВыбери пакет трафика:",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Мои подписки",
+    )
+
+
+@router.callback_query(F.data.startswith("gb_package_"))
+async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
+    package_code = callback.data.removeprefix("gb_package_")
+    package = BYPASS_TRAFFIC_PACKAGES.get(package_code)
+
+    if not package:
+        await callback.answer("Пакет не найден", show_alert=True)
+        return
+
+    await state.update_data(gb_package_code=package_code)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_gb_yookassa")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"📦 <b>Пакет {package['gb']} ГБ</b>\n\nСумма: <b>{package['price']}₽</b>\n\nВыбери способ оплаты:",
+        kb,
+        "Выбери способ оплаты",
+    )
+
+
+async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provider: str):
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    subscription_id = data.get("gb_subscription_id")
+    package_code = data.get("gb_package_code")
+    package = BYPASS_TRAFFIC_PACKAGES.get(package_code)
+
+    if not subscription_id or not package:
+        await callback.answer("Не выбран пакет трафика", show_alert=True)
+        await state.clear()
+        return
+
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+    if not subscription or subscription.get('plan_kind') != 'bypass':
+        await callback.answer("Подписка не найдена", show_alert=True)
+        await state.clear()
+        return
+
+    amount = package['price']
+
+    if provider == "cryptobot":
+        invoice = await create_cryptobot_invoice(callback.bot, amount, package_code, tg_id)
+        if not invoice:
+            await callback.answer("Ошибка создания счёта", show_alert=True)
+            return
+        invoice_id = invoice["invoice_id"]
+        pay_url = invoice["bot_invoice_url"]
+    else:
+        payment = await create_yookassa_payment(callback.bot, amount, package_code, tg_id)
+        if not payment:
+            await callback.answer("Ошибка создания платежа", show_alert=True)
+            return
+        invoice_id = payment["id"]
+        pay_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+    await db.create_payment(
+        tg_id,
+        package_code,
+        amount,
+        provider,
+        invoice_id,
+        subscription_id=subscription_id,
+        payment_target="traffic",
+        payment_kind="traffic_package",
+        traffic_package_code=package_code,
+    )
+    await db.create_traffic_purchase(
+        subscription_id,
+        package_code,
+        package['gb'] * GB_BYTES,
+        amount,
+        provider,
+        invoice_id,
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"📦 <b>Счёт на {package['gb']} ГБ</b>\n\nСумма: {amount}₽",
+        kb,
+        "Оплати",
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == "pay_gb_cryptobot")
+async def process_pay_gb_cryptobot(callback: CallbackQuery, state: FSMContext):
+    await _create_gb_payment(callback, state, "cryptobot")
+
+
+@router.callback_query(F.data == "pay_gb_yookassa")
+async def process_pay_gb_yookassa(callback: CallbackQuery, state: FSMContext):
+    await _create_gb_payment(callback, state, "yookassa")
 
 
 @router.callback_query(F.data.startswith("tariff_"))
 async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     """Обработать выбор тарифа."""
     tg_id = callback.from_user.id
-    tariff_code = callback.data.split("_")[1]
+    tariff_code = callback.data.removeprefix("tariff_")
     logging.info(f"User {tg_id} selected tariff: {tariff_code}")
 
     data = await state.get_data()
@@ -339,6 +594,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     purchase_mode = data.get("purchase_mode", "new")
     target_subscription_id = data.get("target_subscription_id")
     target_slot_number = data.get("target_slot_number")
+    type_index = data.get("type_index")
 
     if not tariff_code:
         await callback.answer("Ошибка: тариф не выбран", show_alert=True)
@@ -346,10 +602,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         return
 
     if purchase_mode == "new" and target_slot_number is None:
-        target_slot_number = await db.get_next_subscription_slot(tg_id)
-        if target_slot_number is None:
-            await callback.answer("У тебя уже максимум 3 подписки", show_alert=True)
-            return
+        target_slot_number = type_index
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
@@ -424,6 +677,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     purchase_mode = data.get("purchase_mode", "new")
     target_subscription_id = data.get("target_subscription_id")
     target_slot_number = data.get("target_slot_number")
+    type_index = data.get("type_index")
 
     if not tariff_code:
         await callback.answer("Ошибка: тариф не выбран", show_alert=True)
@@ -431,10 +685,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         return
 
     if purchase_mode == "new" and target_slot_number is None:
-        target_slot_number = await db.get_next_subscription_slot(tg_id)
-        if target_slot_number is None:
-            await callback.answer("У тебя уже максимум 3 подписки", show_alert=True)
-            return
+        target_slot_number = type_index
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
@@ -532,22 +783,31 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            remna_username = subscription.get("remnawave_username") or _build_remnawave_username(tg_id, subscription['id'])
+            plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
+            squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+            base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
+            traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+            remna_username = subscription.get("remnawave_username") or _build_new_remnawave_username(
+                tg_id,
+                plan_kind,
+                subscription.get('type_index') or subscription['id'],
+            )
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,
                 tariff["days"],
                 extend_if_exists=purchase_mode == "renew" and bool(subscription.get("remnawave_uuid")),
                 remna_username=remna_username,
+                traffic_limit_bytes=traffic_limit_bytes,
+                traffic_limit_strategy="NO_RESET",
+                active_internal_squads=[squad_uuid],
+                hwid_device_limit=HWID_DEVICE_LIMIT,
+                telegram_id=tg_id,
             )
 
             if not uuid:
                 await callback.answer("Ошибка получения доступа в VPN. Попробуй позже.", show_alert=True)
                 return
-
-            squad_added = await remnawave_add_to_squad(session, uuid, subscription.get("squad_uuid") or DEFAULT_SQUAD_UUID)
-            if not squad_added:
-                logging.warning(f"Failed to add user {uuid} to squad")
 
             sub_url = await remnawave_get_subscription_url(session, uuid)
             if not sub_url:
@@ -565,7 +825,33 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
             uuid,
             username,
             new_until,
-            subscription.get("squad_uuid") or DEFAULT_SQUAD_UUID,
+            squad_uuid,
+        )
+        await db.db_execute(
+            """
+            UPDATE subscriptions
+            SET plan_kind = $1,
+                generation = 'v2',
+                is_visible = TRUE,
+                is_renewable = TRUE,
+                traffic_enabled = $2,
+                base_traffic_bytes = $3,
+                current_period_limit_bytes = $4,
+                traffic_reset_at = COALESCE(traffic_reset_at, $5),
+                hwid_device_limit = $6,
+                purchase_days = $7
+            WHERE id = $8
+            """,
+            (
+                plan_kind,
+                plan_kind == "bypass",
+                base_traffic_bytes,
+                traffic_limit_bytes,
+                now + timedelta(days=30) if plan_kind == "bypass" else None,
+                HWID_DEVICE_LIMIT,
+                tariff["days"],
+                subscription['id'],
+            )
         )
         await db.spend_referral_balance_for_subscription(tg_id, amount, tariff_code)
 

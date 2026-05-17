@@ -15,6 +15,7 @@ from handlers import start, callbacks, subscription, gift, referral, promo, admi
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 from services.subscription_notifications import check_and_send_notifications
+from services.traffic_resets import run_traffic_reset_loop
 import webhooks
 
 
@@ -147,6 +148,7 @@ async def main():
 
     # Запускаем задачу отправки уведомлений о заканчивающихся подписках
     tasks.append(asyncio.create_task(check_and_send_notifications(bot)))
+    tasks.append(asyncio.create_task(run_traffic_reset_loop()))
     logger.info("✅ Background tasks started")
 
     # Запускаем webhook сервер (асинхронно)

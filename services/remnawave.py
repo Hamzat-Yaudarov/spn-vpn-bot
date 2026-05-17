@@ -18,6 +18,11 @@ async def remnawave_get_or_create_user(
     days: int = 30,
     extend_if_exists: bool = False,
     remna_username: str | None = None,
+    traffic_limit_bytes: int | None = None,
+    traffic_limit_strategy: str | None = None,
+    active_internal_squads: list[str] | None = None,
+    hwid_device_limit: int | None = None,
+    telegram_id: int | None = None,
 ) -> tuple[str | None, str | None]:
     """
     Получить или создать пользователя в Remnawave API с retry логикой
@@ -58,6 +63,16 @@ async def remnawave_get_or_create_user(
         if uuid:
             if extend_if_exists:
                 await remnawave_extend_subscription(session, uuid, days)
+            if any(value is not None for value in (traffic_limit_bytes, traffic_limit_strategy, active_internal_squads, hwid_device_limit, telegram_id)):
+                await remnawave_update_user_profile(
+                    session,
+                    uuid,
+                    traffic_limit_bytes=traffic_limit_bytes,
+                    traffic_limit_strategy=traffic_limit_strategy,
+                    active_internal_squads=active_internal_squads,
+                    hwid_device_limit=hwid_device_limit,
+                    telegram_id=telegram_id,
+                )
             return uuid, remna_username
     except Exception as e:
         logging.warning(f"Get existing user error: {e}")
@@ -80,6 +95,17 @@ async def remnawave_get_or_create_user(
             "password": password,
             "expireAt": expire_at
         }
+
+        if traffic_limit_bytes is not None:
+            payload["trafficLimitBytes"] = traffic_limit_bytes
+        if traffic_limit_strategy is not None:
+            payload["trafficLimitStrategy"] = traffic_limit_strategy
+        if active_internal_squads is not None:
+            payload["activeInternalSquads"] = active_internal_squads
+        if hwid_device_limit is not None:
+            payload["hwidDeviceLimit"] = hwid_device_limit
+        if telegram_id is not None:
+            payload["telegramId"] = telegram_id
 
         headers = {
             "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
@@ -113,6 +139,87 @@ async def remnawave_get_or_create_user(
         logging.error(f"Create user error: {e}")
 
     return None, None
+
+
+async def remnawave_update_user_profile(
+    session: aiohttp.ClientSession,
+    user_uuid: str,
+    *,
+    expire_at: datetime | None = None,
+    traffic_limit_bytes: int | None = None,
+    traffic_limit_strategy: str | None = None,
+    active_internal_squads: list[str] | None = None,
+    hwid_device_limit: int | None = None,
+    telegram_id: int | None = None,
+) -> bool:
+    """Обновить профиль пользователя Remnawave."""
+    payload = {"uuid": str(user_uuid)}
+
+    if expire_at is not None:
+        payload["expireAt"] = expire_at.isoformat()
+    if traffic_limit_bytes is not None:
+        payload["trafficLimitBytes"] = traffic_limit_bytes
+    if traffic_limit_strategy is not None:
+        payload["trafficLimitStrategy"] = traffic_limit_strategy
+    if active_internal_squads is not None:
+        payload["activeInternalSquads"] = active_internal_squads
+    if hwid_device_limit is not None:
+        payload["hwidDeviceLimit"] = hwid_device_limit
+    if telegram_id is not None:
+        payload["telegramId"] = telegram_id
+
+    async def _update():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.patch(
+                f"{REMNAWAVE_BASE_URL}/users",
+                headers={
+                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            ) as resp:
+                if resp.status == 200:
+                    return True
+                error_text = await resp.text()
+                raise RuntimeError(f"Update user failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(_update, error_message=f"Failed to update Remnawave user {user_uuid}")
+        return result is not None
+    except Exception as e:
+        logging.error(f"Update Remnawave user profile error: {e}")
+        return False
+
+
+async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid: str) -> bool:
+    """Сбросить трафик пользователя в Remnawave."""
+    async def _reset():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.post(
+                f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-traffic",
+                headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
+            ) as resp:
+                if resp.status == 200:
+                    return True
+                error_text = await resp.text()
+                raise RuntimeError(f"Reset traffic failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(_reset, error_message=f"Failed to reset traffic for {user_uuid}")
+        return result is not None
+    except Exception as e:
+        logging.error(f"Reset traffic error: {e}")
+        return False
+
+
+async def remnawave_get_user_usage(session: aiohttp.ClientSession, user_uuid: str) -> dict | None:
+    """Получить traffic usage пользователя."""
+    user_info = await remnawave_get_user_info(session, user_uuid)
+    if not user_info:
+        return None
+    return user_info.get("userTraffic") or {}
 
 
 async def remnawave_set_subscription_expiry(

@@ -5,11 +5,19 @@ import aiohttp
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
-from config import DEFAULT_SQUAD_UUID, TARIFFS
+from config import (
+    BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_TRAFFIC_PACKAGES,
+    BYPASS_SQUAD_UUID,
+    GB_BYTES,
+    HWID_DEVICE_LIMIT,
+    REGULAR_SQUAD_UUID,
+    TARIFFS,
+)
 from services.remnawave import (
-    remnawave_add_to_squad,
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
+    remnawave_update_user_profile,
 )
 
 
@@ -20,8 +28,20 @@ def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
     return f"tg_{tg_id}_{subscription_id}"
 
 
-async def _get_or_create_target_subscription(tg_id: int, payment_record):
+def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) -> str:
+    return f"tg_{tg_id}_{plan_kind}_{type_index}"
+
+
+def _subscription_display_name(subscription) -> str:
+    plan_kind = subscription.get("plan_kind") or "regular"
+    type_index = subscription.get("type_index") or subscription.get("slot_number")
+    title = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
+    return f"{title} #{type_index}"
+
+
+async def _get_or_create_target_subscription(tg_id: int, payment_record, tariff: dict):
     payment_target = payment_record.get("payment_target") or "new"
+    plan_kind = tariff.get("kind", "regular")
 
     if payment_target == "renew":
         subscription_id = payment_record.get("subscription_id")
@@ -34,19 +54,27 @@ async def _get_or_create_target_subscription(tg_id: int, payment_record):
 
         return subscription, None
 
-    target_slot_number = payment_record.get("target_slot_number")
-    if target_slot_number is None:
-        target_slot_number = await db.get_next_subscription_slot(tg_id)
+    type_index = payment_record.get("target_slot_number")
+    if type_index is None:
+        type_index = await db.get_next_type_index(tg_id, plan_kind)
 
-    if target_slot_number is None:
-        return None, "Достигнут лимит подписок"
+    if type_index is None:
+        return None, f"Достигнут лимит подписок типа {plan_kind}"
 
-    subscription = await db.get_subscription_by_slot(tg_id, target_slot_number)
-    if subscription and subscription.get("remnawave_uuid"):
-        return None, f"Слот #{target_slot_number} уже занят"
+    storage_slot = await db.get_next_subscription_slot(tg_id)
+    if storage_slot is None:
+        return None, "Нет свободного внутреннего слота подписки"
 
-    if subscription is None:
-        subscription = await db.create_subscription_record(tg_id, target_slot_number)
+    subscription = await db.create_subscription_record(
+        tg_id,
+        storage_slot,
+        plan_kind=plan_kind,
+        type_index=type_index,
+        generation="v2",
+        is_visible=True,
+        is_renewable=True,
+        purchase_days=tariff["days"],
+    )
 
     return subscription, None
 
@@ -78,30 +106,46 @@ async def process_paid_payment(
             return False
 
     try:
-        if tariff_code not in TARIFFS:
-            logger.error("Invalid tariff code: %s", tariff_code)
-            return False
-
         payment_record = await db.get_payment_by_invoice(invoice_id)
         if not payment_record:
             logger.error("Payment record not found for invoice %s", invoice_id)
+            return False
+
+        if payment_record.get("status") == "paid":
+            logger.info("Payment %s is already marked paid, skipping activation", invoice_id)
+            return True
+
+        if payment_record.get("payment_kind") == "traffic_package":
+            return await _process_paid_traffic_package(bot, tg_id, invoice_id, payment_record)
+
+        if tariff_code not in TARIFFS:
+            logger.error("Invalid tariff code: %s", tariff_code)
             return False
 
         tariff = TARIFFS[tariff_code]
         days = tariff["days"]
         amount = tariff["price"]
 
-        subscription, error = await _get_or_create_target_subscription(tg_id, payment_record)
+        subscription, error = await _get_or_create_target_subscription(tg_id, payment_record, tariff)
         if error:
             logger.error("Payment target resolution failed for %s: %s", invoice_id, error)
             return False
 
         payment_target = payment_record.get("payment_target") or "new"
+        plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
+        squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
+        traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+        traffic_limit_strategy = "NO_RESET"
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
 
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            remna_username = subscription.get("remnawave_username") or _build_remnawave_username(tg_id, subscription["id"])
+            remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(
+                tg_id,
+                plan_kind,
+                subscription.get("type_index") or subscription["id"],
+            )
             extend_if_exists = payment_target == "renew" and bool(subscription.get("remnawave_uuid"))
 
             uuid, username = await remnawave_get_or_create_user(
@@ -110,14 +154,15 @@ async def process_paid_payment(
                 days,
                 extend_if_exists=extend_if_exists,
                 remna_username=remna_username,
+                traffic_limit_bytes=traffic_limit_bytes if plan_kind == "bypass" else 0,
+                traffic_limit_strategy=traffic_limit_strategy,
+                active_internal_squads=[squad_uuid],
+                hwid_device_limit=HWID_DEVICE_LIMIT,
+                telegram_id=tg_id,
             )
             if not uuid:
                 logger.error("Failed to create/get Remnawave user for %s", tg_id)
                 return False
-
-            squad_added = await remnawave_add_to_squad(session, uuid, subscription.get("squad_uuid") or DEFAULT_SQUAD_UUID)
-            if not squad_added:
-                logger.warning("Failed to add user %s to squad", uuid)
 
             sub_url = await remnawave_get_subscription_url(session, uuid)
             if not sub_url:
@@ -220,14 +265,40 @@ async def process_paid_payment(
                 uuid,
                 username,
                 new_until,
-                subscription.get("squad_uuid") or DEFAULT_SQUAD_UUID,
+                squad_uuid,
+            )
+            await db.db_execute(
+                """
+                UPDATE subscriptions
+                SET plan_kind = $1,
+                    generation = 'v2',
+                    is_visible = TRUE,
+                    is_renewable = TRUE,
+                    traffic_enabled = $2,
+                    base_traffic_bytes = $3,
+                    current_period_limit_bytes = $4,
+                    traffic_reset_at = COALESCE(traffic_reset_at, $5),
+                    hwid_device_limit = $6,
+                    purchase_days = $7
+                WHERE id = $8
+                """,
+                (
+                    plan_kind,
+                    plan_kind == "bypass",
+                    base_traffic_bytes,
+                    traffic_limit_bytes,
+                    now + timedelta(days=30) if plan_kind == "bypass" else None,
+                    HWID_DEVICE_LIMIT,
+                    days,
+                    subscription["id"],
+                )
             )
             await db.update_payment_status_by_invoice(invoice_id, "paid")
 
             action_text = "активирована" if payment_target == "new" else "продлена"
             text = (
-                f"✅ <b>Подписка #{subscription['slot_number']} {action_text}!</b>\n\n"
-                f"Тариф: {tariff_code} ({days} дней)\n"
+                f"✅ <b>{_subscription_display_name(subscription)} {action_text}!</b>\n\n"
+                f"Тариф: {tariff.get('title', tariff_code)} ({days} дней)\n"
                 f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -246,3 +317,57 @@ async def process_paid_payment(
     finally:
         if lock_acquired:
             await db.release_user_lock(tg_id)
+
+
+async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, payment_record) -> bool:
+    package_code = payment_record.get("traffic_package_code") or payment_record.get("tariff_code")
+    package = BYPASS_TRAFFIC_PACKAGES.get(package_code)
+    if not package:
+        logger.error("Invalid traffic package code: %s", package_code)
+        return False
+
+    subscription_id = payment_record.get("subscription_id")
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id) if subscription_id else None
+    if not subscription or subscription.get("plan_kind") != "bypass":
+        logger.error("Traffic package target subscription is invalid: %s", subscription_id)
+        return False
+
+    if not subscription.get("remnawave_uuid"):
+        logger.error("Traffic package target subscription has no Remnawave UUID: %s", subscription_id)
+        return False
+
+    traffic_bytes = package["gb"] * GB_BYTES
+    new_limit = (subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes") or 0) + traffic_bytes
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        updated = await remnawave_update_user_profile(
+            session,
+            subscription["remnawave_uuid"],
+            traffic_limit_bytes=new_limit,
+            traffic_limit_strategy="NO_RESET",
+            active_internal_squads=[BYPASS_SQUAD_UUID],
+            hwid_device_limit=HWID_DEVICE_LIMIT,
+            telegram_id=tg_id,
+        )
+        if not updated:
+            logger.error("Failed to update traffic limit for subscription %s", subscription_id)
+            return False
+
+    await db.add_traffic_to_subscription(subscription_id, traffic_bytes)
+    await db.activate_traffic_purchase(invoice_id)
+    await db.update_payment_status_by_invoice(invoice_id, "paid")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+    ])
+    await bot.send_message(
+        tg_id,
+        f"✅ <b>Пакет {package['gb']} ГБ активирован!</b>\n\n"
+        f"Подписка: <b>{_subscription_display_name(subscription)}</b>\n"
+        f"Новый лимит периода: <b>{new_limit / GB_BYTES:.1f} ГБ</b>",
+        reply_markup=kb,
+    )
+    return True
