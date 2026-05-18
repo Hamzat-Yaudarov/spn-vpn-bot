@@ -7,10 +7,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
 from config import (
     BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_TRAFFIC_PACKAGES,
     BYPASS_SQUAD_UUID,
     GB_BYTES,
-    HWID_DEVICE_LIMIT,
+    REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
     TARIFFS,
 )
@@ -134,6 +135,7 @@ async def process_paid_payment(
         payment_target = payment_record.get("payment_target") or "new"
         plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
         base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
         traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
         traffic_limit_strategy = "NO_RESET"
@@ -157,7 +159,7 @@ async def process_paid_payment(
                 traffic_limit_bytes=traffic_limit_bytes if plan_kind == "bypass" else 0,
                 traffic_limit_strategy=traffic_limit_strategy,
                 active_internal_squads=[squad_uuid],
-                hwid_device_limit=HWID_DEVICE_LIMIT,
+                hwid_device_limit=device_limit,
                 telegram_id=tg_id,
             )
             if not uuid:
@@ -288,7 +290,7 @@ async def process_paid_payment(
                     base_traffic_bytes,
                     traffic_limit_bytes,
                     now + timedelta(days=30) if plan_kind == "bypass" else None,
-                    HWID_DEVICE_LIMIT,
+                    device_limit,
                     days,
                     subscription["id"],
                 )
@@ -348,7 +350,7 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
             traffic_limit_bytes=new_limit,
             traffic_limit_strategy="NO_RESET",
             active_internal_squads=[BYPASS_SQUAD_UUID],
-            hwid_device_limit=HWID_DEVICE_LIMIT,
+            hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
             telegram_id=tg_id,
         )
         if not updated:

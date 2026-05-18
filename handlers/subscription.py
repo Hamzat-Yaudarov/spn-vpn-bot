@@ -9,11 +9,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import database as db
 from config import (
     BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     BYPASS_TRAFFIC_PACKAGES,
     BYPASS_TARIFFS,
     GB_BYTES,
-    HWID_DEVICE_LIMIT,
+    REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
     REGULAR_TARIFFS,
     TARIFFS,
@@ -125,7 +126,8 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
 
     keyboard = []
     for tariff_code, tariff in tariffs.items():
-        devices = "5 устройств"
+        devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+        devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
         label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
         keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}")])
 
@@ -860,6 +862,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+            device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
             base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
             traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
             remna_username = subscription.get("remnawave_username") or _build_new_remnawave_username(
@@ -876,7 +879,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 traffic_limit_bytes=traffic_limit_bytes,
                 traffic_limit_strategy="NO_RESET",
                 active_internal_squads=[squad_uuid],
-                hwid_device_limit=HWID_DEVICE_LIMIT,
+                hwid_device_limit=device_limit,
                 telegram_id=tg_id,
             )
 
@@ -923,7 +926,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 base_traffic_bytes,
                 traffic_limit_bytes,
                 now + timedelta(days=30) if plan_kind == "bypass" else None,
-                HWID_DEVICE_LIMIT,
+                device_limit,
                 tariff["days"],
                 subscription['id'],
             )

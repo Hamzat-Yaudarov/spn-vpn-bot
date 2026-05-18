@@ -6,7 +6,9 @@ from config import (
     PAYMENT_EXPIRY_TIME,
     GIFT_REQUEST_COOLDOWN,
     PROMO_REQUEST_COOLDOWN,
-    PAYMENT_CHECK_COOLDOWN
+    PAYMENT_CHECK_COOLDOWN,
+    BYPASS_HWID_DEVICE_LIMIT,
+    REGULAR_HWID_DEVICE_LIMIT,
 )
 
 
@@ -690,6 +692,20 @@ async def run_migrations():
                 WHERE generation = 'legacy'
                    OR generation IS NULL
                 """
+            )
+
+            await conn.execute(
+                """
+                UPDATE subscriptions
+                SET hwid_device_limit = CASE
+                    WHEN plan_kind = 'bypass' THEN $1
+                    ELSE $2
+                END
+                WHERE generation = 'v2'
+                  AND is_visible = TRUE
+                """,
+                BYPASS_HWID_DEVICE_LIMIT,
+                REGULAR_HWID_DEVICE_LIMIT,
             )
 
             logging.info("✅ Синхронизация схемы завершена")

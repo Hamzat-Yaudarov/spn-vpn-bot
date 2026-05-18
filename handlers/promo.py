@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import BYPASS_SQUAD_UUID, HWID_DEVICE_LIMIT, REGULAR_SQUAD_UUID
+from config import BYPASS_HWID_DEVICE_LIMIT, BYPASS_SQUAD_UUID, REGULAR_HWID_DEVICE_LIMIT, REGULAR_SQUAD_UUID
 from states import UserStates
 import database as db
 from services.remnawave import (
@@ -201,6 +201,7 @@ async def process_promo_input(message: Message, state: FSMContext):
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or "regular"
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+            device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
             remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(
                 tg_id,
                 plan_kind,
@@ -213,7 +214,7 @@ async def process_promo_input(message: Message, state: FSMContext):
                 extend_if_exists=promo_target_mode == "existing" and bool(subscription.get("remnawave_uuid")),
                 remna_username=remna_username,
                 active_internal_squads=[squad_uuid],
-                hwid_device_limit=HWID_DEVICE_LIMIT,
+                hwid_device_limit=device_limit,
                 telegram_id=tg_id,
             )
 

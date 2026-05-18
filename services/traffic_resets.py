@@ -5,7 +5,7 @@ from datetime import timedelta
 import aiohttp
 
 import database as db
-from config import BYPASS_BASE_TRAFFIC_GB, BYPASS_SQUAD_UUID, GB_BYTES, HWID_DEVICE_LIMIT
+from config import BYPASS_BASE_TRAFFIC_GB, BYPASS_HWID_DEVICE_LIMIT, BYPASS_SQUAD_UUID, GB_BYTES
 from services.remnawave import (
     remnawave_get_user_usage,
     remnawave_reset_user_traffic,
@@ -52,7 +52,7 @@ async def process_due_traffic_resets():
                     traffic_limit_bytes=new_limit,
                     traffic_limit_strategy="NO_RESET",
                     active_internal_squads=[BYPASS_SQUAD_UUID],
-                    hwid_device_limit=HWID_DEVICE_LIMIT,
+                    hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
                     telegram_id=subscription['tg_id'],
                 )
                 if not updated:
