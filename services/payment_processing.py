@@ -302,7 +302,7 @@ async def process_paid_payment(
                 f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+                [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
                 [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}")],
                 [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
             ])

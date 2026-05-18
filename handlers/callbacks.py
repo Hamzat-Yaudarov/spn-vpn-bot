@@ -44,8 +44,12 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
+    visible_subscriptions = await db.get_visible_subscriptions(tg_id)
+    if visible_subscriptions:
+        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")])
+
     active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
     if active_bypass_subscriptions:
         keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb")])
@@ -95,7 +99,7 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛒 Как купить подписку", callback_data="instruction_buy")],
         [InlineKeyboardButton(text="📲 Как подключить VPN", callback_data="instruction_connect")],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
     ])
 
@@ -118,14 +122,14 @@ async def process_instruction_buy(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} opened buy instruction")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription")],
         [InlineKeyboardButton(text="📲 Как подключить VPN", callback_data="instruction_connect")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
     ])
 
     text = (
         "🛒 <b>Как купить подписку</b>\n\n"
-        "1. Открой раздел <b>🔐 Мои подписки</b>\n"
+        "1. Открой раздел <b>💳 Купить / Продлить подписку</b>\n"
         "2. Нажми <b>Купить первую подписку</b> или <b>Купить ещё подписку</b>\n"
         "3. Выбери срок подписки\n"
         "4. Выбери удобный способ оплаты\n"
@@ -146,7 +150,7 @@ async def process_instruction_connect(callback: CallbackQuery, state: FSMContext
     logging.info(f"User {tg_id} opened connect instruction")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
         [InlineKeyboardButton(text="🛒 Как купить подписку", callback_data="instruction_buy")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu")]
     ])

@@ -81,8 +81,12 @@ async def show_main_menu(message: Message):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
+    visible_subscriptions = await db.get_visible_subscriptions(tg_id)
+    if visible_subscriptions:
+        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")])
+
     active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
     if active_bypass_subscriptions:
         keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb")])

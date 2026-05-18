@@ -151,13 +151,13 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
 
     if not subscriptions:
         text = (
-            "🔐 <b>Мои подписки</b>\n\n"
+            "💳 <b>Купить / Продлить подписку</b>\n\n"
             "У тебя пока нет подписок.\n"
             "Купи первую подписку: обычную или с антиглушилкой."
         )
     else:
         text = (
-            "🔐 <b>Мои подписки</b>\n\n"
+            "💳 <b>Купить / Продлить подписку</b>\n\n"
             f"Активных новых подписок: <b>{len(subscriptions)}</b>.\n"
             "Можно продлить существующую или купить новую."
         )
@@ -166,14 +166,68 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await state.clear()
-    await edit_text_with_photo(callback, text, kb, "Мои подписки")
+    await edit_text_with_photo(callback, text, kb, "Выбери срок подписки")
 
 
-async def _show_subscription_card(callback: CallbackQuery, subscription_id: int):
+async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSMContext):
+    tg_id = callback.from_user.id
+    subscriptions = await db.get_visible_subscriptions(tg_id)
+
+    if not subscriptions:
+        await callback.answer("У тебя пока нет подписок", show_alert=True)
+        return
+
+    has_regular = any((subscription.get('plan_kind') or 'regular') == 'regular' for subscription in subscriptions)
+    has_bypass = any(subscription.get('plan_kind') == 'bypass' for subscription in subscriptions)
+
+    keyboard = []
+    if has_regular:
+        keyboard.append([InlineKeyboardButton(text="Обычные подписки", callback_data="my_subscriptions_regular")])
+    if has_bypass:
+        keyboard.append([InlineKeyboardButton(text="Подписки с антиглушилкой", callback_data="my_subscriptions_bypass")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
+
+    await state.clear()
+    await edit_text_with_photo(
+        callback,
+        "🔐 <b>Мои подписки</b>\n\nВыбери тип подписок:",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Мои подписки",
+    )
+
+
+async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str):
+    tg_id = callback.from_user.id
+    subscriptions = [
+        subscription
+        for subscription in await db.get_visible_subscriptions(tg_id)
+        if (subscription.get('plan_kind') or 'regular') == plan_kind
+    ]
+
+    if not subscriptions:
+        await callback.answer("Подписок этого типа нет", show_alert=True)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(text=f"Подписка #{subscription.get('type_index') or subscription['slot_number']}", callback_data=f"my_subscription_view_{subscription['id']}")]
+        for subscription in subscriptions
+    ]
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_subscriptions", style="danger")])
+
+    title = "Обычные подписки" if plan_kind == "regular" else "Подписки с антиглушилкой"
+    await edit_text_with_photo(
+        callback,
+        f"🔐 <b>{title}</b>\n\nВыбери подписку:",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Мои подписки",
+    )
+
+
+async def _show_subscription_card(callback: CallbackQuery, subscription_id: int, *, back_callback: str = "buy_subscription"):
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription:
+    if not subscription or subscription.get('generation') != 'v2' or not subscription.get('is_visible'):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -203,7 +257,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}")],
         [InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")],
     ])
 
     text = (
@@ -236,7 +290,7 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}")],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
     ])
 
@@ -291,6 +345,19 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} opened subscriptions hub")
     await _show_subscriptions_hub(callback, state)
+
+
+@router.callback_query(F.data == "my_subscriptions")
+async def process_my_subscriptions(callback: CallbackQuery, state: FSMContext):
+    """Показать выбор типа подписок пользователя."""
+    await _show_my_subscriptions_type_choice(callback, state)
+
+
+@router.callback_query(F.data.in_({"my_subscriptions_regular", "my_subscriptions_bypass"}))
+async def process_my_subscriptions_kind(callback: CallbackQuery):
+    """Показать подписки выбранного типа."""
+    plan_kind = callback.data.removeprefix("my_subscriptions_")
+    await _show_my_subscriptions_by_kind(callback, plan_kind)
 
 
 @router.callback_query(F.data == "buy_new_subscription")
@@ -359,6 +426,14 @@ async def process_renew_existing_subscription(callback: CallbackQuery, state: FS
 async def process_subscription_view(callback: CallbackQuery, state: FSMContext):
     subscription_id = int(callback.data.split("_")[-1])
     await _show_subscription_card(callback, subscription_id)
+
+
+@router.callback_query(F.data.startswith("my_subscription_view_"))
+async def process_my_subscription_view(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    subscription = await db.get_subscription_by_id(subscription_id, callback.from_user.id)
+    plan_kind = (subscription.get('plan_kind') or 'regular') if subscription else 'regular'
+    await _show_subscription_card(callback, subscription_id, back_callback=f"my_subscriptions_{plan_kind}")
 
 
 @router.callback_query(F.data.startswith("subscription_instruction_"))
@@ -857,7 +932,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
 
         remaining_balance = referral_balance - amount
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="buy_subscription")],
+            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
         ])
 
