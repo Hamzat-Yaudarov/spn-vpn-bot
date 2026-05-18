@@ -698,8 +698,8 @@ async def run_migrations():
                 """
                 UPDATE subscriptions
                 SET hwid_device_limit = CASE
-                    WHEN plan_kind = 'bypass' THEN $1
-                    ELSE $2
+                    WHEN plan_kind = 'bypass' THEN $1::INT
+                    ELSE $2::INT
                 END
                 WHERE generation = 'v2'
                   AND is_visible = TRUE
