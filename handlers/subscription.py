@@ -122,13 +122,18 @@ def _format_remaining(expire_at_str: str | None) -> str:
 async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, title: str):
     data = await state.get_data()
     plan_kind = data.get("plan_kind", "regular")
+    purchase_mode = data.get("purchase_mode", "new")
     tariffs = REGULAR_TARIFFS if plan_kind == "regular" else BYPASS_TARIFFS
 
     keyboard = []
     for tariff_code, tariff in tariffs.items():
-        devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
-        devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
-        label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
+        if purchase_mode == "renew":
+            period = "1 месяц" if tariff["days"] == 30 else "3 месяца" if tariff["days"] == 90 else tariff["title"]
+            label = f"{period} — {tariff['price']}₽"
+        else:
+            devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+            devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
+            label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
         keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}")])
 
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
