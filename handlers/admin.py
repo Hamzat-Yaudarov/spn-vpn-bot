@@ -11,13 +11,23 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from config import ADMIN_ID, DEFAULT_SQUAD_UUID
+from config import (
+    ADMIN_ID,
+    BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_HWID_DEVICE_LIMIT,
+    BYPASS_SQUAD_UUID,
+    DEFAULT_SQUAD_UUID,
+    GB_BYTES,
+    REGULAR_HWID_DEVICE_LIMIT,
+    REGULAR_SQUAD_UUID,
+)
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_add_to_squad,
     remnawave_set_subscription_expiry,
-    remnawave_get_user_info
+    remnawave_get_user_info,
+    remnawave_get_subscription_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +48,14 @@ def is_admin(user_id: int) -> bool:
 
 def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
     return f"tg_{tg_id}_{subscription_id}"
+
+
+def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) -> str:
+    return f"tg_{tg_id}_{plan_kind}_{type_index}"
+
+
+def _plan_title(plan_kind: str) -> str:
+    return "Обычная" if plan_kind == "regular" else "С антиглушилкой"
 
 
 def _parse_admin_subscription_command(parts: list[str]) -> tuple[int, int, int]:
@@ -328,7 +346,7 @@ async def admin_new_code(message: Message):
 
 @router.message(Command("give_sub"))
 async def admin_give_sub(message: Message):
-    """Админ команда: выдать/продлить подписку пользователю по ИД"""
+    """Админ команда: выдать/продлить v2-подписку regular/bypass."""
     admin_id = message.from_user.id
 
     if not is_admin(admin_id):
@@ -338,31 +356,43 @@ async def admin_give_sub(message: Message):
 
     parts = message.text.split()
 
-    # Валидация количества аргументов
-    if len(parts) not in (3, 4):
+    if len(parts) not in (4, 5):
         await message.answer(
             "❌ <b>Неверный формат команды</b>\n\n"
-            "<b>Использование:</b> /give_sub ТГ_ИД [СЛОТ] ДНЕЙ\n\n"
+            "<b>Использование:</b> /give_sub ТГ_ИД ТИП [НОМЕР] ДНЕЙ\n\n"
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
-            "• <code>СЛОТ</code> - номер подписки 1..3 (необязательно, по умолчанию 1)\n"
+            "• <code>ТИП</code> - <code>regular</code> или <code>bypass</code>\n"
+            "• <code>НОМЕР</code> - номер подписки внутри типа 1..3 (необязательно)\n"
             "• <code>ДНЕЙ</code> - количество дней (число > 0)\n\n"
             "<b>Примеры:</b>\n"
-            "<code>/give_sub 123456789 30</code>\n"
-            "<code>/give_sub 123456789 2 30</code>"
+            "<code>/give_sub 123456789 regular 30</code>\n"
+            "<code>/give_sub 123456789 bypass 30</code>\n"
+            "<code>/give_sub 123456789 regular 2 90</code>"
         )
         logger.warning(f"Admin {admin_id} /give_sub - wrong number of arguments: {len(parts)-1}")
         return
 
     try:
-        tg_id, slot_number, days = _parse_admin_subscription_command(parts)
+        tg_id = int(parts[1])
+        plan_kind = parts[2].lower()
+        if plan_kind not in {"regular", "bypass"}:
+            await message.answer("❌ Тип подписки должен быть <code>regular</code> или <code>bypass</code>")
+            return
+
+        if len(parts) == 4:
+            type_index = None
+            days = int(parts[3])
+        else:
+            type_index = int(parts[3])
+            days = int(parts[4])
 
         if tg_id <= 0:
             await message.answer("❌ ID пользователя должен быть положительным числом")
             return
 
-        if slot_number < 1 or slot_number > db.MAX_SUBSCRIPTIONS_PER_USER:
-            await message.answer(f"❌ Слот должен быть от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}")
+        if type_index is not None and (type_index < 1 or type_index > db.MAX_SUBSCRIPTIONS_PER_USER):
+            await message.answer(f"❌ Номер подписки должен быть от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}")
             return
 
         if days <= 0:
@@ -378,12 +408,13 @@ async def admin_give_sub(message: Message):
         await message.answer(
             "❌ <b>Ошибка валидации</b>\n\n"
             "Убедитесь, что:\n"
-            "• ТГ_ИД, СЛОТ и ДНЕЙ - целые числа\n"
-            "• СЛОТ от 1 до 3\n"
+            "• ТГ_ИД, НОМЕР и ДНЕЙ - целые числа\n"
+            "• ТИП - regular или bypass\n"
+            "• НОМЕР от 1 до 3\n"
             "• ДНЕЙ больше 0\n\n"
             "<b>Примеры:</b>\n"
-            "<code>/give_sub 123456789 30</code>\n"
-            "<code>/give_sub 123456789 2 30</code>"
+            "<code>/give_sub 123456789 regular 30</code>\n"
+            "<code>/give_sub 123456789 bypass 2 90</code>"
         )
         logger.warning(f"Admin {admin_id} /give_sub - parsing error for arguments: {parts[1:]}")
         return
@@ -395,43 +426,60 @@ async def admin_give_sub(message: Message):
 
     try:
         user = await db.get_user(tg_id)
-        subscription = await db.get_subscription_by_slot(tg_id, slot_number)
-        new_until = None
 
         if not user:
             await db.create_user(tg_id, f"user_{tg_id}")
             user = await db.get_user(tg_id)
             logger.info(f"Created new user {tg_id} in database for admin {admin_id}")
 
+        if type_index is None:
+            type_index = await db.get_next_type_index(tg_id, plan_kind)
+            if type_index is None:
+                await message.answer(f"❌ У пользователя уже максимум 3 подписки типа <code>{plan_kind}</code>")
+                return
+
+        subscription = await db.get_subscription_by_type_index(tg_id, plan_kind, type_index)
         if subscription is None:
-            subscription = await db.create_subscription_record(tg_id, slot_number)
+            storage_slot = await db.get_next_subscription_slot(tg_id)
+            if storage_slot is None:
+                await message.answer("❌ Нет свободного внутреннего слота подписки")
+                return
+            subscription = await db.create_subscription_record(
+                tg_id,
+                storage_slot,
+                plan_kind=plan_kind,
+                type_index=type_index,
+                generation="v2",
+                is_visible=True,
+                is_renewable=True,
+                purchase_days=days,
+            )
+
+        squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+        base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
+        traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+        now = datetime.utcnow()
+        current_until = subscription.get('subscription_until')
+        if current_until and current_until > now:
+            new_until = current_until + timedelta(days=days)
+        else:
+            new_until = now + timedelta(days=days)
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            remnawave_uuid = subscription.get('remnawave_uuid')
-
-            if remnawave_uuid:
-                user_info = await remnawave_get_user_info(session, remnawave_uuid)
-                if user_info and 'expireAt' in user_info:
-                    expire_at_str = user_info['expireAt']
-                    current_until = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-                    current_until = current_until.replace(tzinfo=None)
-                    new_until = current_until + timedelta(days=days)
-                    logger.info(f"User {tg_id} slot {slot_number} has existing subscription in Remnawave until {current_until}, extending by {days} days to {new_until}")
-                else:
-                    logger.warning(f"Failed to get Remnawave info for {tg_id} slot {slot_number}, using default calculation")
-                    new_until = datetime.utcnow() + timedelta(days=days)
-            else:
-                new_until = datetime.utcnow() + timedelta(days=days)
-                logger.info(f"User {tg_id} slot {slot_number} has no Remnawave account, setting new subscription to {new_until}")
-
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,
-                days=30,
+                days=days,
                 extend_if_exists=False,
-                remna_username=subscription.get('remnawave_username') or _build_remnawave_username(tg_id, subscription['id'])
+                remna_username=subscription.get('remnawave_username') or _build_v2_remnawave_username(tg_id, plan_kind, type_index),
+                traffic_limit_bytes=traffic_limit_bytes if plan_kind == "bypass" else 0,
+                traffic_limit_strategy="NO_RESET",
+                active_internal_squads=[squad_uuid],
+                hwid_device_limit=device_limit,
+                telegram_id=tg_id,
             )
 
             if not uuid:
@@ -443,21 +491,50 @@ async def admin_give_sub(message: Message):
                 logger.error(f"Failed to get/create Remnawave user for TG {tg_id} by admin {admin_id}")
                 return
 
-            squad_added = await remnawave_add_to_squad(session, uuid)
-            if not squad_added:
-                logger.warning(f"Failed to add user {uuid} to squad by admin {admin_id}, continuing")
-
             success = await remnawave_set_subscription_expiry(session, uuid, new_until)
             if not success:
-                logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id} slot {slot_number}, but continuing")
+                logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id} {plan_kind} #{type_index}, but continuing")
 
-            await db.update_subscription_record(subscription['id'], uuid, username, new_until, DEFAULT_SQUAD_UUID)
+            sub_url = await remnawave_get_subscription_url(session, uuid)
+
+            await db.update_subscription_record(subscription['id'], uuid, username, new_until, squad_uuid)
+            await db.db_execute(
+                """
+                UPDATE subscriptions
+                SET plan_kind = $1,
+                    generation = 'v2',
+                    is_visible = TRUE,
+                    is_renewable = TRUE,
+                    type_index = $2,
+                    purchase_days = $3,
+                    traffic_enabled = $4,
+                    base_traffic_bytes = $5,
+                    current_period_limit_bytes = $6,
+                    traffic_reset_at = COALESCE(traffic_reset_at, $7),
+                    hwid_device_limit = $8,
+                    updated_at = now()
+                WHERE id = $9
+                """,
+                (
+                    plan_kind,
+                    type_index,
+                    days,
+                    plan_kind == "bypass",
+                    base_traffic_bytes,
+                    traffic_limit_bytes,
+                    now + timedelta(days=30) if plan_kind == "bypass" else None,
+                    device_limit,
+                    subscription['id'],
+                )
+            )
 
         await message.answer(
             f"✅ <b>Подписка выдана успешно!</b>\n\n"
             f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
-            f"🔢 <b>Слот:</b> #{slot_number}\n"
+            f"🌐 <b>Тип:</b> {_plan_title(plan_kind)}\n"
+            f"🔢 <b>Номер:</b> #{type_index}\n"
             f"📅 <b>Дней:</b> {days}\n"
+            f"⏳ <b>До:</b> {new_until.strftime('%d.%m.%Y %H:%M')}\n"
             f"🔑 <b>UUID:</b> <code>{uuid}</code>"
         )
 
@@ -466,8 +543,8 @@ async def admin_give_sub(message: Message):
             await message.bot.send_message(
                 tg_id,
                 f"🎉 <b>Поздравляем!</b>\n\n"
-                f"Вам выдана/продлена подписка <b>#{slot_number}</b> на <b>{days} дней</b>\n\n"
-                f"Спасибо за использование нашего сервиса! 🚀"
+                f"Вам выдана/продлена подписка <b>{_plan_title(plan_kind)} #{type_index}</b> на <b>{days} дней</b>\n\n"
+                f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
             )
             logger.info(f"User {tg_id} notified about subscription by admin {admin_id}")
         except Exception as e:
@@ -477,7 +554,7 @@ async def admin_give_sub(message: Message):
                 f"(Ошибка: {str(e)[:50]})"
             )
 
-        logger.info(f"Admin {admin_id} gave {days} days subscription to user {tg_id} slot {slot_number}")
+        logger.info(f"Admin {admin_id} gave {days} days {plan_kind} subscription #{type_index} to user {tg_id}")
 
     except Exception as e:
         logger.error(f"Give subscription error: {e}")

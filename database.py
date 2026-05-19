@@ -1083,6 +1083,23 @@ async def get_subscription_by_slot(tg_id: int, slot_number: int):
     )
 
 
+async def get_subscription_by_type_index(tg_id: int, plan_kind: str, type_index: int):
+    """Получить видимую v2-подписку по типу и номеру внутри типа."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE tg_id = $1
+          AND plan_kind = $2
+          AND type_index = $3
+          AND generation = 'v2'
+          AND is_visible = TRUE
+        LIMIT 1
+        """,
+        (tg_id, plan_kind, type_index),
+        fetch_one=True
+    )
+
+
 async def get_subscription_by_uuid(remnawave_uuid: str):
     """Получить подписку по UUID Remnawave."""
     return await db_execute(
