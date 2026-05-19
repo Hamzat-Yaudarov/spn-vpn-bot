@@ -131,6 +131,7 @@ async def run_migrations():
                 'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
                 'squad_uuid': {'type': 'UUID', 'nullable': True},
                 'referrer_id': {'type': 'BIGINT', 'nullable': True},
+                'tracking_code': {'type': 'TEXT', 'nullable': True},
                 'first_payment': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'referral_count': {'type': 'INT', 'nullable': False, 'default': '0'},
                 'active_referrals': {'type': 'INT', 'nullable': False, 'default': '0'},
@@ -153,6 +154,7 @@ async def run_migrations():
                 'target_slot_number': {'type': 'INT', 'nullable': True},
                 'payment_kind': {'type': 'TEXT', 'nullable': False, 'default': "'subscription'"},
                 'traffic_package_code': {'type': 'TEXT', 'nullable': True},
+                'tracking_code': {'type': 'TEXT', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
@@ -268,6 +270,20 @@ async def run_migrations():
                 'reset_processed_at': {'type': 'TIMESTAMP', 'nullable': True},
             }
 
+            expected_tracking_links_columns = {
+                'code': {'type': 'TEXT', 'nullable': False},
+                'title': {'type': 'TEXT', 'nullable': True},
+                'created_by': {'type': 'BIGINT', 'nullable': False},
+                'is_active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
+            }
+
+            expected_tracking_clicks_columns = {
+                'code': {'type': 'TEXT', 'nullable': False},
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'is_new_user': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'clicked_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
+            }
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
             # ═══════════════════════════════════════════════════════════
@@ -290,6 +306,7 @@ async def run_migrations():
 
                     -- Реферальная программа
                     referrer_id BIGINT,
+                    tracking_code TEXT,
                     first_payment BOOLEAN DEFAULT FALSE,
                     referral_count INT DEFAULT 0,
                     active_referrals INT DEFAULT 0,
@@ -468,6 +485,30 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'subscription_traffic_cycles' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracking_links (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT UNIQUE NOT NULL,
+                    title TEXT,
+                    created_by BIGINT NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблица 'tracking_links' создана или уже существует")
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracking_link_clicks (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    tg_id BIGINT NOT NULL,
+                    is_new_user BOOLEAN DEFAULT FALSE,
+                    clicked_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблица 'tracking_link_clicks' создана или уже существует")
+
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -484,6 +525,7 @@ async def run_migrations():
                     target_slot_number INT,
                     payment_kind TEXT DEFAULT 'subscription',
                     traffic_package_code TEXT,
+                    tracking_code TEXT,
                     status TEXT DEFAULT 'pending'
                 )
             """)
@@ -525,6 +567,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);",
                 "CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);",
                 "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
+                "CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
 
                 # subscriptions индексы
@@ -538,6 +581,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);",
+                "CREATE INDEX IF NOT EXISTS idx_payments_tracking_code ON payments(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);",
 
                 # promo_codes индексы
@@ -557,6 +601,9 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_referral_withdrawals_referrer_id ON referral_withdrawals(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);",
                 "CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_traffic_cycles(subscription_id);",
+                "CREATE INDEX IF NOT EXISTS idx_tracking_links_code ON tracking_links(code);",
+                "CREATE INDEX IF NOT EXISTS idx_tracking_clicks_code ON tracking_link_clicks(code);",
+                "CREATE INDEX IF NOT EXISTS idx_tracking_clicks_tg_id ON tracking_link_clicks(tg_id);",
             ]
 
             for query in index_queries:
@@ -644,6 +691,8 @@ async def run_migrations():
             await sync_table_schema(conn, 'referral_withdrawals', expected_referral_withdrawals_columns)
             await sync_table_schema(conn, 'traffic_purchases', expected_traffic_purchases_columns)
             await sync_table_schema(conn, 'subscription_traffic_cycles', expected_traffic_cycles_columns)
+            await sync_table_schema(conn, 'tracking_links', expected_tracking_links_columns)
+            await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
 
             await conn.execute(
                 """
@@ -851,15 +900,15 @@ async def user_exists(tg_id: int) -> bool:
     return result is not None
 
 
-async def create_user(tg_id: int, username: str, referrer_id=None):
+async def create_user(tg_id: int, username: str, referrer_id=None, tracking_code: str | None = None):
     """Создать или обновить пользователя"""
     await db_execute(
         """
-        INSERT INTO users (tg_id, username, referrer_id)
-        VALUES ($1, $2, $3)
+        INSERT INTO users (tg_id, username, referrer_id, tracking_code)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (tg_id) DO NOTHING
         """,
-        (tg_id, username, referrer_id)
+        (tg_id, username, referrer_id, tracking_code)
     )
 
 
@@ -1210,6 +1259,152 @@ async def has_subscription(tg_id: int) -> bool:
 
 
 # ────────────────────────────────────────────────
+#               TRACKING LINKS
+# ────────────────────────────────────────────────
+
+async def create_tracking_link(code: str, title: str | None, created_by: int):
+    """Создать или включить tracking-ссылку."""
+    return await db_execute(
+        """
+        INSERT INTO tracking_links (code, title, created_by, is_active)
+        VALUES ($1, $2, $3, TRUE)
+        ON CONFLICT (code) DO UPDATE
+        SET title = EXCLUDED.title,
+            is_active = TRUE,
+            updated_at = now()
+        RETURNING *
+        """,
+        (code, title, created_by),
+        fetch_one=True
+    )
+
+
+async def get_tracking_link(code: str):
+    """Получить tracking-ссылку по коду."""
+    return await db_execute(
+        "SELECT * FROM tracking_links WHERE code = $1 LIMIT 1",
+        (code,),
+        fetch_one=True
+    )
+
+
+async def list_tracking_links():
+    """Получить список tracking-ссылок."""
+    return await db_execute(
+        """
+        SELECT code, title, is_active, created_at
+        FROM tracking_links
+        ORDER BY created_at DESC, code ASC
+        """,
+        fetch_all=True
+    )
+
+
+async def set_tracking_link_active(code: str, is_active: bool) -> bool:
+    """Включить или отключить tracking-ссылку."""
+    result = await db_execute(
+        """
+        UPDATE tracking_links
+        SET is_active = $2, updated_at = now()
+        WHERE code = $1
+        RETURNING 1
+        """,
+        (code, is_active),
+        fetch_one=True
+    )
+    return result is not None
+
+
+async def record_tracking_link_click(code: str, tg_id: int, is_new_user: bool) -> bool:
+    """Записать переход по активной tracking-ссылке."""
+    link = await get_tracking_link(code)
+    if not link or not link['is_active']:
+        return False
+
+    await db_execute(
+        """
+        INSERT INTO tracking_link_clicks (code, tg_id, is_new_user)
+        VALUES ($1, $2, $3)
+        """,
+        (code, tg_id, is_new_user)
+    )
+    return True
+
+
+async def get_user_tracking_code(tg_id: int) -> str | None:
+    """Получить first-touch tracking-код пользователя."""
+    result = await db_execute(
+        "SELECT tracking_code FROM users WHERE tg_id = $1",
+        (tg_id,),
+        fetch_one=True
+    )
+    return result['tracking_code'] if result and result['tracking_code'] else None
+
+
+async def get_tracking_link_stats(code: str):
+    """Получить статистику tracking-ссылки."""
+    link = await get_tracking_link(code)
+    if not link:
+        return None
+
+    clicks = await db_execute(
+        """
+        SELECT
+            COUNT(*) AS total_clicks,
+            COUNT(DISTINCT tg_id) AS unique_clicks,
+            COUNT(DISTINCT tg_id) FILTER (WHERE is_new_user = TRUE) AS new_clicks
+        FROM tracking_link_clicks
+        WHERE code = $1
+        """,
+        (code,),
+        fetch_one=True
+    )
+
+    users_count = await db_execute(
+        "SELECT COUNT(*) AS count FROM users WHERE tracking_code = $1",
+        (code,),
+        fetch_one=True
+    )
+
+    payments_summary = await db_execute(
+        """
+        SELECT
+            COUNT(*) AS paid_payments,
+            COALESCE(SUM(amount), 0) AS revenue
+        FROM payments
+        WHERE tracking_code = $1
+          AND status = 'paid'
+        """,
+        (code,),
+        fetch_one=True
+    )
+
+    payments_by_tariff = await db_execute(
+        """
+        SELECT tariff_code, payment_kind, COUNT(*) AS purchase_count, COALESCE(SUM(amount), 0) AS revenue
+        FROM payments
+        WHERE tracking_code = $1
+          AND status = 'paid'
+        GROUP BY tariff_code, payment_kind
+        ORDER BY payment_kind ASC, tariff_code ASC
+        """,
+        (code,),
+        fetch_all=True
+    )
+
+    return {
+        'link': link,
+        'total_clicks': clicks['total_clicks'] if clicks else 0,
+        'unique_clicks': clicks['unique_clicks'] if clicks else 0,
+        'new_clicks': clicks['new_clicks'] if clicks else 0,
+        'attributed_users': users_count['count'] if users_count else 0,
+        'paid_payments': payments_summary['paid_payments'] if payments_summary else 0,
+        'revenue': float(payments_summary['revenue'] or 0) if payments_summary else 0,
+        'payments_by_tariff': payments_by_tariff or [],
+    }
+
+
+# ────────────────────────────────────────────────
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
@@ -1228,6 +1423,7 @@ async def create_payment(
 ):
     """Создать запись о платеже"""
     from datetime import datetime
+    tracking_code = await get_user_tracking_code(tg_id)
     await db_execute(
         """
         INSERT INTO payments (
@@ -1241,9 +1437,10 @@ async def create_payment(
             payment_target,
             target_slot_number,
             payment_kind,
-            traffic_package_code
+            traffic_package_code,
+            tracking_code
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         """,
         (
             tg_id,
@@ -1257,6 +1454,7 @@ async def create_payment(
             target_slot_number,
             payment_kind,
             traffic_package_code,
+            tracking_code,
         )
     )
 

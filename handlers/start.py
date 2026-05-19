@@ -26,6 +26,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     args = message.text.split()
     referrer_id = None
     partner_id = None
+    tracking_code = None
 
     if len(args) > 1:
         if args[1].startswith("ref_"):
@@ -53,9 +54,17 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 # Если функция вернула False, логирование уже сделано внутри функции
             except (ValueError, IndexError):
                 partner_id = None
+        else:
+            code = args[1].strip().lower()
+            if await db.record_tracking_link_click(code, tg_id, is_new_user=not user_already_exists):
+                if not user_already_exists:
+                    tracking_code = code
+                    logging.info(f"New user {tg_id} joined via tracking link {code}")
+                else:
+                    logging.info(f"Existing user {tg_id} clicked tracking link {code}")
 
     # Создаём пользователя если его нет
-    await db.create_user(tg_id, username, referrer_id)
+    await db.create_user(tg_id, username, referrer_id, tracking_code)
 
     if referrer_id is not None and not user_already_exists:
         await db.update_referral_count(referrer_id)

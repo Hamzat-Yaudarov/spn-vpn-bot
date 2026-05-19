@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     subscription_until TIMESTAMP,
     squad_uuid UUID,
     referrer_id BIGINT,
+    tracking_code TEXT,
     first_payment BOOLEAN DEFAULT FALSE,
     referral_count INT DEFAULT 0,
     active_referrals INT DEFAULT 0,
@@ -137,6 +138,7 @@ CREATE TABLE IF NOT EXISTS payments (
     target_slot_number INT,
     payment_kind TEXT DEFAULT 'subscription',
     traffic_package_code TEXT,
+    tracking_code TEXT,
     status TEXT DEFAULT 'pending'
 );
 
@@ -186,9 +188,28 @@ CREATE TABLE IF NOT EXISTS subscription_traffic_cycles (
     created_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS tracking_links (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    title TEXT,
+    created_by BIGINT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS tracking_link_clicks (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT NOT NULL,
+    tg_id BIGINT NOT NULL,
+    is_new_user BOOLEAN DEFAULT FALSE,
+    clicked_at TIMESTAMP DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);
 CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_partnerships_tg_id ON partnerships(tg_id);
@@ -208,6 +229,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_tg_id ON payments(tg_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);
 CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_payments_tracking_code ON payments(tracking_code);
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);
@@ -215,3 +237,6 @@ CREATE INDEX IF NOT EXISTS idx_promo_code_users_tg_id ON promo_code_users(tg_id)
 CREATE INDEX IF NOT EXISTS idx_promo_code_users_code ON promo_code_users(promo_code);
 CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_traffic_cycles(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_tracking_links_code ON tracking_links(code);
+CREATE INDEX IF NOT EXISTS idx_tracking_clicks_code ON tracking_link_clicks(code);
+CREATE INDEX IF NOT EXISTS idx_tracking_clicks_tg_id ON tracking_link_clicks(tg_id);

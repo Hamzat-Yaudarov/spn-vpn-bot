@@ -2,6 +2,8 @@ import asyncio
 import logging
 import aiohttp
 import asyncio
+import html
+import re
 from datetime import datetime, timedelta, timezone
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -83,6 +85,170 @@ def _classify_broadcast_exception(exc: Exception) -> tuple[str, float | None]:
         return "unreachable", None
 
     return "error", None
+
+
+def _normalize_tracking_code(value: str) -> str:
+    return value.strip().lower()
+
+
+def _is_valid_tracking_code(code: str) -> bool:
+    if code.startswith("ref_") or code.startswith("partner_"):
+        return False
+    return bool(re.fullmatch(r"[a-z0-9_-]{3,64}", code))
+
+
+def _format_tracking_tariffs(rows) -> str:
+    if not rows:
+        return "• покупок пока нет"
+
+    lines = []
+    for row in rows:
+        payment_kind = row.get('payment_kind') or 'subscription'
+        kind_title = "ГБ" if payment_kind == "traffic_package" else "Подписка"
+        lines.append(
+            f"• {kind_title} <code>{row['tariff_code']}</code>: "
+            f"{row['purchase_count']} шт., {float(row['revenue'] or 0):.2f} ₽"
+        )
+    return "\n".join(lines)
+
+
+@router.message(Command("new_link"))
+async def admin_new_tracking_link(message: Message):
+    """Админ команда: создать аккуратную tracking-ссылку."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer(
+            "❌ <b>Неверный формат команды</b>\n\n"
+            "<b>Использование:</b> /new_link КОД [Название]\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/new_link blogger1</code>\n"
+            "<code>/new_link blogger1 Реклама у блогера</code>\n\n"
+            "Код: 3-64 символа, латиница, цифры, <code>_</code> или <code>-</code>."
+        )
+        return
+
+    code = _normalize_tracking_code(parts[1])
+    title = parts[2].strip() if len(parts) > 2 else None
+    if not _is_valid_tracking_code(code):
+        await message.answer(
+            "❌ Код ссылки некорректный.\n\n"
+            "Можно использовать только латиницу, цифры, <code>_</code> и <code>-</code>, длина 3-64 символа.\n"
+            "Коды <code>ref_...</code> и <code>partner_...</code> зарезервированы."
+        )
+        return
+
+    await db.create_tracking_link(code, title, admin_id)
+    bot_username = (await message.bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start={code}"
+    await message.answer(
+        "✅ <b>Tracking-ссылка создана</b>\n\n"
+        f"<b>Код:</b> <code>{code}</code>\n"
+        f"<b>Название:</b> {html.escape(title) if title else 'не указано'}\n\n"
+        f"<b>Ссылка:</b>\n<code>{link}</code>\n\n"
+        f"Статистика: <code>/link_stats {code}</code>"
+    )
+
+
+@router.message(Command("links"))
+async def admin_list_tracking_links(message: Message):
+    """Админ команда: показать tracking-ссылки."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+
+    links = await db.list_tracking_links()
+    if not links:
+        await message.answer("Tracking-ссылок пока нет. Создать: <code>/new_link blogger1</code>")
+        return
+
+    lines = []
+    for link in links[:50]:
+        status = "активна" if link['is_active'] else "выключена"
+        title = f" — {html.escape(link['title'])}" if link.get('title') else ""
+        lines.append(f"• <code>{link['code']}</code>{title} ({status})")
+
+    await message.answer(
+        "🔗 <b>Tracking-ссылки</b>\n\n"
+        + "\n".join(lines)
+        + "\n\nСтатистика: <code>/link_stats КОД</code>"
+    )
+
+
+@router.message(Command("link_stats"))
+async def admin_tracking_link_stats(message: Message):
+    """Админ команда: статистика tracking-ссылки."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: <code>/link_stats КОД</code>")
+        return
+
+    code = _normalize_tracking_code(parts[1])
+    stats = await db.get_tracking_link_stats(code)
+    if not stats:
+        await message.answer("❌ Tracking-ссылка не найдена")
+        return
+
+    link = stats['link']
+    bot_username = (await message.bot.get_me()).username
+    url = f"https://t.me/{bot_username}?start={code}"
+    await message.answer(
+        f"📊 <b>Статистика ссылки <code>{code}</code></b>\n\n"
+        f"<b>Название:</b> {html.escape(link['title']) if link.get('title') else 'не указано'}\n"
+        f"<b>Статус:</b> {'активна' if link['is_active'] else 'выключена'}\n"
+        f"<b>Ссылка:</b> <code>{url}</code>\n\n"
+        f"👁 <b>Переходов всего:</b> {stats['total_clicks']}\n"
+        f"👤 <b>Уникальных пользователей:</b> {stats['unique_clicks']}\n"
+        f"🆕 <b>Новых пользователей по ссылке:</b> {stats['attributed_users']}\n\n"
+        f"💳 <b>Оплаченных платежей:</b> {stats['paid_payments']}\n"
+        f"💰 <b>Выручка:</b> {stats['revenue']:.2f} ₽\n\n"
+        "<b>Покупки по тарифам:</b>\n"
+        f"{_format_tracking_tariffs(stats['payments_by_tariff'])}"
+    )
+
+
+@router.message(Command("disable_link"))
+async def admin_disable_tracking_link(message: Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: <code>/disable_link КОД</code>")
+        return
+    code = _normalize_tracking_code(parts[1])
+    if await db.set_tracking_link_active(code, False):
+        await message.answer(f"✅ Ссылка <code>{code}</code> выключена")
+    else:
+        await message.answer("❌ Tracking-ссылка не найдена")
+
+
+@router.message(Command("enable_link"))
+async def admin_enable_tracking_link(message: Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: <code>/enable_link КОД</code>")
+        return
+    code = _normalize_tracking_code(parts[1])
+    if await db.set_tracking_link_active(code, True):
+        await message.answer(f"✅ Ссылка <code>{code}</code> включена")
+    else:
+        await message.answer("❌ Tracking-ссылка не найдена")
 
 
 @router.message(Command("new_code"))
