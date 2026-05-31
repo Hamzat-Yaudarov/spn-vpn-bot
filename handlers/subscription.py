@@ -139,7 +139,8 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    await edit_text_with_photo(callback, title, kb, "Выбери срок подписки")
+    image_key = "Покупка обычной подписки" if plan_kind == "regular" else "Покупка подписки с антиглушилкой"
+    await edit_text_with_photo(callback, title, kb, image_key)
     await state.set_state(UserStates.choosing_tariff)
 
 
@@ -162,18 +163,20 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
             "У тебя пока нет подписок.\n"
             "Купи первую подписку: обычную или с антиглушилкой."
         )
+        image_key = "Нет подписок"
     else:
         text = (
             "💳 <b>Купить / Продлить подписку</b>\n\n"
             f"Активных новых подписок: <b>{len(subscriptions)}</b>.\n"
             "Можно продлить существующую или купить новую."
         )
+        image_key = "Выбор покупки или продления"
 
     keyboard.append([InlineKeyboardButton(text="Закрыть", callback_data="back_to_menu", style="danger")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await state.clear()
-    await edit_text_with_photo(callback, text, kb, "Выбери срок подписки")
+    await edit_text_with_photo(callback, text, kb, image_key)
 
 
 async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSMContext):
@@ -377,7 +380,7 @@ async def process_buy_new_subscription(callback: CallbackQuery, state: FSMContex
     ])
     text = "Выбери тип новой подписки:"
     await state.update_data(purchase_mode="new", target_subscription_id=None, target_slot_number=None)
-    await edit_text_with_photo(callback, text, kb, "Выбери срок подписки")
+    await edit_text_with_photo(callback, text, kb, "Выбор типа подписки")
 
 
 @router.callback_query(F.data.startswith("plan_"))

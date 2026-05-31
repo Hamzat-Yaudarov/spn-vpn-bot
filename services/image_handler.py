@@ -15,9 +15,15 @@ IMAGE_MAPPING = {
     "Моя подписка": "My_subscription.jpg",
     "Мои подписки": "My_subscription.jpg",
     "My-not_subscription": "My-not_subscription.jpg",
-    "Выбери срок подписки": "Add_a_subscription.JPG",
-    "Выбери способ оплаты": "Add_a_subscription.JPG",
-    "Оплати": "Add_a_subscription.JPG",
+    "Нет подписок": "My-not_subscription.jpg",
+    "Выбор покупки или продления": "choice_to_buy_or_renew.jpg",
+    "Выбор типа подписки": "Selecting_a_subscription_type.jpg",
+    "Покупка обычной подписки": "Buy_a_regular_subscription.jpg",
+    "Покупка подписки с антиглушилкой": "Buy_a_bypass_subscription.jpg",
+    "Add_a_subscription": "Buy_a_regular_subscription.jpg",
+    "Выбери срок подписки": "Buy_a_regular_subscription.jpg",
+    "Выбери способ оплаты": "choice_to_buy_or_renew.jpg",
+    "Оплати": "choice_to_buy_or_renew.jpg",
 }
 
 
