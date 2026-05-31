@@ -10,11 +10,12 @@ const state = {
   subs: [],
   tariffs: null,
   referral: null,
+  keysMode: "list",
   selectedSubId: null,
-  trafficSubId: null,
-  buyMode: null,
+  buyMode: "plan",
   buyPlan: null,
-  buySubscriptionId: null,
+  buyTariffCode: null,
+  pendingPayment: null,
 };
 
 function api(path, options = {}) {
@@ -35,10 +36,12 @@ function api(path, options = {}) {
 function el(id) { return document.getElementById(id); }
 function rub(value) { return `${Number(value).toLocaleString("ru-RU")} ₽`; }
 function date(value) { return value ? new Date(value).toLocaleDateString("ru-RU") : "неизвестно"; }
-function showToast(text) { const t = el("toast"); t.textContent = text; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+function showToast(text) { const t = el("toast"); t.textContent = text; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2400); }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная"} #${s.type_index}`; }
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
+function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
+function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
 
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
@@ -79,7 +82,7 @@ async function reloadData() {
 
 function render() {
   renderHome();
-  renderSubs();
+  renderKeys();
   renderBuy();
   renderReferral();
   renderHelp();
@@ -91,123 +94,175 @@ function renderHome() {
     <div class="grid">
       <div class="card strong">
         <p class="title">Что хотите сделать?</p>
-        <p class="muted">Все основные действия собраны ниже. Выберите нужный раздел.</p>
+        <p class="muted">Покупка, продление, ключи и бонусы теперь в одном кабинете.</p>
         <div class="grid">
-          <button class="button accent" onclick="startBuy('new')">Купить новую подписку</button>
-          <button class="button ghost" onclick="startBuy('renew')">Продлить подписку</button>
-          <button class="button ghost" onclick="switchView('subs')">Мои ключи</button>
-          ${hasBypass ? `<button class="button green" onclick="switchView('subs'); showToast('Откройте ключ с антиглушилкой и нажмите Купить ГБ')">Купить ГБ</button>` : ""}
+          <button class="button accent" onclick="openNewPurchase()">Купить новую подписку</button>
+          <button class="button ghost" onclick="openRenewList()">Продлить подписку</button>
+          <button class="button ghost" onclick="openKeysList()">Мои ключи</button>
+          ${hasBypass ? `<button class="button green" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')">Купить ГБ</button>` : ""}
         </div>
       </div>
-      <div class="card"><p class="title">Тарифы простыми словами</p><p class="muted">Обычная подписка подходит для повседневного VPN. Антиглушилка нужна, если сеть активно ограничивает доступ: 80 ГБ каждый месяц только для антиглушилки.</p></div>
+      <div class="card">
+        <p class="title">Тарифы</p>
+        <p class="muted">Обычная подписка — 5 устройств. Антиглушилка — 3 устройства и 80 ГБ каждый месяц только для антиглушилки.</p>
+      </div>
     </div>`;
 }
 
-function renderSubs() {
+function renderKeys() {
   const container = el("view-subs");
   if (!state.subs.length) {
-    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Купите первую подписку, и ключ появится здесь.</p><button class="button accent" onclick="startBuy('new')">Купить подписку</button></div>`;
+    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Купите первую подписку, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Купить подписку</button></div>`;
     return;
   }
 
-  const selected = state.subs.find((s) => s.id === state.selectedSubId);
-  if (!selected) {
-    container.innerHTML = `<div class="grid"><div class="card"><p class="title">Мои ключи</p><p class="muted">Выберите нужный ключ, чтобы открыть информацию, скопировать ссылку или продлить подписку.</p></div><div class="choice-list">${state.subs.map(keyButton).join("")}</div></div>`;
+  if (state.keysMode === "list") {
+    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ, чтобы открыть информацию, скопировать ссылку или продлить.");
     return;
   }
 
-  container.innerHTML = subscriptionDetail(selected);
+  if (state.keysMode === "renew-list") {
+    container.innerHTML = keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
+    return;
+  }
+
+  const sub = selectedSub();
+  if (!sub) {
+    state.keysMode = "list";
+    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ.");
+    return;
+  }
+
+  if (state.keysMode === "detail") container.innerHTML = subscriptionDetailHtml(sub);
+  if (state.keysMode === "renew") container.innerHTML = renewHtml(sub);
+  if (state.keysMode === "traffic") container.innerHTML = trafficHtml(sub);
+  if (state.keysMode === "traffic-payment") container.innerHTML = paymentHtml("ГБ для " + subTitle(sub));
+  if (state.keysMode === "renew-payment") container.innerHTML = paymentHtml("Продление " + subTitle(sub));
 }
 
-function keyButton(s) {
-  return `<button class="choice-button" onclick="openSub(${s.id})"><span>${subTitle(s)}<small>${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Истекла"}</small></span><b>›</b></button>`;
+function keysListHtml(title, subtitle, action = "detail") {
+  return `<div class="grid">
+    <div class="card"><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
+    <div class="choice-list">${state.subs.map((s) => keyButton(s, action)).join("")}</div>
+  </div>`;
 }
 
-function openSub(id) {
-  state.selectedSubId = id;
-  state.trafficSubId = null;
-  switchView("subs");
+function keyButton(s, action) {
+  const handler = action === "renew" ? `openRenew(${s.id})` : `openSubDetail(${s.id})`;
+  return `<button class="choice-button" onclick="${handler}"><span>${subTitle(s)}<small>${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Истекла"}</small></span><b>›</b></button>`;
 }
 
-function subscriptionDetail(s) {
+function subscriptionDetailHtml(s) {
   const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
   return `<div class="grid">
-    <button class="button ghost" onclick="backToKeys()">← Назад к ключам</button>
+    <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
     <div class="card strong">
       <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
       ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
     </div>
     <div class="card"><p class="title">Ключ</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><button class="button accent" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
-    <button class="button ghost" onclick="startRenewFor(${s.id})">Продлить эту подписку</button>
-    ${s.traffic.enabled ? `<button class="button green" onclick="toggleTraffic(${s.id})">Купить ГБ</button>${state.trafficSubId === s.id ? trafficPackages(s) : ""}` : ""}
+    <button class="button ghost" onclick="openRenew(${s.id})">Продлить</button>
+    ${s.traffic.enabled ? `<button class="button green" onclick="openTraffic(${s.id})">Купить ГБ</button>` : ""}
   </div>`;
 }
 
-function trafficPackages(s) {
-  return `<div class="card"><p class="title">Пакеты ГБ</p><p class="muted">ГБ тратятся только на антиглушилку.</p><div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="buyTraffic(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>${rub(p.price)}</small></span><b>Купить</b></button>`).join("")}</div></div>`;
+function renewHtml(s) {
+  const tariffs = state.tariffs[s.plan_kind] || [];
+  return `<div class="grid">
+    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
+    <div class="card"><p class="step">Продление</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
+    <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+  </div>`;
 }
 
-function toggleTraffic(id) {
-  state.trafficSubId = state.trafficSubId === id ? null : id;
-  renderSubs();
-}
-
-function backToKeys() {
-  state.selectedSubId = null;
-  state.trafficSubId = null;
-  renderSubs();
+function trafficHtml(s) {
+  if (!s.traffic.enabled) return subscriptionDetailHtml(s);
+  return `<div class="grid">
+    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
+    <div class="card"><p class="step">Покупка ГБ</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
+    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span><b>${rub(p.price)}</b></button>`).join("")}</div>
+  </div>`;
 }
 
 function renderBuy() {
   const container = el("view-buy");
-  if (!state.buyMode) {
-    container.innerHTML = `<div class="grid"><div class="card strong"><p class="step">Шаг 1</p><p class="title">Что хотите сделать?</p><p class="muted">Купить новый ключ или продлить уже существующий.</p><div class="grid"><button class="button accent" onclick="selectBuyMode('new')">Купить новую подписку</button><button class="button ghost" onclick="selectBuyMode('renew')">Продлить существующую</button></div></div></div>`;
+  if (state.buyMode === "plan") {
+    container.innerHTML = `<div class="grid"><div class="card strong"><p class="step">Покупка</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p><div class="grid"><button class="button accent" onclick="selectBuyPlan('regular')">Обычная подписка</button><button class="button green" onclick="selectBuyPlan('bypass')">С антиглушилкой</button></div></div></div>`;
     return;
   }
 
-  if (state.buyMode === "new") {
-    renderNewPurchase(container);
+  if (state.buyMode === "tariff") {
+    const tariffs = state.tariffs[state.buyPlan] || [];
+    container.innerHTML = `<div class="grid">
+      <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
+      <div class="card"><p class="step">Срок</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 80 ГБ в месяц."}</p></div>
+      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+    </div>`;
     return;
   }
 
-  renderRenewPurchase(container);
+  container.innerHTML = paymentHtml("Новая подписка");
 }
 
-function renderNewPurchase(container) {
-  if (!state.buyPlan) {
-    container.innerHTML = `<div class="grid"><button class="button ghost" onclick="resetBuy()">← Назад</button><div class="card strong"><p class="step">Шаг 2</p><p class="title">Выберите тип подписки</p><p class="muted">Обычная дешевле. Антиглушилка нужна для сетей с ограничениями.</p><div class="grid"><button class="button accent" onclick="selectBuyPlan('regular')">Обычная подписка</button><button class="button green" onclick="selectBuyPlan('bypass')">С антиглушилкой</button></div></div></div>`;
-    return;
-  }
-  const tariffs = state.tariffs[state.buyPlan] || [];
-  container.innerHTML = `<div class="grid"><button class="button ghost" onclick="selectBuyPlan(null)">← Назад к типам</button><div class="card"><p class="step">Шаг 3</p><p class="title">Выберите срок</p><p class="muted">${state.buyPlan === "regular" ? "Обычная подписка, 5 устройств." : "Антиглушилка, 3 устройства и 80 ГБ в месяц."}</p></div>${tariffs.map((t) => tariffChoice(t, "new", null)).join("")}</div>`;
+function paymentHtml(title) {
+  return `<div class="grid">
+    <button class="button ghost" onclick="backFromPayment()">← Назад</button>
+    <div class="card strong"><p class="step">Оплата</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div></div>
+  </div>`;
 }
 
-function renderRenewPurchase(container) {
-  if (!state.buySubscriptionId) {
-    if (!state.subs.length) {
-      container.innerHTML = `<div class="grid"><button class="button ghost" onclick="resetBuy()">← Назад</button><div class="card empty"><h2>Нет подписок для продления</h2><p class="muted">Сначала купите новую подписку.</p><button class="button accent" onclick="selectBuyMode('new')">Купить новую</button></div></div>`;
-      return;
+function selectBuyPlan(plan) { state.buyPlan = plan; state.buyMode = "tariff"; switchView("buy"); }
+function resetBuy() { state.buyMode = "plan"; state.buyPlan = null; state.buyTariffCode = null; state.pendingPayment = null; renderBuy(); }
+function openNewPurchase() { resetBuy(); switchView("buy"); }
+function openKeysList() { state.keysMode = "list"; state.selectedSubId = null; switchView("subs"); }
+function openRenewList() { state.keysMode = "renew-list"; state.selectedSubId = null; switchView("subs"); }
+function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"; switchView("subs"); }
+function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs"); }
+function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs"); }
+
+function prepareNewPayment(tariffCode) {
+  state.buyTariffCode = tariffCode;
+  state.pendingPayment = { type: "subscription", tariff_code: tariffCode, payment_target: "new", subscription_id: null };
+  state.buyMode = "payment";
+  renderBuy();
+}
+
+function prepareRenewPayment(subscriptionId, tariffCode) {
+  state.pendingPayment = { type: "subscription", tariff_code: tariffCode, payment_target: "renew", subscription_id: subscriptionId };
+  state.keysMode = "renew-payment";
+  renderKeys();
+}
+
+function prepareTrafficPayment(subscriptionId, packageCode) {
+  state.pendingPayment = { type: "traffic", subscription_id: subscriptionId, package_code: packageCode };
+  state.keysMode = "traffic-payment";
+  renderKeys();
+}
+
+function backFromPayment() {
+  if (!state.pendingPayment) return;
+  if (state.pendingPayment.type === "traffic") state.keysMode = "traffic";
+  else if (state.pendingPayment.payment_target === "renew") state.keysMode = "renew";
+  else state.buyMode = "tariff";
+  state.pendingPayment = null;
+  render();
+}
+
+async function payPrepared(provider) {
+  if (!state.pendingPayment) return;
+  try {
+    let data;
+    if (state.pendingPayment.type === "traffic") {
+      data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
+    } else {
+      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     }
-    container.innerHTML = `<div class="grid"><button class="button ghost" onclick="resetBuy()">← Назад</button><div class="card"><p class="step">Шаг 2</p><p class="title">Что продлить?</p><p class="muted">Выберите ключ, который хотите продлить.</p></div><div class="choice-list">${state.subs.map((s) => `<button class="choice-button" onclick="selectRenewSub(${s.id})"><span>${subTitle(s)}<small>${s.status === "active" ? `До ${date(s.subscription_until)}` : "Истекла"}</small></span><b>›</b></button>`).join("")}</div></div>`;
-    return;
+    openLink(data.pay_url);
+    showToast("Счёт создан. После оплаты обновите кабинет.");
+  } catch (e) {
+    showToast(e.message);
   }
-
-  const sub = state.subs.find((s) => s.id === state.buySubscriptionId);
-  const tariffs = state.tariffs[sub?.plan_kind || "regular"] || [];
-  container.innerHTML = `<div class="grid"><button class="button ghost" onclick="selectRenewSub(null)">← Назад к ключам</button><div class="card"><p class="step">Шаг 3</p><p class="title">Продлить ${subTitle(sub)}</p><p class="muted">Выберите срок продления.</p></div>${tariffs.map((t) => tariffChoice(t, "renew", sub.id)).join("")}</div>`;
 }
-
-function tariffChoice(t, mode, subscriptionId) {
-  const period = t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`;
-  return `<button class="choice-button" onclick="buySubscription('${t.code}', '${mode}', ${subscriptionId || null})"><span>${period}<small>${t.kind === "regular" ? "Обычная подписка" : "С антиглушилкой"}</small></span><b>${rub(t.price)}</b></button>`;
-}
-
-function selectBuyMode(mode) { state.buyMode = mode; state.buyPlan = null; state.buySubscriptionId = null; switchView("buy"); }
-function selectBuyPlan(plan) { state.buyPlan = plan; renderBuy(); }
-function selectRenewSub(id) { state.buySubscriptionId = id; renderBuy(); }
-function resetBuy() { state.buyMode = null; state.buyPlan = null; state.buySubscriptionId = null; renderBuy(); }
-function startBuy(mode) { selectBuyMode(mode); }
-function startRenewFor(id) { state.buyMode = "renew"; state.buySubscriptionId = id; state.buyPlan = null; switchView("buy"); }
 
 function renderReferral() {
   const r = state.referral;
@@ -216,45 +271,6 @@ function renderReferral() {
 
 function renderHelp() {
   el("view-help").innerHTML = `<div class="grid"><div class="card"><p class="title">Как подключиться</p><p class="muted">Скопируйте ключ из раздела “Ключи”, откройте Happ Plus, нажмите “+” и вставьте ключ из буфера обмена.</p></div><div class="card"><p class="title">Поддержка</p><p class="muted">Если что-то не получается, напишите нам в Telegram.</p><button class="button ghost" onclick="openLink('https://t.me/wayspn_support')">Открыть поддержку</button></div></div>`;
-}
-
-async function buySubscription(tariffCode, target, subscriptionId) {
-  try {
-    const provider = await chooseProvider();
-    if (!provider) return;
-    const data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ tariff_code: tariffCode, provider, payment_target: target, subscription_id: subscriptionId }) });
-    openLink(data.pay_url);
-    showToast("Счёт создан. После оплаты обновите кабинет.");
-  } catch (e) {
-    showToast(e.message);
-  }
-}
-
-async function buyTraffic(subscriptionId, packageCode) {
-  try {
-    const provider = await chooseProvider();
-    if (!provider) return;
-    const data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ subscription_id: subscriptionId, package_code: packageCode, provider }) });
-    openLink(data.pay_url);
-    showToast("Счёт на ГБ создан");
-  } catch (e) {
-    showToast(e.message);
-  }
-}
-
-async function chooseProvider() {
-  return new Promise((resolve) => {
-    const modal = el("providerModal");
-    modal.classList.remove("hidden");
-    const handler = (event) => {
-      const provider = event.target?.dataset?.provider;
-      if (provider === undefined) return;
-      modal.classList.add("hidden");
-      modal.removeEventListener("click", handler);
-      resolve(provider || null);
-    };
-    modal.addEventListener("click", handler);
-  });
 }
 
 async function copyText(encoded) {
