@@ -1,8 +1,8 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config import SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from config import MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 import database as db
 from handlers.start import show_main_menu
 from services.image_handler import edit_text_with_photo
@@ -44,6 +44,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
+        [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL))],
         [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
     visible_subscriptions = await db.get_visible_subscriptions(tg_id)

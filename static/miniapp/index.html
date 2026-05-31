@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Way SPN</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/app/assets/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Way SPN</p>
+          <h1>Личный кабинет</h1>
+          <p id="userLine" class="muted">Загружаем данные...</p>
+        </div>
+        <div class="orb"></div>
+      </header>
+
+      <main>
+        <section id="view-home" class="view active"></section>
+        <section id="view-subs" class="view"></section>
+        <section id="view-buy" class="view"></section>
+        <section id="view-ref" class="view"></section>
+        <section id="view-help" class="view"></section>
+      </main>
+
+      <nav class="tabbar">
+        <button class="tab active" data-view="home">Главная</button>
+        <button class="tab" data-view="subs">Ключи</button>
+        <button class="tab primary" data-view="buy">Купить</button>
+        <button class="tab" data-view="ref">Бонусы</button>
+        <button class="tab" data-view="help">Помощь</button>
+      </nav>
+    </div>
+
+    <div id="providerModal" class="modal hidden">
+      <div class="modal-card">
+        <p class="title">Выберите оплату</p>
+        <p class="muted">После создания счёта откроется страница оплаты.</p>
+        <div class="grid">
+          <button class="button accent" data-provider="cryptobot">CryptoBot</button>
+          <button class="button green" data-provider="yookassa">Банковская карта</button>
+          <button class="button ghost" data-provider="">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app/assets/app.js"></script>
+  </body>
+</html>
