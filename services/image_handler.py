@@ -23,7 +23,7 @@ IMAGE_MAPPING = {
     "Add_a_subscription": "Buy_a_regular_subscription.jpg",
     "Выбери срок подписки": "Buy_a_regular_subscription.jpg",
     "Выбери способ оплаты": "Select_Payment_Method.jpg",
-    "Оплати": "choice_to_buy_or_renew.jpg",
+    "Оплати": "Select_Payment_Method.jpg",
 }
 
 
