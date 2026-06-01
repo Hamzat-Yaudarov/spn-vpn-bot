@@ -69,7 +69,6 @@ function switchView(view, options = {}) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   el(`view-${view}`).classList.add("active");
-  document.querySelector(".hero")?.classList.toggle("hidden", view !== "home");
   state.currentView = view;
   render();
 }
@@ -166,7 +165,7 @@ function renderKeys() {
 
 function keysListHtml(title, subtitle, action = "detail") {
   return `<div class="grid">
-    <div class="section-card"><p class="step">Раздел ключей</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
+    <div class="card info-card"><p class="step">Раздел ключей</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
     <div class="choice-list">${state.subs.map((s) => keyButton(s, action)).join("")}</div>
   </div>`;
 }
@@ -185,7 +184,7 @@ function subscriptionDetailHtml(s) {
       <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
       ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
     </div>
-    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Нажмите “Добавить ключ в Happ” или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button green" onclick="addToHapp('${encodeURIComponent(s.subscription_url)}')">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Скопируйте ссылку и вставьте её в приложение.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><button class="button accent" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <button class="button ghost" onclick="openRenew(${s.id})">Продлить</button>
     ${s.traffic.enabled ? `<button class="button green" onclick="openTraffic(${s.id})">Купить ГБ</button>` : ""}
   </div>`;
@@ -195,7 +194,7 @@ function renewHtml(s) {
   const tariffs = state.tariffs[s.plan_kind] || [];
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-card"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
+    <div class="card info-card"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
     <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
   </div>`;
 }
@@ -204,7 +203,7 @@ function trafficHtml(s) {
   if (!s.traffic.enabled) return subscriptionDetailHtml(s);
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-card"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
+    <div class="card info-card"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
     <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span><b>${rub(p.price)}</b></button>`).join("")}</div>
   </div>`;
 }
@@ -213,7 +212,7 @@ function renderBuy() {
   const container = el("view-buy");
   if (state.buyMode === "plan") {
     container.innerHTML = `<div class="grid">
-      <div class="section-card"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p></div>
+      <div class="card hero-card"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p></div>
       <div class="plan-grid">
         <button class="plan-card plan-regular" onclick="selectBuyPlan('regular')"><span>Обычная</span><b>5 устройств</b><small>Для ежедневного подключения.</small></button>
         <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>80 ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
@@ -226,7 +225,7 @@ function renderBuy() {
     const tariffs = state.tariffs[state.buyPlan] || [];
     container.innerHTML = `<div class="grid">
       <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
-      <div class="section-card ${state.buyPlan === "regular" ? "regular" : "bypass"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 80 ГБ в месяц."}</p></div>
+      <div class="card info-card ${state.buyPlan === "regular" ? "plan-regular" : "plan-bypass"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 80 ГБ в месяц."}</p></div>
       <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
     </div>`;
     return;
@@ -238,7 +237,7 @@ function renderBuy() {
 function paymentHtml(title) {
   return `<div class="grid">
     <button class="button ghost" onclick="backFromPayment()">← Назад</button>
-    <div class="section-card payment"><p class="step">Шаг 3 из 3</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p></div><div class="card strong"><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div></div>
+    <div class="card strong"><p class="step">Шаг 3 из 3</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div></div>
   </div>`;
 }
 
@@ -308,13 +307,6 @@ async function copyText(encoded) {
   const text = decodeURIComponent(encoded);
   await navigator.clipboard.writeText(text).catch(() => {});
   showToast("Скопировано");
-}
-
-async function addToHapp(encoded) {
-  const url = decodeURIComponent(encoded);
-  await navigator.clipboard.writeText(url).catch(() => {});
-  showToast("Открываем Happ. Если не открылся, ключ уже скопирован.");
-  openLink(url);
 }
 
 load();
