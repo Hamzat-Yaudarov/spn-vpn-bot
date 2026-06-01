@@ -48,6 +48,15 @@ document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
 
+document.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-action]");
+  if (!target) return;
+  const subId = Number(target.dataset.subId);
+  if (target.dataset.action === "renew") openRenew(subId);
+  if (target.dataset.action === "traffic") openTraffic(subId);
+  if (target.dataset.action === "happ") addKeyToHapp(target.dataset.url || "");
+});
+
 function resetKeysState() {
   state.keysMode = "list";
   state.selectedSubId = null;
@@ -123,13 +132,6 @@ function renderHome() {
         <button class="quick-card bronze" onclick="openRenewList()"><span>Продлить</span><small>Выбрать ключ</small></button>
         ${hasBypass ? `<button class="quick-card green" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ</span><small>Для антиглушилки</small></button>` : ""}
       </div>
-      <div class="card info-card">
-        <p class="title">Как выбрать тариф?</p>
-        <div class="hint-list">
-          <div><b>Обычная</b><span>5 устройств, повседневное подключение.</span></div>
-          <div><b>Антиглушилка</b><span>3 устройства, 80 ГБ в месяц для обхода блокировок.</span></div>
-        </div>
-      </div>
     </div>`;
 }
 
@@ -185,9 +187,9 @@ function subscriptionDetailHtml(s) {
       <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
       ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
     </div>
-    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" onclick="addKeyToHapp('${encodeURIComponent(s.subscription_url)}')">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
-    <button class="button ghost" onclick="openRenew(${s.id})">Продлить</button>
-    ${s.traffic.enabled ? `<button class="button green" onclick="openTraffic(${s.id})">Купить ГБ</button>` : ""}
+    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <button class="button ghost" data-action="renew" data-sub-id="${s.id}">Продлить</button>
+    ${s.traffic.enabled ? `<button class="button green" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
   </div>`;
 }
 
@@ -315,7 +317,12 @@ async function addKeyToHapp(encoded) {
   await navigator.clipboard.writeText(text).catch(() => {});
   showToast("Открываем Happ. Если не добавится, ключ уже скопирован.");
   setTimeout(() => {
-    window.location.href = `happ://add/${encodeURIComponent(text)}`;
+    const link = document.createElement("a");
+    link.href = `happ://add/${text}`;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }, 120);
 }
 
