@@ -48,6 +48,8 @@ body.view-home-active .hero { display: flex; }
 .section-note.regular-note { border-left-color: var(--blue); }
 .section-note.bypass-note { border-left-color: var(--accent-2); }
 .section-note.payment-note { border-left-color: var(--accent); }
+.section-note.bonus-note { border-left-color: var(--bronze); }
+.section-note.help-note { border-left-color: var(--accent-2); }
 .plan-regular { border-color: rgba(90,184,255,.45) !important; background: linear-gradient(135deg, rgba(31,91,154,.34), rgba(90,184,255,.1)), var(--panel-strong) !important; }
 .plan-bypass { border-color: rgba(24,199,154,.5) !important; background: linear-gradient(135deg, rgba(13,118,91,.34), rgba(24,199,154,.12)), var(--panel-strong) !important; }
 .row { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
@@ -108,6 +110,23 @@ body.view-home-active .hero { display: flex; }
 .hint-list div { padding: 12px; border-radius: 16px; background: rgba(255,255,255,.055); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
 .hint-list b { display: block; margin-bottom: 4px; color: #fff7e6; }
 .hint-list span { display: block; color: var(--muted); line-height: 1.4; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat-card { min-height: 96px; padding: 13px; border-radius: 20px; box-shadow: 0 10px 26px rgba(0,0,0,.2); }
+.stat-card span { display: block; color: rgba(255,247,230,.78); font-size: 12px; font-weight: 800; line-height: 1.25; }
+.stat-card b { display: block; margin-top: 12px; font-size: 20px; line-height: 1.1; }
+.stat-card.blue { background: linear-gradient(135deg, #1d4f8f, #2c83c8); }
+.stat-card.bronze { background: linear-gradient(135deg, #8f4f24, #c77b35); }
+.stat-card.green { color: #04120e; background: linear-gradient(135deg, #0fb985, #18c79a); }
+.stat-card.green span { color: rgba(4,18,14,.72); }
+.link-card .keybox { margin: 10px 0; }
+.help-card { display: flex; gap: 13px; align-items: flex-start; padding: 15px; border: 1px solid rgba(255,255,255,.12); border-radius: 22px; background: rgba(255,255,255,.055); box-shadow: 0 10px 26px rgba(0,0,0,.2); }
+.help-card > span { flex: 0 0 auto; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 13px; font-weight: 950; }
+.help-card.blue { border-color: rgba(90,184,255,.28); background: linear-gradient(135deg, rgba(31,91,154,.24), rgba(255,255,255,.055)); }
+.help-card.blue > span { color: #041120; background: var(--blue); }
+.help-card.green { border-color: rgba(24,199,154,.28); background: linear-gradient(135deg, rgba(13,118,91,.24), rgba(255,255,255,.055)); }
+.help-card.green > span { color: #04120e; background: var(--accent-2); }
+.help-card .title { margin-bottom: 3px; font-size: 18px; }
+.support-card { border-color: rgba(90,184,255,.22); }
 .toast { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%) translateY(20px); opacity: 0; max-width: 92vw; padding: 12px 16px; border-radius: 18px; color: #1b1307; background: #f0cf7a; font-weight: 800; transition: .2s; z-index: 20; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: end center; padding: 16px; background: rgba(0,0,0,.56); backdrop-filter: blur(8px); }

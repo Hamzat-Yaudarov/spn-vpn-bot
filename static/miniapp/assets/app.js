@@ -310,11 +310,24 @@ async function payPrepared(provider) {
 
 function renderReferral() {
   const r = state.referral;
-  el("view-ref").innerHTML = `<div class="grid"><div class="card strong"><p class="title">Бонус за друга</p><p class="muted">35% с первой покупки и 15% с повторных.</p></div><div class="card"><div class="row"><span>Активных друзей</span><b>${r?.active_referrals || 0}</b></div><div class="row"><span>Всего заработано</span><b>${rub(r?.total_earned || 0)}</b></div><div class="row"><span>Баланс</span><b>${rub(r?.current_balance || 0)}</b></div></div><div class="card"><p class="title">Ваша ссылка</p><div class="keybox">${r?.link || ""}</div><button class="button ghost" onclick="copyText('${encodeURIComponent(r?.link || "")}')">Скопировать ссылку</button></div></div>`;
+  el("view-ref").innerHTML = `<div class="grid">
+    <div class="section-note bonus-note"><p class="step">Партнёрская программа</p><p class="title">Бонус за друга</p><p class="muted">Получайте 35% с первой покупки друга и 15% с повторных.</p></div>
+    <div class="stats-grid">
+      <div class="stat-card blue"><span>Активных друзей</span><b>${r?.active_referrals || 0}</b></div>
+      <div class="stat-card bronze"><span>Всего заработано</span><b>${rub(r?.total_earned || 0)}</b></div>
+      <div class="stat-card green"><span>Баланс</span><b>${rub(r?.current_balance || 0)}</b></div>
+    </div>
+    <div class="card link-card"><p class="title">Ваша ссылка</p><p class="muted">Отправьте её другу. Бонус появится после оплаты.</p><div class="keybox">${r?.link || ""}</div><button class="button blue" onclick="copyText('${encodeURIComponent(r?.link || "")}')">Скопировать ссылку</button></div>
+  </div>`;
 }
 
 function renderHelp() {
-  el("view-help").innerHTML = `<div class="grid"><div class="card"><p class="title">Как подключиться</p><p class="muted">Откройте раздел “Ключи”, выберите ключ и нажмите “Добавить ключ в Happ”. Если приложение не открылось, ключ будет скопирован, его можно вставить вручную.</p></div><div class="card"><p class="title">Поддержка</p><p class="muted">Если что-то не получается, напишите нам в Telegram.</p><button class="button ghost" onclick="openLink('https://t.me/wayspn_support')">Открыть поддержку</button></div></div>`;
+  el("view-help").innerHTML = `<div class="grid">
+    <div class="section-note help-note"><p class="step">Помощь</p><p class="title">Подключение и поддержка</p><p class="muted">Быстрые подсказки, если нужно добавить ключ или написать нам.</p></div>
+    <div class="help-card blue"><span>1</span><div><p class="title">Добавьте ключ в Happ</p><p class="muted">Откройте “Ключи”, выберите подписку и нажмите “Добавить ключ в Happ”.</p></div></div>
+    <div class="help-card green"><span>2</span><div><p class="title">Если Happ не открылся</p><p class="muted">Ключ уже будет скопирован. Откройте Happ вручную и вставьте его через “+”.</p></div></div>
+    <div class="card support-card"><p class="title">Поддержка</p><p class="muted">Если что-то не получается, напишите нам в Telegram.</p><button class="button blue" onclick="openLink('https://t.me/wayspn_support')">Открыть поддержку</button></div>
+  </div>`;
 }
 
 async function copyText(encoded) {
