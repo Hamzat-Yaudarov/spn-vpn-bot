@@ -173,7 +173,6 @@ async def miniapp_open_happ(url: str):
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Открываем Happ</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
       * {{ box-sizing: border-box; }}
       html, body {{ margin: 0; min-height: 100%; background: #07090d; color: #fff7e6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
@@ -188,22 +187,20 @@ async def miniapp_open_happ(url: str):
   <body>
     <div class="card">
       <h1>Открываем Happ</h1>
-      <p>Если приложение не открылось автоматически, нажмите кнопку ниже. Эта страница попробует закрыться сама.</p>
+      <p>Если приложение не открылось автоматически, нажмите кнопку ниже. После добавления ключа вернитесь в личный кабинет.</p>
       <a id="openHapp" href="{happ_url_attr}">Добавить ключ в Happ</a>
       <button id="copyKey" type="button">Скопировать ключ</button>
+      <button id="backToApp" type="button">Вернуться в личный кабинет</button>
     </div>
     <script>
       const happUrl = {happ_url_json};
       const subUrl = {url_json};
       document.getElementById('copyKey').onclick = () => navigator.clipboard?.writeText(subUrl).catch(() => {{}});
-      setTimeout(() => {{ window.location.href = happUrl; }}, 250);
-      setTimeout(() => {{
-        if (window.Telegram?.WebApp?.close) {{
-          window.Telegram.WebApp.close();
-          return;
-        }}
+      document.getElementById('backToApp').onclick = () => {{
         window.close();
-      }}, 1400);
+        setTimeout(() => {{ window.location.href = '/app'; }}, 160);
+      }};
+      setTimeout(() => {{ window.location.href = happUrl; }}, 250);
     </script>
   </body>
 </html>
