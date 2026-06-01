@@ -178,16 +178,17 @@ async def miniapp_open_happ(url: str):
       html, body {{ margin: 0; min-height: 100%; background: #07090d; color: #fff7e6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
       body {{ display: grid; place-items: center; padding: 22px; }}
       .card {{ width: min(460px, 100%); padding: 22px; border: 1px solid rgba(90,184,255,.24); border-radius: 26px; background: linear-gradient(135deg, rgba(25,55,99,.58), rgba(18,76,67,.34)), #0b1118; box-shadow: 0 18px 45px rgba(0,0,0,.32); }}
-      h1 {{ margin: 0 0 8px; font-size: 25px; }}
-      p {{ margin: 0 0 16px; color: #d8cfb6; line-height: 1.45; }}
+      h1, p {{ display: none; }}
       a, button {{ display: block; width: 100%; border: 0; border-radius: 17px; padding: 14px 16px; color: #041120; background: linear-gradient(135deg, #8bd0ff, #5ab8ff); font: inherit; font-weight: 900; text-align: center; text-decoration: none; }}
       button {{ margin-top: 10px; color: #fff7e6; background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 1px rgba(255,255,255,.16); }}
+      #openHapp, #copyKey {{ display: none; }}
+      #backToApp {{ margin-top: 0; color: #041120; background: linear-gradient(135deg, #f0cf7a, #c7892d); }}
     </style>
   </head>
   <body>
     <div class="card">
       <h1>Открываем Happ</h1>
-      <p>Если приложение не открылось автоматически, нажмите кнопку ниже. После добавления ключа вернитесь в личный кабинет.</p>
+      <p>Возвращаем в личный кабинет автоматически.</p>
       <a id="openHapp" href="{happ_url_attr}">Добавить ключ в Happ</a>
       <button id="copyKey" type="button">Скопировать ключ</button>
       <button id="backToApp" type="button">Вернуться в личный кабинет</button>
@@ -201,6 +202,10 @@ async def miniapp_open_happ(url: str):
         setTimeout(() => {{ window.location.href = '/app'; }}, 160);
       }};
       setTimeout(() => {{ window.location.href = happUrl; }}, 250);
+      setTimeout(() => {{
+        window.close();
+        setTimeout(() => {{ window.location.href = '/app'; }}, 180);
+      }}, 2200);
     </script>
   </body>
 </html>
