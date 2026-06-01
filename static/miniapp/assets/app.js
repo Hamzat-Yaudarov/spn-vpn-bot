@@ -42,6 +42,26 @@ function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглуш
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
+function planName(plan) { return plan === "bypass" ? "Антиглушилка" : "Обычная"; }
+function planClass(plan) { return plan === "bypass" ? "bypass" : "regular"; }
+function planTag(plan) { return plan === "bypass" ? "3 устройства · 80 ГБ/мес" : "5 устройств · без лимита ГБ"; }
+function planText(plan) { return plan === "bypass" ? "Для связи при блокировках и нестабильной сети." : "Для повседневного VPN на телефоне, ноутбуке и других устройствах."; }
+function daysLeft(value) {
+  if (!value) return null;
+  const diff = new Date(value).getTime() - Date.now();
+  return Math.max(0, Math.ceil(diff / 86400000));
+}
+function nearestActiveUntil() {
+  const dates = activeSubs().map((s) => new Date(s.subscription_until).getTime()).filter(Boolean);
+  return dates.length ? new Date(Math.min(...dates)).toISOString() : null;
+}
+function cheapest(plan) {
+  const tariffs = state.tariffs?.[plan] || [];
+  return tariffs.reduce((best, t) => !best || t.price < best.price ? t : best, null);
+}
+function trafficPercent(s) {
+  return s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
+}
 
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
@@ -90,21 +110,32 @@ function render() {
 
 function renderHome() {
   const hasBypass = activeSubs().some((s) => s.plan_kind === "bypass");
+  const activeCount = activeSubs().length;
+  const nearest = nearestActiveUntil();
   el("view-home").innerHTML = `
     <div class="grid">
-      <div class="card strong">
-        <p class="title">Что хотите сделать?</p>
-        <p class="muted">Покупка, продление, ключи и бонусы теперь в одном кабинете.</p>
-        <div class="grid">
-          <button class="button accent" onclick="openNewPurchase()">Купить новую подписку</button>
-          <button class="button ghost" onclick="openRenewList()">Продлить подписку</button>
+      <div class="card hero-card">
+        <p class="step">Главная</p>
+        <p class="title">${activeCount ? `Активных ключей: ${activeCount}` : "Подключите Way SPN"}</p>
+        <p class="muted">${activeCount ? `Ближайшее окончание: ${date(nearest)}. Все ключи, продления и ГБ доступны здесь.` : "Купите подписку, получите ключ и подключитесь за пару минут."}</p>
+        <div class="quick-grid">
+          <button class="button accent" onclick="openNewPurchase()">Купить подписку</button>
           <button class="button ghost" onclick="openKeysList()">Мои ключи</button>
-          ${hasBypass ? `<button class="button green" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')">Купить ГБ</button>` : ""}
+          ${state.subs.length ? `<button class="button ghost" onclick="openRenewList()">Продлить</button>` : ""}
+          ${hasBypass ? `<button class="button green" onclick="openTrafficFromHome()">Купить ГБ</button>` : ""}
         </div>
       </div>
-      <div class="card">
-        <p class="title">Тарифы</p>
-        <p class="muted">Обычная подписка — 5 устройств. Антиглушилка — 3 устройства и 80 ГБ каждый месяц только для антиглушилки.</p>
+      <div class="split-cards">
+        <div class="info-card">
+          <span class="mini-badge regular">Обычная</span>
+          <b>5 устройств</b>
+          <p>Для ежедневного VPN без лимита трафика.</p>
+        </div>
+        <div class="info-card">
+          <span class="mini-badge bypass">Антиглушилка</span>
+          <b>3 устройства</b>
+          <p>80 ГБ/мес для работы при блокировках.</p>
+        </div>
       </div>
     </div>`;
 }
@@ -142,52 +173,59 @@ function renderKeys() {
 
 function keysListHtml(title, subtitle, action = "detail") {
   return `<div class="grid">
-    <div class="card"><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
+    <div class="card"><p class="step">Ключи</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
     <div class="choice-list">${state.subs.map((s) => keyButton(s, action)).join("")}</div>
   </div>`;
 }
 
 function keyButton(s, action) {
   const handler = action === "renew" ? `openRenew(${s.id})` : `openSubDetail(${s.id})`;
-  return `<button class="choice-button" onclick="${handler}"><span>${subTitle(s)}<small>${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Истекла"}</small></span><b>›</b></button>`;
+  const left = daysLeft(s.subscription_until);
+  const traffic = s.traffic.enabled ? `<small>ГБ: ${s.traffic.used_gb} / ${s.traffic.limit_gb}</small>` : "";
+  return `<button class="choice-button key-choice ${planClass(s.plan_kind)}" onclick="${handler}">
+    <span><i class="mini-badge ${planClass(s.plan_kind)}">${planName(s.plan_kind)}</i>${subTitle(s)}<small>${s.status === "active" ? `До ${date(s.subscription_until)}${left !== null ? ` · ${left} дн.` : ""}` : "Истекла · можно продлить"}</small>${traffic}</span>
+    <b>${action === "renew" ? "Продлить" : "Открыть"}</b>
+  </button>`;
 }
 
 function subscriptionDetailHtml(s) {
-  const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
+  const percent = trafficPercent(s);
+  const left = daysLeft(s.subscription_until);
   return `<div class="grid">
     <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
-    <div class="card strong">
-      <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
-      ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
+    <div class="card strong detail-head ${planClass(s.plan_kind)}">
+      <div class="row start"><div><p class="step">${planTag(s.plan_kind)}</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}${left !== null ? ` · осталось ${left} дн.` : ""}` : "Подписка истекла, её можно продлить."}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
+      ${s.traffic.enabled ? `<div class="traffic-card"><div class="row"><span class="small">Трафик антиглушилки</span><b>${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Следующий сброс: ${date(s.traffic.reset_at)}</p></div>` : ""}
     </div>
-    <div class="card"><p class="title">Ключ</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><button class="button accent" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
-    <button class="button ghost" onclick="openRenew(${s.id})">Продлить</button>
-    ${s.traffic.enabled ? `<button class="button green" onclick="openTraffic(${s.id})">Купить ГБ</button>` : ""}
+    <div class="card"><p class="step">Подключение</p><p class="title">Ключ</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><button class="button accent" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <div class="action-row"><button class="button ghost" onclick="openRenew(${s.id})">Продлить</button>${s.traffic.enabled ? `<button class="button green" onclick="openTraffic(${s.id})">Купить ГБ</button>` : ""}</div>
   </div>`;
 }
 
 function renewHtml(s) {
   const tariffs = state.tariffs[s.plan_kind] || [];
+  const left = daysLeft(s.subscription_until);
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="card"><p class="step">Продление</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
-    <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+    <div class="card"><p class="step">Продление</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" && left !== null ? `Сейчас осталось ${left} дн. Выберите, на сколько продлить ключ.` : "Выберите срок, чтобы восстановить или продлить ключ."}</p></div>
+    <div class="choice-list">${tariffs.map((t) => tariffButton(t, `prepareRenewPayment(${s.id}, '${t.code}')`, subTitle(s))).join("")}</div>
   </div>`;
 }
 
 function trafficHtml(s) {
   if (!s.traffic.enabled) return subscriptionDetailHtml(s);
+  const percent = trafficPercent(s);
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="card"><p class="step">Покупка ГБ</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
-    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span><b>${rub(p.price)}</b></button>`).join("")}</div>
+    <div class="card strong"><p class="step">Покупка ГБ</p><p class="title">${subTitle(s)}</p><p class="muted">Дополнительные ГБ добавятся к этому ключу с антиглушилкой.</p><div class="traffic-card"><div class="row"><span class="small">Сейчас использовано</span><b>${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>
+    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button package-choice" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Добавить к выбранному ключу</small></span><b>${rub(p.price)}</b></button>`).join("")}</div>
   </div>`;
 }
 
 function renderBuy() {
   const container = el("view-buy");
   if (state.buyMode === "plan") {
-    container.innerHTML = `<div class="grid"><div class="card strong"><p class="step">Покупка</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p><div class="grid"><button class="button accent" onclick="selectBuyPlan('regular')">Обычная подписка</button><button class="button green" onclick="selectBuyPlan('bypass')">С антиглушилкой</button></div></div></div>`;
+    container.innerHTML = `<div class="grid"><div class="card"><p class="step">Покупка</p><p class="title">Выберите подписку</p><p class="muted">Каждая подписка создаёт отдельный ключ подключения.</p></div><div class="plan-grid">${planCard("regular")}${planCard("bypass")}</div></div>`;
     return;
   }
 
@@ -195,8 +233,8 @@ function renderBuy() {
     const tariffs = state.tariffs[state.buyPlan] || [];
     container.innerHTML = `<div class="grid">
       <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
-      <div class="card"><p class="step">Срок</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 80 ГБ в месяц."}</p></div>
-      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+      <div class="card"><p class="step">Срок</p><p class="title">${planName(state.buyPlan)}</p><p class="muted">${planTag(state.buyPlan)}. Выберите удобный срок оплаты.</p></div>
+      <div class="choice-list">${tariffs.map((t) => tariffButton(t, `prepareNewPayment('${t.code}')`, t.title)).join("")}</div>
     </div>`;
     return;
   }
@@ -205,10 +243,42 @@ function renderBuy() {
 }
 
 function paymentHtml(title) {
+  const pending = state.pendingPayment;
+  const summary = paymentSummary(pending);
   return `<div class="grid">
     <button class="button ghost" onclick="backFromPayment()">← Назад</button>
-    <div class="card strong"><p class="step">Оплата</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div></div>
+    <div class="card strong"><p class="step">Оплата</p><p class="title">${title}</p>${summary}<p class="muted">После оплаты кабинет обновится автоматически в системе. Если не увидите изменения сразу, откройте MiniApp заново.</p><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div></div>
   </div>`;
+}
+
+function planCard(plan) {
+  const t = cheapest(plan);
+  return `<button class="plan-card ${planClass(plan)}" onclick="selectBuyPlan('${plan}')">
+    <span class="mini-badge ${planClass(plan)}">${planName(plan)}</span>
+    <b>${plan === "bypass" ? "Работает при блокировках" : "Быстрый VPN на каждый день"}</b>
+    <p>${planText(plan)}</p>
+    <small>${planTag(plan)}</small>
+    ${t ? `<strong>от ${rub(t.price)}</strong>` : ""}
+  </button>`;
+}
+
+function tariffButton(t, handler, subtitle) {
+  const monthPrice = Math.round(t.price / Math.max(1, t.days / 30));
+  const badge = t.days >= 90 ? `<i class="save-badge">выгоднее</i>` : "";
+  return `<button class="choice-button tariff-choice" onclick="${handler}"><span>${tariffPeriod(t)} ${badge}<small>${subtitle}</small><small>≈ ${rub(monthPrice)} / месяц</small></span><b>${rub(t.price)}</b></button>`;
+}
+
+function paymentSummary(pending) {
+  if (!pending) return "";
+  if (pending.type === "traffic") {
+    const sub = state.subs.find((s) => s.id === pending.subscription_id);
+    const pack = state.tariffs.traffic_packages.find((p) => p.code === pending.package_code);
+    return `<div class="summary"><span>Вы покупаете</span><b>+${pack?.gb || ""} ГБ</b><small>${sub ? subTitle(sub) : "Ключ с антиглушилкой"} · ${pack ? rub(pack.price) : ""}</small></div>`;
+  }
+  const all = [...(state.tariffs.regular || []), ...(state.tariffs.bypass || [])];
+  const tariff = all.find((t) => t.code === pending.tariff_code);
+  const sub = pending.subscription_id ? state.subs.find((s) => s.id === pending.subscription_id) : null;
+  return `<div class="summary"><span>${pending.payment_target === "renew" ? "Вы продлеваете" : "Вы покупаете"}</span><b>${tariff ? tariff.title : "Подписка"}</b><small>${sub ? subTitle(sub) : "Новый ключ"}${tariff ? ` · ${tariffPeriod(tariff)} · ${rub(tariff.price)}` : ""}</small></div>`;
 }
 
 function selectBuyPlan(plan) { state.buyPlan = plan; state.buyMode = "tariff"; switchView("buy"); }
@@ -216,6 +286,11 @@ function resetBuy() { state.buyMode = "plan"; state.buyPlan = null; state.buyTar
 function openNewPurchase() { resetBuy(); switchView("buy"); }
 function openKeysList() { state.keysMode = "list"; state.selectedSubId = null; switchView("subs"); }
 function openRenewList() { state.keysMode = "renew-list"; state.selectedSubId = null; switchView("subs"); }
+function openTrafficFromHome() {
+  const sub = activeSubs().find((s) => s.plan_kind === "bypass");
+  if (sub) openTraffic(sub.id);
+  else openKeysList();
+}
 function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"; switchView("subs"); }
 function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs"); }
 function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs"); }
