@@ -16,6 +16,7 @@ const state = {
   buyPlan: null,
   buyTariffCode: null,
   pendingPayment: null,
+  currentView: "home",
 };
 
 function api(path, options = {}) {
@@ -44,28 +45,31 @@ function selectedSub() { return state.subs.find((s) => s.id === state.selectedSu
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
 
 document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => switchView(button.dataset.view));
+  button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
 
-function resetViewState(view) {
-  if (view === "subs") {
-    state.keysMode = "list";
-    state.selectedSubId = null;
-    state.pendingPayment = null;
-  }
-  if (view === "buy") {
-    state.buyMode = "plan";
-    state.buyPlan = null;
-    state.buyTariffCode = null;
-    state.pendingPayment = null;
-  }
+function resetKeysState() {
+  state.keysMode = "list";
+  state.selectedSubId = null;
+  state.pendingPayment = null;
+}
+
+function resetPurchaseState() {
+  state.buyMode = "plan";
+  state.buyPlan = null;
+  state.buyTariffCode = null;
+  state.pendingPayment = null;
 }
 
 function switchView(view, options = {}) {
-  if (!options.preserve) resetViewState(view);
+  if (options.reset) {
+    if (state.currentView === "subs" || view === "subs") resetKeysState();
+    if (state.currentView === "buy" || view === "buy") resetPurchaseState();
+  }
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   el(`view-${view}`).classList.add("active");
+  state.currentView = view;
   render();
 }
 
