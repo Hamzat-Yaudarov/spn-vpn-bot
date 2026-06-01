@@ -343,15 +343,12 @@ async function copyText(encoded) {
 
 function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
-  const url = `${happBridgeLink(text)}&embedded=1`;
-  const oldFrame = document.getElementById("happBridgeFrame");
-  if (oldFrame) oldFrame.remove();
-  const frame = document.createElement("iframe");
-  frame.id = "happBridgeFrame";
-  frame.src = url;
-  frame.style.display = "none";
-  document.body.appendChild(frame);
-  setTimeout(() => frame.remove(), 4000);
+  const url = happBridgeLink(text);
+  if (tg?.openLink) {
+    tg.openLink(url);
+  } else {
+    window.open(url, "_blank");
+  }
   navigator.clipboard.writeText(text).catch(() => {});
   showToast("Открываем Happ. Если не добавится, ключ уже скопирован.");
 }
