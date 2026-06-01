@@ -1,12 +1,13 @@
 import logging
 import asyncio
 import hashlib
+import html
 import hmac
 import json
 from pathlib import Path
 from urllib.parse import parse_qsl
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from config import (
@@ -154,6 +155,51 @@ async def miniapp_index():
 @app.get("/app/")
 async def miniapp_index_slash():
     return await miniapp_index()
+
+
+@app.get("/app/open-happ")
+async def miniapp_open_happ(url: str):
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="Invalid subscription URL")
+
+    happ_url = f"happ://add/{url}"
+    happ_url_attr = html.escape(happ_url, quote=True)
+    happ_url_json = json.dumps(happ_url)
+    url_json = json.dumps(url)
+    return HTMLResponse(f"""
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Открываем Happ</title>
+    <style>
+      * {{ box-sizing: border-box; }}
+      html, body {{ margin: 0; min-height: 100%; background: #07090d; color: #fff7e6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+      body {{ display: grid; place-items: center; padding: 22px; }}
+      .card {{ width: min(460px, 100%); padding: 22px; border: 1px solid rgba(90,184,255,.24); border-radius: 26px; background: linear-gradient(135deg, rgba(25,55,99,.58), rgba(18,76,67,.34)), #0b1118; box-shadow: 0 18px 45px rgba(0,0,0,.32); }}
+      h1 {{ margin: 0 0 8px; font-size: 25px; }}
+      p {{ margin: 0 0 16px; color: #d8cfb6; line-height: 1.45; }}
+      a, button {{ display: block; width: 100%; border: 0; border-radius: 17px; padding: 14px 16px; color: #041120; background: linear-gradient(135deg, #8bd0ff, #5ab8ff); font: inherit; font-weight: 900; text-align: center; text-decoration: none; }}
+      button {{ margin-top: 10px; color: #fff7e6; background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 1px rgba(255,255,255,.16); }}
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Открываем Happ</h1>
+      <p>Если приложение не открылось автоматически, нажмите кнопку ниже. Ключ также можно скопировать вручную.</p>
+      <a id="openHapp" href="{happ_url_attr}">Добавить ключ в Happ</a>
+      <button id="copyKey" type="button">Скопировать ключ</button>
+    </div>
+    <script>
+      const happUrl = {happ_url_json};
+      const subUrl = {url_json};
+      document.getElementById('copyKey').onclick = () => navigator.clipboard?.writeText(subUrl).catch(() => {{}});
+      setTimeout(() => {{ window.location.href = happUrl; }}, 250);
+    </script>
+  </body>
+</html>
+""")
 
 
 @app.get("/miniapp/health")

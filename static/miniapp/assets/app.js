@@ -44,6 +44,7 @@ function activeSubs() { return state.subs.filter((s) => s.status === "active"); 
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
+function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 
 function renderAvatar(user) {
   const avatar = el("userAvatar");
@@ -342,7 +343,7 @@ async function copyText(encoded) {
 
 function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
-  const url = happLink(text);
+  const url = happBridgeLink(text);
   if (tg?.openLink) {
     tg.openLink(url);
   } else {
