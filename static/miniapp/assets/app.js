@@ -123,13 +123,6 @@ function renderHome() {
         <button class="quick-card bronze" onclick="openRenewList()"><span>Продлить</span><small>Выбрать ключ</small></button>
         ${hasBypass ? `<button class="quick-card green" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ</span><small>Для антиглушилки</small></button>` : ""}
       </div>
-      <div class="card info-card">
-        <p class="title">Как выбрать тариф?</p>
-        <div class="hint-list">
-          <div><b>Обычная</b><span>5 устройств, повседневное подключение.</span></div>
-          <div><b>Антиглушилка</b><span>3 устройства, 80 ГБ в месяц для обхода блокировок.</span></div>
-        </div>
-      </div>
     </div>`;
 }
 
@@ -247,9 +240,15 @@ function resetBuy() { state.buyMode = "plan"; state.buyPlan = null; state.buyTar
 function openNewPurchase() { resetBuy(); switchView("buy", { preserve: true }); }
 function openKeysList() { state.keysMode = "list"; state.selectedSubId = null; switchView("subs", { preserve: true }); }
 function openRenewList() { state.keysMode = "renew-list"; state.selectedSubId = null; switchView("subs", { preserve: true }); }
-function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"; switchView("subs", { preserve: true }); }
-function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs", { preserve: true }); }
-function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs", { preserve: true }); }
+function showKeyMode(id, mode) {
+  state.selectedSubId = id;
+  state.keysMode = mode;
+  if (state.currentView === "subs") renderKeys();
+  else switchView("subs", { preserve: true });
+}
+function openSubDetail(id) { showKeyMode(id, "detail"); }
+function openRenew(id) { showKeyMode(id, "renew"); }
+function openTraffic(id) { showKeyMode(id, "traffic"); }
 
 function prepareNewPayment(tariffCode) {
   state.buyTariffCode = tariffCode;
@@ -314,9 +313,7 @@ async function addKeyToHapp(encoded) {
   const text = decodeURIComponent(encoded);
   await navigator.clipboard.writeText(text).catch(() => {});
   showToast("Открываем Happ. Если не добавится, ключ уже скопирован.");
-  setTimeout(() => {
-    window.location.href = `happ://add/${encodeURIComponent(text)}`;
-  }, 120);
+  window.location.assign(`happ://add/${encodeURIComponent(text)}`);
 }
 
 load();
