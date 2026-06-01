@@ -43,7 +43,7 @@ function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглуш
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
-function happLink(url) { return `happ://crypt5/${encodeURIComponent(url)}`; }
+function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 
 function renderAvatar(user) {
   const avatar = el("userAvatar");
@@ -65,7 +65,10 @@ document.addEventListener("click", (event) => {
   const subId = Number(target.dataset.subId);
   if (target.dataset.action === "renew") openRenew(subId);
   if (target.dataset.action === "traffic") openTraffic(subId);
-  if (target.dataset.action === "happ") copyKeyBeforeHapp(target.dataset.url || "");
+  if (target.dataset.action === "happ") {
+    event.preventDefault();
+    openKeyInHapp(target.dataset.url || "");
+  }
 });
 
 function resetKeysState() {
@@ -199,7 +202,7 @@ function subscriptionDetailHtml(s) {
       <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
       ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
     </div>
-    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><a class="button blue" href="${happLink(s.subscription_url)}" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</a><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <button class="button ghost" data-action="renew" data-sub-id="${s.id}">Продлить</button>
     ${s.traffic.enabled ? `<button class="button green" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
   </div>`;
@@ -337,9 +340,15 @@ async function copyText(encoded) {
   showToast("Скопировано");
 }
 
-async function copyKeyBeforeHapp(encoded) {
+function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
-  await navigator.clipboard.writeText(text).catch(() => {});
+  const url = happLink(text);
+  if (tg?.openLink) {
+    tg.openLink(url);
+  } else {
+    window.location.href = url;
+  }
+  navigator.clipboard.writeText(text).catch(() => {});
   showToast("Открываем Happ. Если не добавится, ключ уже скопирован.");
 }
 
