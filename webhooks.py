@@ -169,6 +169,7 @@ async def miniapp_me(request: Request):
         "tg_id": int(user["id"]),
         "username": db_user.get("username") if db_user else user.get("username"),
         "first_name": user.get("first_name"),
+        "photo_url": user.get("photo_url"),
     })
 
 

@@ -44,6 +44,16 @@ function activeSubs() { return state.subs.filter((s) => s.status === "active"); 
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
 
+function renderAvatar(user) {
+  const avatar = el("userAvatar");
+  const name = user?.first_name || user?.username || "Way SPN";
+  if (user?.photo_url) {
+    avatar.innerHTML = `<img src="${user.photo_url}" alt="${name}">`;
+  } else {
+    avatar.textContent = name.trim().slice(0, 1).toUpperCase() || "W";
+  }
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
@@ -96,6 +106,7 @@ async function load() {
     state.subs = subscriptions.subscriptions || [];
     state.referral = referral;
     el("userLine").textContent = me.first_name ? `Добро пожаловать, ${me.first_name}` : "Управляйте подписками в пару кликов";
+    renderAvatar(me);
     render();
   } catch (e) {
     el("userLine").textContent = "Откройте кабинет внутри Telegram";

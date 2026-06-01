@@ -29,8 +29,8 @@ body.view-home-active .hero { display: flex; }
 .hero h1, .title, .price { text-shadow: 0 2px 12px rgba(0,0,0,.62); }
 .eyebrow { margin: 0; color: #f0cf7a; font-weight: 800; text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; }
 .muted { color: var(--muted); margin: 0; line-height: 1.45; text-shadow: 0 1px 8px rgba(0,0,0,.42); }
-.orb { position: relative; width: 58px; height: 58px; border-radius: 20px; background: linear-gradient(135deg, #5ab8ff, #18c79a); filter: blur(0.2px); opacity: .96; transform: rotate(12deg); box-shadow: 0 0 0 1px rgba(255,255,255,.22), 0 12px 28px rgba(90,184,255,.18); }
-.orb::after { content: ""; position: absolute; inset: 11px; border-radius: 9px; background: #11100c; box-shadow: inset 0 0 0 1px rgba(240,207,122,.48); }
+.avatar { flex: 0 0 auto; display: grid; place-items: center; width: 64px; height: 64px; overflow: hidden; border-radius: 22px; color: #071018; background: linear-gradient(135deg, #8bd0ff, #18c79a); font-size: 25px; font-weight: 950; box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 14px 30px rgba(0,0,0,.24); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .view { display: none; animation: rise .22s ease-out; }
 .view.active { display: block; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
