@@ -16,11 +16,12 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: radial-gradient(circle at 15% 0%, rgba(70, 111, 175, .32) 0%, transparent 31%), radial-gradient(circle at 88% 8%, rgba(16, 116, 91, .3) 0%, transparent 30%), radial-gradient(circle at 48% 3%, rgba(194, 124, 45, .22) 0%, transparent 28%), linear-gradient(145deg, #050604 0%, #101116 50%, #070806 100%); color: var(--text); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .035; background-image: linear-gradient(135deg, transparent 0 43%, rgba(216,169,71,.24) 44% 45%, transparent 46% 100%), linear-gradient(45deg, transparent 0 43%, rgba(90,184,255,.2) 44% 45%, transparent 46% 100%); background-size: 54px 54px; mask-image: linear-gradient(to bottom, #000, transparent 52%); }
-body { padding: 10px 12px calc(96px + env(safe-area-inset-bottom)); }
+html { margin: 0; min-height: 100%; background: #07090d; }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; padding: 10px 12px calc(96px + env(safe-area-inset-bottom)); background: radial-gradient(circle at 14% 0%, rgba(70, 111, 175, .24) 0%, transparent 28%), radial-gradient(circle at 88% 4%, rgba(16, 116, 91, .22) 0%, transparent 30%), linear-gradient(180deg, #0b1118 0%, #080b10 34%, #07090d 100%); color: var(--text); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body::before { display: none; }
 button, input { font: inherit; }
 .shell { max-width: 560px; margin: 0 auto; }
+main { min-height: calc(100vh - 160px); min-height: calc(100dvh - 160px); }
 .hero { display: none; position: sticky; top: 8px; z-index: 4; overflow: hidden; align-items: center; justify-content: space-between; min-height: 118px; margin: 0 -8px; padding: 22px 24px; border: 1px solid rgba(90,184,255,.22); border-radius: 30px; background: linear-gradient(135deg, rgba(25, 55, 99, 0.62), rgba(18, 76, 67, 0.4)), rgba(12, 15, 20, .95); box-shadow: 0 8px 24px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.08); backdrop-filter: blur(18px); }
 body.view-home-active .hero { display: flex; }
 .hero::before, .hero::after { display: none; }
