@@ -58,6 +58,13 @@ def _buy_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+async def _has_multiple_active_visible_subscriptions(tg_id: int) -> bool:
+    subscriptions = await db.get_visible_subscriptions(tg_id)
+    now = datetime.utcnow()
+    active_count = sum(1 for subscription in subscriptions or [] if subscription.get("subscription_until") and subscription["subscription_until"] > now)
+    return active_count > 1
+
+
 async def check_and_send_notifications(bot):
     """
     Фоновая задача уведомлений:
@@ -128,11 +135,11 @@ async def _send_notifications_for_expiring(bot):
             f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
             "Продлите подписку, чтобы не потерять доступ."
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription", style="success")],
-            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
-        ])
+        keyboard = [[InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
+        if await _has_multiple_active_visible_subscriptions(tg_id):
+            keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
+        keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         if await _send_message(bot, tg_id, text, kb):
             await db.mark_notification_state_sent(tg_id, EXPIRING_NOTIFICATION_TYPE, subscription_id)
             sent += 1
@@ -236,11 +243,11 @@ async def _send_notifications_for_low_traffic(bot):
                     f"До обновления: <b>{days_to_reset} дн.</b>\n\n"
                     "Можно докупить ГБ, чтобы антиглушилка работала без пауз."
                 )
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")],
-                    [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
-                ])
+                keyboard = [[InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
+                if await _has_multiple_active_visible_subscriptions(tg_id):
+                    keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
+                keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+                kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
                 if await _send_message(bot, tg_id, text, kb):
                     await db.mark_notification_state_sent(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, subscription_id)
                     sent += 1

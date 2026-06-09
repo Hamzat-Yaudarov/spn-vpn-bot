@@ -289,6 +289,8 @@ async def run_migrations():
                 'subscription_id': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
                 'notification_type': {'type': 'TEXT', 'nullable': False},
                 'last_sent_at': {'type': 'TIMESTAMP', 'nullable': False, 'default': 'now()'},
+                'created_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
+                'updated_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
             }
 
             # ═══════════════════════════════════════════════════════════

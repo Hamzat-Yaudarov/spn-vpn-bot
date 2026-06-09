@@ -105,7 +105,7 @@ async def show_main_menu(message: Message):
         [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect", style="primary")],
         [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}", style="primary")],
         [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral", style="primary")],
-        [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
+        [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")],
     ])
 
     # Добавляем кнопку партнёрства если пользователь партнёр

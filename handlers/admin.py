@@ -4,11 +4,12 @@ import aiohttp
 import asyncio
 import html
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from config import (
@@ -18,8 +19,10 @@ from config import (
     BYPASS_SQUAD_UUID,
     DEFAULT_SQUAD_UUID,
     GB_BYTES,
+    MINIAPP_URL,
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
+    SUPPORT_URL,
 )
 import database as db
 from services.remnawave import (
@@ -34,11 +37,14 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
+ACTIVE_BROADCASTS: dict[str, dict] = {}
+
 
 class BroadcastStates(StatesGroup):
     """Состояния для рассылок сообщений"""
     waiting_for_broadcast_all = State()
     waiting_for_broadcast_no_sub = State()
+    choosing_broadcast_buttons = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -103,6 +109,182 @@ def _classify_broadcast_exception(exc: Exception) -> tuple[str, float | None]:
         return "unreachable", None
 
     return "error", None
+
+
+BROADCAST_BUTTONS = {
+    "buy_subscription": {"text": "💳 Купить / Продлить", "callback_data": "buy_subscription", "style": "success"},
+    "my_subscriptions": {"text": "🔐 Мои подписки", "callback_data": "my_subscriptions", "style": "primary"},
+    "buy_gb": {"text": "📦 Купить ГБ", "callback_data": "buy_gb", "style": "success"},
+    "miniapp": {"text": "📱 Личный кабинет", "web_app": MINIAPP_URL, "style": "primary"},
+    "how_to_connect": {"text": "📲 Инструкция", "callback_data": "how_to_connect", "style": "primary"},
+    "support": {"text": "🆘 Поддержка", "url": SUPPORT_URL, "style": "primary"},
+    "back_to_menu": {"text": "🏠 Главное меню", "callback_data": "back_to_menu", "style": "danger"},
+}
+
+BROADCAST_BUTTON_ORDER = (
+    "buy_subscription",
+    "my_subscriptions",
+    "buy_gb",
+    "miniapp",
+    "how_to_connect",
+    "support",
+    "back_to_menu",
+)
+
+
+def _make_broadcast_button(key: str) -> InlineKeyboardButton:
+    spec = BROADCAST_BUTTONS[key]
+    kwargs = {"text": spec["text"], "style": spec["style"]}
+    if "callback_data" in spec:
+        kwargs["callback_data"] = spec["callback_data"]
+    if "url" in spec:
+        kwargs["url"] = spec["url"]
+    if "web_app" in spec:
+        kwargs["web_app"] = WebAppInfo(url=spec["web_app"])
+    return InlineKeyboardButton(**kwargs)
+
+
+def _build_broadcast_user_keyboard(selected_buttons: list[str] | None) -> InlineKeyboardMarkup | None:
+    if not selected_buttons:
+        return None
+    rows = [[_make_broadcast_button(key)] for key in BROADCAST_BUTTON_ORDER if key in selected_buttons]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _build_broadcast_admin_keyboard(selected_buttons: list[str] | None) -> InlineKeyboardMarkup:
+    selected = set(selected_buttons or [])
+    rows = []
+    for key in BROADCAST_BUTTON_ORDER:
+        spec = BROADCAST_BUTTONS[key]
+        marker = "✅" if key in selected else "⬜"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{marker} {spec['text']}",
+                callback_data=f"broadcast_toggle:{key}",
+                style="primary",
+            )
+        ])
+
+    rows.extend([
+        [InlineKeyboardButton(text="❌ Без кнопок", callback_data="broadcast_no_buttons", style="danger")],
+        [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="broadcast_preview", style="primary")],
+        [InlineKeyboardButton(text="✅ Начать рассылку", callback_data="broadcast_start", style="success")],
+        [InlineKeyboardButton(text="🚫 Отменить рассылку", callback_data="broadcast_cancel", style="danger")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _broadcast_button_selection_text(selected_buttons: list[str] | None) -> str:
+    selected_labels = [BROADCAST_BUTTONS[key]["text"] for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
+    selected_text = "\n".join(f"• {label}" for label in selected_labels) if selected_labels else "• без кнопок"
+    return (
+        "🔘 <b>Выбор кнопок для рассылки</b>\n\n"
+        "Нажимай на кнопки ниже, чтобы добавить или убрать их из сообщения.\n\n"
+        f"<b>Сейчас выбрано:</b>\n{selected_text}"
+    )
+
+
+def _build_broadcast_stop_keyboard(broadcast_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⛔ Остановить рассылку", callback_data=f"broadcast_stop:{broadcast_id}", style="danger")],
+    ])
+
+
+async def _get_broadcast_users(mode: str):
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        if mode == "no_sub":
+            return await conn.fetch(
+                """
+                SELECT tg_id FROM users
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM subscriptions
+                    WHERE subscriptions.tg_id = users.tg_id
+                      AND subscriptions.subscription_until IS NOT NULL
+                      AND subscriptions.subscription_until > now() AT TIME ZONE 'UTC'
+                )
+                ORDER BY tg_id
+                """
+            )
+
+        return await conn.fetch("SELECT tg_id FROM users ORDER BY tg_id")
+
+
+async def _run_broadcast_copy(
+    bot,
+    status_message: Message,
+    users,
+    source_chat_id: int,
+    source_message_id: int,
+    reply_markup: InlineKeyboardMarkup | None,
+    mode: str,
+    broadcast_id: str,
+):
+    total_users = len(users)
+    sent_count = 0
+    error_count = 0
+    blocked_count = 0
+    unreachable_count = 0
+    rate_limited_delay = 0.3
+    mode_text = "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
+
+    await status_message.answer(
+        f"📤 <b>Начинаю рассылку {mode_text}: {total_users} получателей...</b>\n\n"
+        "<i>Это может занять некоторое время...</i>",
+        reply_markup=_build_broadcast_stop_keyboard(broadcast_id),
+    )
+
+    stopped = False
+    for user_record in users:
+        if ACTIVE_BROADCASTS.get(broadcast_id, {}).get("stop_requested"):
+            stopped = True
+            logger.info(f"Broadcast {broadcast_id} stopped by admin before next recipient")
+            break
+
+        user_id = user_record['tg_id']
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=source_chat_id,
+                message_id=source_message_id,
+                reply_markup=reply_markup,
+            )
+            sent_count += 1
+            logger.info(f"Broadcast message copied to user {user_id} ({mode})")
+            rate_limited_delay = 0.3
+        except Exception as e:
+            status, retry_after = _classify_broadcast_exception(e)
+            if status == "blocked":
+                blocked_count += 1
+                logger.warning(f"User {user_id} has blocked bot or deactivated account")
+            elif status == "unreachable":
+                unreachable_count += 1
+                logger.info(f"User {user_id} is unreachable for broadcast: {str(e)[:100]}")
+            elif status == "rate_limited":
+                rate_limited_delay = min(max(retry_after or rate_limited_delay * 1.5, 0.5), 5.0)
+                logger.warning(f"Rate limited during broadcast for user {user_id}. New delay: {rate_limited_delay}s")
+                await asyncio.sleep(rate_limited_delay)
+                continue
+            else:
+                error_count += 1
+                logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
+
+        await asyncio.sleep(rate_limited_delay)
+
+    title = "⛔ <b>Рассылка остановлена!</b>" if stopped else "✅ <b>Рассылка завершена!</b>"
+    await status_message.answer(
+        f"{title}\n\n"
+        "📊 <b>Статистика:</b>\n"
+        f"• ✅ Отправлено: {sent_count}/{total_users}\n"
+        f"• 🚫 Заблокировано: {blocked_count}\n"
+        f"• 📴 Недоступно: {unreachable_count}\n"
+        f"• ❌ Ошибок: {error_count}"
+    )
+
+    logger.info(
+        f"Admin broadcast completed ({mode}, stopped={stopped}): sent={sent_count}, blocked={blocked_count}, "
+        f"unreachable={unreachable_count}, errors={error_count}"
+    )
 
 
 def _normalize_tracking_code(value: str) -> str:
@@ -894,7 +1076,7 @@ async def admin_broadcast_all(message: Message, state: FSMContext):
         "• Текст + фото\n"
         "• Текст + видео\n"
         "• Любая комбинация\n\n"
-        "<i>Я скопирую это сообщение всем пользователям</i>"
+        "<i>После этого я предложу выбрать кнопки для сообщения</i>"
     )
     logger.info(f"Admin {admin_id} started /all_sms broadcast mode")
 
@@ -909,77 +1091,17 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    try:
-        # Получаем всех пользователей из БД
-        pool = await db.get_pool()
-        async with pool.acquire() as conn:
-            users = await conn.fetch("SELECT tg_id FROM users ORDER BY tg_id")
-
-        if not users:
-            await message.answer("❌ В БД нет пользователей")
-            logger.warning(f"Admin {admin_id} /all_sms - no users found")
-            await state.clear()
-            return
-
-        total_users = len(users)
-        sent_count = 0
-        error_count = 0
-        blocked_count = 0
-        unreachable_count = 0
-        rate_limited_delay = 0.3
-
-        await message.answer(
-            f"📤 <b>Начинаю рассылку всем {total_users} пользователям...</b>\n\n"
-            f"<i>Это может занять некоторое время...</i>"
-        )
-
-        # Копируем сообщение каждому пользователю с rate limiting
-        for user_record in users:
-            user_id = user_record['tg_id']
-            try:
-                await message.bot.copy_message(
-                    chat_id=user_id,
-                    from_chat_id=message.chat.id,
-                    message_id=message.message_id
-                )
-                sent_count += 1
-                logger.info(f"Broadcast message copied to user {user_id}")
-                rate_limited_delay = 0.3
-            except Exception as e:
-                status, retry_after = _classify_broadcast_exception(e)
-                if status == "blocked":
-                    blocked_count += 1
-                    logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                elif status == "unreachable":
-                    unreachable_count += 1
-                    logger.info(f"User {user_id} is unreachable for broadcast: {str(e)[:100]}")
-                elif status == "rate_limited":
-                    rate_limited_delay = min(max(retry_after or rate_limited_delay * 1.5, 0.5), 5.0)
-                    logger.warning(f"Rate limited during broadcast for user {user_id}. New delay: {rate_limited_delay}s")
-                    await asyncio.sleep(rate_limited_delay)
-                    continue
-                else:
-                    error_count += 1
-                    logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
-
-            await asyncio.sleep(rate_limited_delay)
-
-        await message.answer(
-            f"✅ <b>Рассылка завершена!</b>\n\n"
-            f"📊 <b>Статистика:</b>\n"
-            f"• ✅ Отправлено: {sent_count}/{total_users}\n"
-            f"• 🚫 Заблокировано: {blocked_count}\n"
-            f"• 📴 Недоступно: {unreachable_count}\n"
-            f"• ❌ Ошибок: {error_count}"
-        )
-
-        logger.info(f"Admin {admin_id} completed /all_sms broadcast: sent={sent_count}, blocked={blocked_count}, unreachable={unreachable_count}, errors={error_count}")
-
-    except Exception as e:
-        logger.error(f"Broadcast all error: {e}", exc_info=True)
-        await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
-    finally:
-        await state.clear()
+    await state.update_data(
+        broadcast_mode="all",
+        source_chat_id=message.chat.id,
+        source_message_id=message.message_id,
+        selected_buttons=[],
+    )
+    await state.set_state(BroadcastStates.choosing_broadcast_buttons)
+    await message.answer(
+        _broadcast_button_selection_text([]),
+        reply_markup=_build_broadcast_admin_keyboard([]),
+    )
 
 
 @router.message(Command("not_sub_sms"))
@@ -1000,7 +1122,7 @@ async def admin_broadcast_no_subscription(message: Message, state: FSMContext):
         "• Текст + фото\n"
         "• Текст + видео\n"
         "• Любая комбинация\n\n"
-        "<i>Я скопирую это сообщение всем пользователям без активной подписки</i>"
+        "<i>После этого я предложу выбрать кнопки для сообщения</i>"
     )
     logger.info(f"Admin {admin_id} started /not_sub_sms broadcast mode")
 
@@ -1015,85 +1137,184 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    try:
-        # Получаем пользователей БЕЗ активной подписки
-        pool = await db.get_pool()
-        async with pool.acquire() as conn:
-            users = await conn.fetch(
-                """
-                SELECT tg_id FROM users
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM subscriptions
-                    WHERE subscriptions.tg_id = users.tg_id
-                      AND subscriptions.subscription_until IS NOT NULL
-                      AND subscriptions.subscription_until > now() AT TIME ZONE 'UTC'
-                )
-                ORDER BY tg_id
-                """
-            )
+    await state.update_data(
+        broadcast_mode="no_sub",
+        source_chat_id=message.chat.id,
+        source_message_id=message.message_id,
+        selected_buttons=[],
+    )
+    await state.set_state(BroadcastStates.choosing_broadcast_buttons)
+    await message.answer(
+        _broadcast_button_selection_text([]),
+        reply_markup=_build_broadcast_admin_keyboard([]),
+    )
 
+
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data.startswith("broadcast_toggle:"))
+async def toggle_broadcast_button(callback: CallbackQuery, state: FSMContext):
+    admin_id = callback.from_user.id
+    if not is_admin(admin_id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    key = callback.data.split(":", 1)[1]
+    if key not in BROADCAST_BUTTONS:
+        await callback.answer("Неизвестная кнопка", show_alert=True)
+        return
+
+    data = await state.get_data()
+    selected_buttons = list(data.get("selected_buttons") or [])
+    if key in selected_buttons:
+        selected_buttons.remove(key)
+    else:
+        selected_buttons.append(key)
+
+    selected_buttons = [button_key for button_key in BROADCAST_BUTTON_ORDER if button_key in selected_buttons]
+    await state.update_data(selected_buttons=selected_buttons)
+    await callback.message.edit_text(
+        _broadcast_button_selection_text(selected_buttons),
+        reply_markup=_build_broadcast_admin_keyboard(selected_buttons),
+    )
+    await callback.answer()
+
+
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_no_buttons")
+async def clear_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    if not data.get("selected_buttons"):
+        await callback.answer("Кнопок уже нет")
+        return
+
+    await state.update_data(selected_buttons=[])
+    await callback.message.edit_text(
+        _broadcast_button_selection_text([]),
+        reply_markup=_build_broadcast_admin_keyboard([]),
+    )
+    await callback.answer("Кнопки убраны")
+
+
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_preview")
+async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    source_chat_id = data.get("source_chat_id")
+    source_message_id = data.get("source_message_id")
+    selected_buttons = data.get("selected_buttons") or []
+    if not source_chat_id or not source_message_id:
+        await callback.answer("Исходное сообщение не найдено", show_alert=True)
+        await state.clear()
+        return
+
+    try:
+        await callback.bot.copy_message(
+            chat_id=callback.from_user.id,
+            from_chat_id=source_chat_id,
+            message_id=source_message_id,
+            reply_markup=_build_broadcast_user_keyboard(selected_buttons),
+        )
+        await callback.answer("Предпросмотр отправлен")
+    except Exception as e:
+        logger.error(f"Broadcast preview error: {e}", exc_info=True)
+        await callback.answer(f"Ошибка предпросмотра: {str(e)[:80]}", show_alert=True)
+
+
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_cancel")
+async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    await state.clear()
+    await callback.message.edit_text("🚫 <b>Рассылка отменена</b>")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("broadcast_stop:"))
+async def stop_active_broadcast(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        return
+
+    broadcast_id = callback.data.split(":", 1)[1]
+    broadcast = ACTIVE_BROADCASTS.get(broadcast_id)
+    if not broadcast:
+        await callback.answer("Эта рассылка уже завершена", show_alert=True)
+        return
+
+    if broadcast.get("stop_requested"):
+        await callback.answer("Остановка уже запрошена")
+        return
+
+    broadcast["stop_requested"] = True
+    await callback.message.edit_text(
+        "⛔ <b>Остановка запрошена</b>\n\n"
+        "Рассылка остановится перед следующим получателем."
+    )
+    await callback.answer("Останавливаю рассылку")
+
+
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_start")
+async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
+    admin_id = callback.from_user.id
+    if not is_admin(admin_id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    mode = data.get("broadcast_mode")
+    source_chat_id = data.get("source_chat_id")
+    source_message_id = data.get("source_message_id")
+    selected_buttons = data.get("selected_buttons") or []
+    if mode not in {"all", "no_sub"} or not source_chat_id or not source_message_id:
+        await callback.answer("Данные рассылки устарели", show_alert=True)
+        await state.clear()
+        return
+
+    try:
+        users = await _get_broadcast_users(mode)
         if not users:
-            await message.answer("❌ Не найдено пользователей без подписки")
-            logger.info(f"Admin {admin_id} /not_sub_sms - no users without subscription found")
+            text = "❌ В БД нет пользователей" if mode == "all" else "❌ Не найдено пользователей без подписки"
+            await callback.message.answer(text)
             await state.clear()
+            await callback.answer()
             return
 
-        total_users = len(users)
-        sent_count = 0
-        error_count = 0
-        blocked_count = 0
-        unreachable_count = 0
-        rate_limited_delay = 0.3
-
-        await message.answer(
-            f"📤 <b>Начинаю рассылку {total_users} пользователям без подписки...</b>\n\n"
-            f"<i>Это может занять некоторое время...</i>"
+        await callback.message.edit_text("✅ <b>Рассылка подтверждена</b>")
+        await callback.answer("Запускаю рассылку")
+        broadcast_id = uuid.uuid4().hex
+        ACTIVE_BROADCASTS[broadcast_id] = {
+            "admin_id": admin_id,
+            "mode": mode,
+            "stop_requested": False,
+            "started_at": datetime.utcnow(),
+        }
+        await _run_broadcast_copy(
+            callback.bot,
+            callback.message,
+            users,
+            source_chat_id,
+            source_message_id,
+            _build_broadcast_user_keyboard(selected_buttons),
+            mode,
+            broadcast_id,
         )
-
-        # Копируем сообщение каждому пользователю с rate limiting
-        for user_record in users:
-            user_id = user_record['tg_id']
-            try:
-                await message.bot.copy_message(
-                    chat_id=user_id,
-                    from_chat_id=message.chat.id,
-                    message_id=message.message_id
-                )
-                sent_count += 1
-                logger.info(f"Broadcast message copied to user {user_id} (no subscription)")
-                rate_limited_delay = 0.3
-            except Exception as e:
-                status, retry_after = _classify_broadcast_exception(e)
-                if status == "blocked":
-                    blocked_count += 1
-                    logger.warning(f"User {user_id} has blocked bot or deactivated account")
-                elif status == "unreachable":
-                    unreachable_count += 1
-                    logger.info(f"User {user_id} is unreachable for broadcast: {str(e)[:100]}")
-                elif status == "rate_limited":
-                    rate_limited_delay = min(max(retry_after or rate_limited_delay * 1.5, 0.5), 5.0)
-                    logger.warning(f"Rate limited during broadcast for user {user_id}. New delay: {rate_limited_delay}s")
-                    await asyncio.sleep(rate_limited_delay)
-                    continue
-                else:
-                    error_count += 1
-                    logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
-
-            await asyncio.sleep(rate_limited_delay)
-
-        await message.answer(
-            f"✅ <b>Рассылка завершена!</b>\n\n"
-            f"📊 <b>Статистика:</b>\n"
-            f"• ✅ Отправлено: {sent_count}/{total_users}\n"
-            f"• 🚫 Заблокировано: {blocked_count}\n"
-            f"• 📴 Недоступно: {unreachable_count}\n"
-            f"• ❌ Ошибок: {error_count}"
-        )
-
-        logger.info(f"Admin {admin_id} completed /not_sub_sms broadcast: sent={sent_count}, blocked={blocked_count}, unreachable={unreachable_count}, errors={error_count}")
-
+        logger.info(f"Admin {admin_id} completed selected broadcast mode={mode} buttons={selected_buttons}")
     except Exception as e:
-        logger.error(f"Broadcast no subscription error: {e}", exc_info=True)
-        await message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
+        logger.error(f"Selected broadcast error: {e}", exc_info=True)
+        await callback.message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
     finally:
+        if 'broadcast_id' in locals():
+            ACTIVE_BROADCASTS.pop(broadcast_id, None)
         await state.clear()
