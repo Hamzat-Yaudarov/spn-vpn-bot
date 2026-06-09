@@ -72,8 +72,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     # Проверяем принял ли пользователь условия
     if not await db.has_accepted_terms(tg_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять", callback_data="accept_terms")],
-            [InlineKeyboardButton(text="📄 Прочитать соглашение", url=TELEGRAPH_AGREEMENT_URL)]
+            [InlineKeyboardButton(text="✅ Принять", callback_data="accept_terms", style="success")],
+            [InlineKeyboardButton(text="📄 Прочитать соглашение", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
         ])
         await message.answer(
             "Перед использованием бота необходимо ознакомиться и принять пользовательское соглашение.",
@@ -90,29 +90,29 @@ async def show_main_menu(message: Message):
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
-        [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL))],
+        [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
         [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
     visible_subscriptions = await db.get_visible_subscriptions(tg_id)
     if visible_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")])
+        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
 
     active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
     if active_bypass_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb")])
+        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")])
 
     keyboard.extend([
-        [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect")],
-        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}")],
-        [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral")],
+        [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect", style="primary")],
+        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}", style="primary")],
+        [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral", style="primary")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
     ])
 
     # Добавляем кнопку партнёрства если пользователь партнёр
     if is_partner:
-        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership")])
+        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
 
-    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL)])
+    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
 
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 

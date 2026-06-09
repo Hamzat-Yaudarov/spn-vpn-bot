@@ -1,374 +1,270 @@
-import logging
-import logging
 import asyncio
-import aiohttp
+import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-import database as db
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+import aiohttp
 from aiogram.exceptions import TelegramAPIError
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+import database as db
+from config import GB_BYTES
 from services.remnawave import remnawave_get_user_info
 
 
 logger = logging.getLogger(__name__)
 
-# Часовой пояс MSK (UTC+3)
 MSK = ZoneInfo("Europe/Moscow")
+TELEGRAM_RATE_LIMIT = 0.1
 
-# Лимиты Telegram бота
-TELEGRAM_RATE_LIMIT = 0.1  # Одно сообщение в 100ms (10 сообщений в секунду)
-BATCH_SIZE = 50  # Обрабатываем по 50 пользователей за раз
+EXPIRING_NOTIFICATION_TYPE = "subscription_expiring"
+EXPIRED_NOTIFICATION_TYPE = "expired_or_no_subscription"
+LOW_TRAFFIC_NOTIFICATION_TYPE = "low_bypass_traffic"
+
+EXPIRING_COOLDOWN_HOURS = 20
+EXPIRED_COOLDOWN_HOURS = 86
+LOW_TRAFFIC_COOLDOWN_HOURS = 36
 
 
 def ensure_utc_aware(dt):
-    """
-    Убедиться что datetime имеет timezone UTC.
-    Если это naive datetime, добавляем UTC.
-    Если это datetime с другим timezone, конвертируем в UTC.
-    """
-    if dt is None:
+    if dt is None or not isinstance(dt, datetime):
         return None
-
-    if not isinstance(dt, datetime):
-        return None
-
     if dt.tzinfo is None:
-        # Наивный datetime, предполагаем что это UTC
         return dt.replace(tzinfo=timezone.utc)
-    elif dt.tzinfo != timezone.utc:
-        # Конвертируем в UTC
-        return dt.astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)
 
-    return dt
+
+def _format_time_left(delta: timedelta) -> str:
+    total_seconds = max(0, int(delta.total_seconds()))
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    if days > 0:
+        return f"{days} дн. {hours} ч."
+    return f"{hours} ч. {minutes} мин."
+
+
+def _subscription_name(subscription) -> str:
+    plan_kind = subscription.get("plan_kind") or "regular"
+    type_index = subscription.get("type_index") or subscription.get("slot_number")
+    title = "С антиглушилкой" if plan_kind == "bypass" else "Обычная"
+    return f"{title} #{type_index}"
+
+
+def _buy_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Купить / Продлить", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+    ])
 
 
 async def check_and_send_notifications(bot):
     """
-    Главная фоновая задача для отправки уведомлений по расписанию:
-    - 10:00 MSK: пользователи с <3d до конца подписки
-    - 16:00 MSK: пользователи у которых подписка уже закончилась
-    - 20:00 MSK: пользователи с <3d до конца подписки
+    Фоновая задача уведомлений:
+    - подписка истекает: ежедневно в 19:00 МСК, если осталось <3 дней;
+    - мало ГБ: раз в 36 часов, если осталось <10 ГБ и до обновления >8 дней;
+    - нет активной подписки/закончилась: раз в 86 часов.
     """
     logger.info("✅ Scheduled notification service started")
-    
+    last_expiring_run_date = None
+    last_periodic_check_at = None
+
     try:
         while True:
             now_msk = datetime.now(MSK)
-            hour = now_msk.hour
-            minute = now_msk.minute
-            
-            # Проверяем каждое из трёх времён
-            if hour == 10 and minute == 0:
-                logger.info("⏰ Scheduled check: 10:00 MSK - Users with <3d left")
-                try:
-                    await _send_notifications_for_expiring(bot)
-                except Exception as e:
-                    logger.error(f"Error in 10:00 check: {e}", exc_info=True)
-                # Ждём минуту чтобы не повторить
+
+            if now_msk.hour == 19 and now_msk.minute == 0 and last_expiring_run_date != now_msk.date():
+                last_expiring_run_date = now_msk.date()
+                logger.info("⏰ Scheduled check: 19:00 MSK - expiring subscriptions")
+                await _safe_run(_send_notifications_for_expiring, bot)
                 await asyncio.sleep(60)
-                
-            elif hour == 16 and minute == 0:
-                logger.info("⏰ Scheduled check: 16:00 MSK - Users with expired subscriptions")
-                try:
-                    await _send_notifications_for_expired(bot)
-                except Exception as e:
-                    logger.error(f"Error in 16:00 check: {e}", exc_info=True)
-                # Ждём минуту чтобы не повторить
-                await asyncio.sleep(60)
-                
-            elif hour == 20 and minute == 0:
-                logger.info("⏰ Scheduled check: 20:00 MSK - Users with <3d left")
-                try:
-                    await _send_notifications_for_expiring(bot)
-                except Exception as e:
-                    logger.error(f"Error in 20:00 check: {e}", exc_info=True)
-                # Ждём минуту чтобы не повторить
-                await asyncio.sleep(60)
-            
-            # Проверяем каждые 30 секунд (не будем крутиться вечно в цикле)
+
+            now_utc = datetime.utcnow()
+            if not last_periodic_check_at or now_utc - last_periodic_check_at >= timedelta(hours=1):
+                last_periodic_check_at = now_utc
+                await _safe_run(_send_notifications_for_low_traffic, bot)
+                await _safe_run(_send_notifications_for_expired, bot)
+
             await asyncio.sleep(30)
-            
     except asyncio.CancelledError:
         logger.info("Scheduled notification service shut down gracefully")
         raise
 
 
-async def _send_notifications_for_expiring(bot):
-    """
-    Найти и отправить уведомления пользователям у которых до конца подписки <3d
-    Информация берётся прямо из Remnawave API для точности
-    Соблюдает лимиты Telegram API
-    """
+async def _safe_run(func, bot):
     try:
-        logger.info("🔍 Searching for users with <3d left (checking Remnawave)...")
-
-        subscriptions = await db.db_execute(
-            """
-            SELECT id, tg_id, slot_number, remnawave_uuid
-            FROM subscriptions
-            WHERE remnawave_uuid IS NOT NULL
-            ORDER BY tg_id ASC, slot_number ASC
-            """,
-            fetch_all=True
-        )
-
-        if not subscriptions:
-            logger.info("No users found with Remnawave UUID")
-            return
-
-        logger.info(f"📤 Found {len(subscriptions)} subscriptions with Remnawave UUID, checking their status...")
-
-        # Обрабатываем пользователей батчами с соблюдением rate limits
-        success_count = 0
-        error_count = 0
-        users_to_notify = []
-
-        # Сначала получаем информацию из Remnawave для всех пользователей
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            now = datetime.now(timezone.utc)
-
-            for subscription in subscriptions:
-                try:
-                    tg_id = subscription['tg_id']
-                    remnawave_uuid = subscription['remnawave_uuid']
-
-                    # Получаем информацию из Remnawave
-                    user_info = await remnawave_get_user_info(session, remnawave_uuid)
-
-                    if not user_info or 'expireAt' not in user_info:
-                        logger.debug(f"Could not get Remnawave info for user {tg_id}")
-                        continue
-
-                    # Парсим дату окончания подписки из Remnawave
-                    expire_at_str = user_info['expireAt']
-                    expire_at = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-                    expire_at = ensure_utc_aware(expire_at)
-
-                    # Проверяем есть ли <3d до конца подписки
-                    time_left = expire_at - now
-
-                    # Если подписка активна И закончится в ближайшие 3 дня
-                    if time_left.total_seconds() > 0 and time_left.total_seconds() <= 259200:  # 259200 = 72 hours = 3 days
-                        users_to_notify.append({
-                            'tg_id': tg_id,
-                            'slot_number': subscription['slot_number'],
-                            'expire_at': expire_at,
-                            'time_left': time_left
-                        })
-
-                except Exception as e:
-                    logger.warning(f"Error checking Remnawave info for subscription {subscription.get('id')}: {e}")
-                    error_count += 1
-
-        if not users_to_notify:
-            logger.info("No users found with <3d left in Remnawave")
-            return
-
-        logger.info(f"📤 Found {len(users_to_notify)} users with <3d left, sending notifications...")
-
-        # Отправляем уведомления
-        for i, user_data in enumerate(users_to_notify):
-            try:
-                tg_id = user_data['tg_id']
-                slot_number = user_data['slot_number']
-                time_left = user_data['time_left']
-
-                days_left = time_left.days
-                hours_left = (time_left.seconds // 3600)
-                minutes_left = (time_left.seconds % 3600) // 60
-
-                # Формируем сообщение
-                if days_left > 0:
-                    time_str = f"{days_left} дн. {hours_left} ч."
-                else:
-                    time_str = f"{hours_left} ч. {minutes_left} мин."
-
-                text = (
-                    f"⏰ <b>Подписка #{slot_number} скоро закончится!</b>\n\n"
-                    f"Осталось: <b>{time_str}</b>\n\n"
-                    "Продлите подписку, чтобы не потерять доступ к быстрой и безопасной сети!"
-                )
-
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
-                ])
-
-                # Отправляем сообщение
-                await bot.send_message(tg_id, text, reply_markup=kb)
-                success_count += 1
-                logger.debug(f"✅ Notification sent to user {tg_id} ({days_left}d {hours_left}h left from Remnawave)")
-
-            except TelegramAPIError as e:
-                if "429" in str(e) or "Too Many Requests" in str(e):
-                    # Если получили 429, ждём перед тем как продолжить
-                    logger.warning(f"🚫 Rate limited! Waiting before continuing...")
-                    await asyncio.sleep(5)
-                    error_count += 1
-                elif "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-                    # Бот был заблокирован или аккаунт деактивирован - не логируем как ошибку
-                    logger.debug(f"User {tg_id} blocked the bot or deactivated account")
-                else:
-                    logger.error(f"Failed to send notification to user {tg_id}: {e}")
-                    error_count += 1
-            except Exception as e:
-                logger.error(f"Unexpected error sending notification to user {user_data.get('tg_id')}: {e}")
-                error_count += 1
-
-            # Соблюдаем rate limit между сообщениями
-            if i < len(users_to_notify) - 1:  # Не ждём после последнего сообщения
-                await asyncio.sleep(TELEGRAM_RATE_LIMIT)
-
-        logger.info(f"✅ Expiry notification batch complete: {success_count} sent, {error_count} errors")
-
+        await func(bot)
     except Exception as e:
-        logger.error(f"Error in _send_notifications_for_expiring: {e}", exc_info=True)
+        logger.error("Notification task %s failed: %s", func.__name__, e, exc_info=True)
+
+
+async def _send_notifications_for_expiring(bot):
+    now = datetime.now(timezone.utc)
+    subscriptions = await db.db_execute(
+        """
+        SELECT id, tg_id, slot_number, type_index, plan_kind, subscription_until
+        FROM subscriptions
+        WHERE remnawave_uuid IS NOT NULL
+          AND subscription_until IS NOT NULL
+          AND subscription_until > $1
+          AND subscription_until <= $2
+        ORDER BY tg_id ASC, subscription_until ASC
+        """,
+        (now.replace(tzinfo=None), (now + timedelta(days=3)).replace(tzinfo=None)),
+        fetch_all=True,
+    )
+
+    sent = 0
+    for i, subscription in enumerate(subscriptions or []):
+        tg_id = subscription["tg_id"]
+        subscription_id = subscription["id"]
+        if not await db.can_send_notification(tg_id, EXPIRING_NOTIFICATION_TYPE, EXPIRING_COOLDOWN_HOURS, subscription_id):
+            continue
+
+        expire_at = ensure_utc_aware(subscription["subscription_until"])
+        time_left = expire_at - now
+        text = (
+            f"⏰ <b>{_subscription_name(subscription)} скоро закончится!</b>\n\n"
+            f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
+            "Продлите подписку, чтобы не потерять доступ."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription", style="success")],
+            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        ])
+        if await _send_message(bot, tg_id, text, kb):
+            await db.mark_notification_state_sent(tg_id, EXPIRING_NOTIFICATION_TYPE, subscription_id)
+            sent += 1
+        if i < len(subscriptions) - 1:
+            await asyncio.sleep(TELEGRAM_RATE_LIMIT)
+
+    logger.info("✅ Expiring notification batch complete: %s sent", sent)
 
 
 async def _send_notifications_for_expired(bot):
-    """
-    Найти и отправить уведомления пользователям у которых подписка уже закончилась
-    Информация берётся прямо из Remnawave API для точности
-    Соблюдает лимиты Telegram API
-    """
-    try:
-        logger.info("🔍 Searching for users with expired subscriptions (checking Remnawave)...")
+    users = await db.db_execute("SELECT tg_id FROM users ORDER BY tg_id ASC", fetch_all=True)
+    now = datetime.utcnow()
+    sent = 0
 
-        all_users = await db.db_execute(
-            """
-            SELECT tg_id FROM users ORDER BY tg_id ASC
-            """,
-            fetch_all=True
+    for i, user in enumerate(users or []):
+        tg_id = user["tg_id"]
+        subscriptions = await db.get_user_subscriptions(tg_id)
+        has_active = any(
+            sub.get("subscription_until") and sub["subscription_until"] > now
+            for sub in subscriptions
         )
+        if has_active:
+            continue
+        if not await db.can_send_notification(tg_id, EXPIRED_NOTIFICATION_TYPE, EXPIRED_COOLDOWN_HOURS):
+            continue
 
-        if not all_users:
-            logger.info("No users found in database")
-            return
+        expired_dates = [
+            sub["subscription_until"] for sub in subscriptions
+            if sub.get("subscription_until") and sub["subscription_until"] <= now
+        ]
+        if expired_dates:
+            last_expired_at = max(expired_dates)
+            days_expired = max(0, (now - last_expired_at).days)
+            text = (
+                "❌ <b>Ваша подписка закончилась!</b>\n\n"
+                f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
+                "Продлите подписку, чтобы вернуть доступ."
+            )
+        else:
+            text = (
+                "❌ <b>У вас нет активной подписки!</b>\n\n"
+                "Приобретите подписку, чтобы получить доступ к быстрой и безопасной сети."
+            )
 
-        logger.info(f"📤 Found {len(all_users)} users in database, checking their subscription status in Remnawave...")
+        if await _send_message(bot, tg_id, text, _buy_keyboard()):
+            await db.mark_notification_state_sent(tg_id, EXPIRED_NOTIFICATION_TYPE)
+            sent += 1
+        if i < len(users) - 1:
+            await asyncio.sleep(TELEGRAM_RATE_LIMIT)
 
-        # Обрабатываем пользователей батчами с соблюдением rate limits
-        success_count = 0
-        error_count = 0
-        users_to_notify = []
+    logger.info("✅ Expired/no-sub notification batch complete: %s sent", sent)
 
-        # Сначала получаем информацию из Remnawave для пользователей с uuid
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            now = datetime.now(timezone.utc)
 
-            for user in all_users:
-                try:
-                    tg_id = user['tg_id']
-                    subscriptions = await db.get_user_subscriptions(tg_id)
+async def _send_notifications_for_low_traffic(bot):
+    now = datetime.utcnow()
+    subscriptions = await db.db_execute(
+        """
+        SELECT id, tg_id, slot_number, type_index, plan_kind, remnawave_uuid,
+               subscription_until, current_period_limit_bytes, traffic_reset_at
+        FROM subscriptions
+        WHERE plan_kind = 'bypass'
+          AND remnawave_uuid IS NOT NULL
+          AND subscription_until IS NOT NULL
+          AND subscription_until > $1
+          AND current_period_limit_bytes > 0
+          AND traffic_reset_at IS NOT NULL
+          AND traffic_reset_at > $2
+        ORDER BY tg_id ASC, id ASC
+        """,
+        (now, now + timedelta(days=8)),
+        fetch_all=True,
+    )
 
-                    has_active_subscription = False
-                    message_type = None
-                    days_expired = None
+    if not subscriptions:
+        return
 
-                    for subscription in subscriptions:
-                        remnawave_uuid = subscription.get('remnawave_uuid')
-                        if not remnawave_uuid:
-                            continue
-
-                        user_info = await remnawave_get_user_info(session, remnawave_uuid)
-                        if not user_info or 'expireAt' not in user_info:
-                            continue
-
-                        expire_at_str = user_info['expireAt']
-                        expire_at = datetime.fromisoformat(expire_at_str.replace('Z', '+00:00'))
-                        expire_at = ensure_utc_aware(expire_at)
-
-                        if expire_at > now:
-                            has_active_subscription = True
-                            break
-
-                        expired_days = (now - expire_at).days
-                        if days_expired is None or expired_days < days_expired:
-                            days_expired = expired_days
-                            message_type = "expired"
-
-                    if not subscriptions:
-                        message_type = "no_subscription"
-                    elif not has_active_subscription and message_type is None:
-                        message_type = "no_subscription"
-
-                    # Если подписка неактивна, добавляем в список для уведомления
-                    if not has_active_subscription:
-                        users_to_notify.append({
-                            'tg_id': tg_id,
-                            'message_type': message_type,
-                            'days_expired': days_expired
-                        })
-
-                except Exception as e:
-                    logger.warning(f"Error checking Remnawave info for user {user.get('tg_id')}: {e}")
-                    error_count += 1
-
-        if not users_to_notify:
-            logger.info("No users with expired/no subscriptions found in Remnawave")
-            return
-
-        logger.info(f"📤 Found {len(users_to_notify)} users with expired/no subscriptions, sending notifications...")
-
-        # Отправляем уведомления
-        for i, user_data in enumerate(users_to_notify):
+    sent = 0
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        for i, subscription in enumerate(subscriptions):
             try:
-                tg_id = user_data['tg_id']
-                message_type = user_data['message_type']
-                days_expired = user_data['days_expired']
+                tg_id = subscription["tg_id"]
+                subscription_id = subscription["id"]
+                if not await db.can_send_notification(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, LOW_TRAFFIC_COOLDOWN_HOURS, subscription_id):
+                    continue
 
-                # Формируем сообщение в зависимости от типа
-                if message_type == "no_subscription":
-                    # Пользователь никогда не имел подписку
-                    text = (
-                        "❌ <b>У вас нет активной подписки!</b>\n\n"
-                        "Приобретите подписку, чтобы получить доступ к быстрой и безопасной сети!"
-                    )
-                    log_msg = "no subscription"
-                else:
-                    # Пользователь имел подписку, но она закончилась
-                    text = (
-                        "❌ <b>Ваша подписка закончилась!</b>\n\n"
-                        f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
-                        "Продлите подписку, чтобы вернуть доступ к быстрой и безопасной сети!"
-                    )
-                    log_msg = f"expired {days_expired}d ago"
+                user_info = await remnawave_get_user_info(session, subscription["remnawave_uuid"])
+                used_bytes = ((user_info or {}).get("userTraffic") or {}).get("usedTrafficBytes") or 0
+                limit_bytes = subscription.get("current_period_limit_bytes") or 0
+                remaining_bytes = max(0, limit_bytes - used_bytes)
+                if remaining_bytes >= 10 * GB_BYTES:
+                    continue
 
+                reset_at = subscription["traffic_reset_at"]
+                days_to_reset = max(0, (reset_at - now).days)
+                text = (
+                    f"📦 <b>Заканчиваются ГБ антиглушилки</b>\n\n"
+                    f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
+                    f"Осталось: <b>{remaining_bytes / GB_BYTES:.1f} ГБ</b>\n"
+                    f"До обновления: <b>{days_to_reset} дн.</b>\n\n"
+                    "Можно докупить ГБ, чтобы антиглушилка работала без пауз."
+                )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
+                    [InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")],
+                    [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
                 ])
-
-                # Отправляем сообщение
-                await bot.send_message(tg_id, text, reply_markup=kb)
-                success_count += 1
-                logger.debug(f"✅ Notification sent to user {tg_id} ({log_msg}) from Remnawave")
-
-            except TelegramAPIError as e:
-                if "429" in str(e) or "Too Many Requests" in str(e):
-                    # Если получили 429, ждём перед тем как продолжить
-                    logger.warning(f"🚫 Rate limited! Waiting before continuing...")
-                    await asyncio.sleep(5)
-                    error_count += 1
-                elif "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-                    # Бот был заблокирован или аккаунт деактивирован - не логируем как ошибку
-                    logger.debug(f"User {user_data.get('tg_id')} blocked the bot or deactivated account")
-                else:
-                    logger.error(f"Failed to send notification to user {user_data.get('tg_id')}: {e}")
-                    error_count += 1
+                if await _send_message(bot, tg_id, text, kb):
+                    await db.mark_notification_state_sent(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, subscription_id)
+                    sent += 1
             except Exception as e:
-                logger.error(f"Unexpected error sending notification to user {user_data.get('tg_id')}: {e}")
-                error_count += 1
+                logger.warning("Low traffic check failed for subscription %s: %s", subscription.get("id"), e)
 
-            # Соблюдаем rate limit между сообщениями
-            if i < len(users_to_notify) - 1:  # Не ждём после последнего сообщения
+            if i < len(subscriptions) - 1:
                 await asyncio.sleep(TELEGRAM_RATE_LIMIT)
 
-        logger.info(f"✅ Expired notification batch complete: {success_count} sent, {error_count} errors")
+    logger.info("✅ Low traffic notification batch complete: %s sent", sent)
 
+
+async def _send_message(bot, tg_id: int, text: str, reply_markup: InlineKeyboardMarkup) -> bool:
+    try:
+        await bot.send_message(tg_id, text, reply_markup=reply_markup)
+        return True
+    except TelegramAPIError as e:
+        if "429" in str(e) or "Too Many Requests" in str(e):
+            logger.warning("🚫 Rate limited while sending notification")
+            await asyncio.sleep(5)
+        elif "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
+            logger.debug("User %s blocked bot or deactivated account", tg_id)
+        else:
+            logger.error("Failed to send notification to user %s: %s", tg_id, e)
     except Exception as e:
-        logger.error(f"Error in _send_notifications_for_expired: {e}", exc_info=True)
+        logger.error("Unexpected error sending notification to user %s: %s", tg_id, e)
+    return False

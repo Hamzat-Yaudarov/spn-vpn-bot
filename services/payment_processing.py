@@ -304,9 +304,9 @@ async def process_paid_payment(
                 f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
-                [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}")],
-                [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+                [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+                [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}", style="primary")],
+                [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
             ])
             await bot.send_message(tg_id, text, reply_markup=kb)
 
@@ -362,8 +362,8 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
     await db.update_payment_status_by_invoice(invoice_id, "paid")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}")],
-        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
     ])
     await bot.send_message(
         tg_id,

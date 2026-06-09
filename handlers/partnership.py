@@ -38,8 +38,8 @@ async def show_partnership_agreement(callback: CallbackQuery, state: FSMContext,
     agreement_url = PARTNERSHIP_AGREEMENTS.get(percentage)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Прочитать соглашение", url=agreement_url)],
-        [InlineKeyboardButton(text="✅ Я принимаю соглашение", callback_data="accept_partnership_agreement")],
+        [InlineKeyboardButton(text="📄 Прочитать соглашение", url=agreement_url, style="primary")],
+        [InlineKeyboardButton(text="✅ Я принимаю соглашение", callback_data="accept_partnership_agreement", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
@@ -110,9 +110,9 @@ async def show_partnership_cabinet(callback: CallbackQuery, tg_id: int):
                 tariff_counts[tariff_code] = count
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link)],
-        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="partnership_withdraw_sbp")],
-        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="partnership_withdraw_usdt")],
+        [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
+        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="partnership_withdraw_sbp", style="success")],
+        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="partnership_withdraw_usdt", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
@@ -136,9 +136,9 @@ async def show_partnership_cabinet(callback: CallbackQuery, tg_id: int):
     # Если баланс меньше минимума, отключаем кнопки вывода
     if stats['current_balance'] < 5000:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link)],
-            [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="partnership_withdraw_sbp")],
-            [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="partnership_withdraw_usdt")],
+            [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
+            [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="partnership_withdraw_sbp", style="success")],
+            [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="partnership_withdraw_usdt", style="success")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
         ])
         text += "\n\n⚠️ <i>Баланс меньше минимальной суммы вывода (5000 ₽)</i>"

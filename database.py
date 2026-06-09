@@ -284,6 +284,13 @@ async def run_migrations():
                 'clicked_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
             }
 
+            expected_notification_state_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'subscription_id': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
+                'notification_type': {'type': 'TEXT', 'nullable': False},
+                'last_sent_at': {'type': 'TIMESTAMP', 'nullable': False, 'default': 'now()'},
+            }
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
             # ═══════════════════════════════════════════════════════════
@@ -509,6 +516,20 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'tracking_link_clicks' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_state (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    subscription_id BIGINT DEFAULT 0 NOT NULL,
+                    notification_type TEXT NOT NULL,
+                    last_sent_at TIMESTAMP DEFAULT now() NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(tg_id, subscription_id, notification_type)
+                )
+            """)
+            logging.info("✅ Таблица 'notification_state' создана или уже существует")
+
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -583,6 +604,10 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_tracking_code ON payments(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);",
+
+                # notification_state индексы
+                "CREATE INDEX IF NOT EXISTS idx_notification_state_lookup ON notification_state(tg_id, subscription_id, notification_type);",
+                "CREATE INDEX IF NOT EXISTS idx_notification_state_last_sent ON notification_state(last_sent_at);",
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
@@ -693,6 +718,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'subscription_traffic_cycles', expected_traffic_cycles_columns)
             await sync_table_schema(conn, 'tracking_links', expected_tracking_links_columns)
             await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
+            await sync_table_schema(conn, 'notification_state', expected_notification_state_columns)
 
             await conn.execute(
                 """
@@ -2137,6 +2163,44 @@ async def clear_notification(tg_id: int):
         WHERE tg_id = $1
         """,
         (tg_id,)
+    )
+
+
+async def get_notification_last_sent(tg_id: int, notification_type: str, subscription_id: int | None = None):
+    """Вернуть время последней отправки уведомления конкретного типа."""
+    row = await db_execute(
+        """
+        SELECT last_sent_at
+        FROM notification_state
+        WHERE tg_id = $1 AND subscription_id = $2 AND notification_type = $3
+        """,
+        (tg_id, subscription_id or 0, notification_type),
+        fetch_one=True,
+    )
+    return row["last_sent_at"] if row else None
+
+
+async def can_send_notification(tg_id: int, notification_type: str, cooldown_hours: int, subscription_id: int | None = None) -> bool:
+    """Проверить cooldown уведомления."""
+    from datetime import datetime, timedelta
+
+    last_sent_at = await get_notification_last_sent(tg_id, notification_type, subscription_id)
+    if not last_sent_at:
+        return True
+
+    return datetime.utcnow() - last_sent_at >= timedelta(hours=cooldown_hours)
+
+
+async def mark_notification_state_sent(tg_id: int, notification_type: str, subscription_id: int | None = None):
+    """Записать факт отправки уведомления."""
+    await db_execute(
+        """
+        INSERT INTO notification_state (tg_id, subscription_id, notification_type, last_sent_at, updated_at)
+        VALUES ($1, $2, $3, now(), now())
+        ON CONFLICT (tg_id, subscription_id, notification_type)
+        DO UPDATE SET last_sent_at = now(), updated_at = now()
+        """,
+        (tg_id, subscription_id or 0, notification_type),
     )
 
 

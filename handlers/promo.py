@@ -66,8 +66,8 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
             promo_target_subscription_id=subscriptions[0]["id"],
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}")],
-            [InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}")],
+            [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}", style="success")],
+            [InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
         ])
         await callback.message.answer("Куда применить промокод?", reply_markup=kb)
@@ -75,11 +75,11 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}")]
+        [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
     if next_type_index is not None:
-        keyboard.append([InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}")])
+        keyboard.append([InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")])
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")])
 
     await callback.message.answer(

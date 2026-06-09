@@ -16,6 +16,8 @@ const state = {
   buyPlan: null,
   buyTariffCode: null,
   pendingPayment: null,
+  activePayment: null,
+  paymentPollTimer: null,
   currentView: "home",
 };
 
@@ -123,6 +125,56 @@ async function reloadData() {
   const subscriptions = await api("/miniapp/api/subscriptions");
   state.subs = subscriptions.subscriptions || [];
   render();
+}
+
+function stopPaymentPolling() {
+  if (state.paymentPollTimer) clearInterval(state.paymentPollTimer);
+  state.paymentPollTimer = null;
+}
+
+function startPaymentPolling(payment) {
+  stopPaymentPolling();
+  state.activePayment = { ...payment, attempts: 0 };
+  showToast("После оплаты ключ появится автоматически.");
+  state.paymentPollTimer = setInterval(checkActivePayment, 3000);
+}
+
+async function checkActivePayment() {
+  const payment = state.activePayment;
+  if (!payment) return stopPaymentPolling();
+  payment.attempts += 1;
+
+  try {
+    const status = await api(`/miniapp/api/payments/${encodeURIComponent(payment.invoice_id)}`);
+    if (status.status === "paid") {
+      stopPaymentPolling();
+      state.activePayment = null;
+      state.pendingPayment = null;
+      await reloadData();
+      if (payment.type === "subscription" && payment.payment_target === "renew" && payment.subscription_id) {
+        state.selectedSubId = payment.subscription_id;
+        state.keysMode = "detail";
+      } else if (payment.type === "traffic" && payment.subscription_id) {
+        state.selectedSubId = payment.subscription_id;
+        state.keysMode = "detail";
+      } else {
+        state.selectedSubId = null;
+        state.keysMode = "list";
+      }
+      state.buyMode = "plan";
+      switchView("subs", { preserve: true });
+      showToast("Оплата получена. Ключ обновлён.");
+      return;
+    }
+  } catch (e) {
+    if (payment.attempts > 3) console.warn("Payment status check failed", e);
+  }
+
+  if (payment.attempts >= 120) {
+    stopPaymentPolling();
+    state.activePayment = null;
+    showToast("Проверка оплаты остановлена. Обновите кабинет позже.");
+  }
 }
 
 function render() {
@@ -306,8 +358,9 @@ async function payPrepared(provider) {
     } else {
       data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     }
+    startPaymentPolling({ ...state.pendingPayment, invoice_id: data.invoice_id, provider });
     openLink(data.pay_url);
-    showToast("Счёт создан. После оплаты обновите кабинет.");
+    showToast("Счёт создан. Ждём оплату автоматически.");
   } catch (e) {
     showToast(e.message);
   }

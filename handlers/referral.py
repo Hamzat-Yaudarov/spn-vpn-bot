@@ -37,7 +37,7 @@ async def process_referral(callback: CallbackQuery):
         tariffs_info = "• 1 месяц: \n• 3 месяца: \n• 6 месяцев: \n• 12 месяцев: \n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Запросить вывод", callback_data="referral_withdraw")],
+        [InlineKeyboardButton(text="💰 Запросить вывод", callback_data="referral_withdraw", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
     ])
 
@@ -83,8 +83,8 @@ async def process_referral_withdraw_start(callback: CallbackQuery, state: FSMCon
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="referral_withdraw_sbp")],
-        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="referral_withdraw_usdt")],
+        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="referral_withdraw_sbp", style="success")],
+        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="referral_withdraw_usdt", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
     ])
 

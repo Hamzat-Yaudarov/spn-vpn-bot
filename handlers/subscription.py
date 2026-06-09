@@ -134,7 +134,7 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
             devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
             devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
             label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
-        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}")])
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
 
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -152,7 +152,7 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     keyboard = []
 
     if renewable_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="Продлить имеющуюся подписку", callback_data="renew_existing_subscription")])
+        keyboard.append([InlineKeyboardButton(text="Продлить имеющуюся подписку", callback_data="renew_existing_subscription", style="success")])
 
     buy_text = "Купить первую подписку" if not subscriptions else "Купить новую подписку"
     keyboard.append([InlineKeyboardButton(text=buy_text, callback_data="buy_new_subscription", style="success")])
@@ -192,9 +192,9 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
 
     keyboard = []
     if has_regular:
-        keyboard.append([InlineKeyboardButton(text="Обычные подписки", callback_data="my_subscriptions_regular")])
+        keyboard.append([InlineKeyboardButton(text="Обычные подписки", callback_data="my_subscriptions_regular", style="primary")])
     if has_bypass:
-        keyboard.append([InlineKeyboardButton(text="Подписки с антиглушилкой", callback_data="my_subscriptions_bypass")])
+        keyboard.append([InlineKeyboardButton(text="Подписки с антиглушилкой", callback_data="my_subscriptions_bypass", style="primary")])
     keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
 
     await state.clear()
@@ -219,7 +219,7 @@ async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"Подписка #{subscription.get('type_index') or subscription['slot_number']}", callback_data=f"my_subscription_view_{subscription['id']}")]
+        [InlineKeyboardButton(text=f"Подписка #{subscription.get('type_index') or subscription['slot_number']}", callback_data=f"my_subscription_view_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_subscriptions", style="danger")])
@@ -265,8 +265,8 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}")],
-        [InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}")],
+        [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")],
     ])
 
@@ -299,8 +299,8 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}")],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
+        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
     ])
 
@@ -374,8 +374,8 @@ async def process_my_subscriptions_kind(callback: CallbackQuery):
 async def process_buy_new_subscription(callback: CallbackQuery, state: FSMContext):
     """Начать покупку новой подписки."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Обычная (Без антиглушилки)", callback_data="plan_regular")],
-        [InlineKeyboardButton(text="С антиглушилкой", callback_data="plan_bypass")],
+        [InlineKeyboardButton(text="Обычная (Без антиглушилки)", callback_data="plan_regular", style="primary")],
+        [InlineKeyboardButton(text="С антиглушилкой", callback_data="plan_bypass", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
     ])
     text = "Выбери тип новой подписки:"
@@ -419,7 +419,7 @@ async def process_renew_existing_subscription(callback: CallbackQuery, state: FS
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}")]
+        [InlineKeyboardButton(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
@@ -482,7 +482,7 @@ async def process_buy_gb(callback: CallbackQuery, state: FSMContext):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}")]
+        [InlineKeyboardButton(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
     keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
@@ -511,6 +511,7 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
             InlineKeyboardButton(
                 text=f"{package['gb']} ГБ — {package['price']}₽",
                 callback_data=f"gb_package_{package_code}",
+                style="success",
             )
         ])
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")])
@@ -535,8 +536,8 @@ async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(gb_package_code=package_code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_gb_yookassa")],
+        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot", style="success")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_gb_yookassa", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
     ])
     await edit_text_with_photo(
@@ -603,8 +604,8 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
     ])
     await edit_text_with_photo(
@@ -652,9 +653,9 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
         purchase_text = "Новая подписка"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa")],
-        [InlineKeyboardButton(text="💰 Оплатить с баланса от рефералов", callback_data="pay_referral_balance")],
+        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa", style="success")],
+        [InlineKeyboardButton(text="💰 Оплатить с баланса от рефералов", callback_data="pay_referral_balance", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data=(f"subscription_view_{target_subscription_id}" if purchase_mode == "renew" and target_subscription_id else "buy_subscription"), style="danger")],
     ])
 
@@ -708,8 +709,8 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
             pay_url = invoice.get("bot_invoice_url", "")
             if pay_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                    [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
+                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
                     [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
                 ])
                 await edit_text_with_photo(callback, "<b>Счёт на оплату (существующий)</b>", kb, "Оплати")
@@ -738,8 +739,8 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
 
     target_text = f"подписки #{target_slot_number}" if purchase_mode == "new" else f"подписки #{data.get('target_slot_number')}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url)],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
     ])
     text = (
@@ -791,8 +792,8 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
             confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
             if confirmation_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+                    [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url, style="success")],
+                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
                     [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
                 ])
                 await edit_text_with_photo(callback, "<b>💳 Yookassa (существующий платёж)</b>", kb, "Оплати")
@@ -824,8 +825,8 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url)],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment")],
+        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url, style="success")],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
     ])
     await edit_text_with_photo(callback, "<b>💳 Yookassa</b>", kb, "Оплати")
@@ -943,7 +944,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
 
         remaining_balance = referral_balance - amount
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions")],
+            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
         ])
 
