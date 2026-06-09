@@ -67,7 +67,7 @@ function subBadges(s) {
 }
 
 function badgesHtml(s) {
-  return `<div class="badge-row">${subBadges(s).map((badge) => `<span class="badge ${badge.cls}">${badge.text}</span>`).join("")}</div>`;
+  return `<span class="badge-row">${subBadges(s).map((badge) => `<span class="badge ${badge.cls}">${badge.text}</span>`).join("")}</span>`;
 }
 
 function renderAvatar(user) {
