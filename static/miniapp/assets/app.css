@@ -60,6 +60,9 @@ body.view-home-active .hero { display: flex; }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px; background: rgba(216,169,71,.13); color: #fff1c9; font-size: 12px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(240,207,122,.18); }
 .badge.ok { color: #b7ffe9; background: rgba(22,217,162,.15); }
 .badge.warn { color: #ffd0d6; background: rgba(255,107,122,.15); }
+.badge.blue { color: #dcefff; background: rgba(90,184,255,.15); }
+.badge.green { color: #c9ffef; background: rgba(24,199,154,.15); }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
 .button { width: 100%; border: 0; border-radius: 17px; padding: 13px 15px; color: var(--text); background: rgba(216,169,71,.13); font-weight: 900; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(240,207,122,.2); }
 .button.accent { color: #1b1307; background: linear-gradient(135deg, #f0cf7a, #c7892d); box-shadow: 0 10px 24px rgba(216,169,71,.26), inset 0 1px 0 rgba(255,255,255,.28); }
 .button.green { background: linear-gradient(135deg, #0fb985, var(--accent-2)); color: #04120e; box-shadow: 0 10px 24px rgba(22,217,162,.2); }
@@ -94,7 +97,10 @@ body.view-home-active .hero { display: flex; }
 .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .empty { text-align: center; padding: 28px 18px; }
 .quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.home-actions { margin-top: 12px; }
+.compact-actions { margin-top: 0; }
 .quick-card, .plan-card { position: relative; overflow: hidden; min-height: 106px; border: 1px solid rgba(255,255,255,.14); border-radius: 22px; padding: 15px; color: var(--text); text-align: left; background: var(--panel); box-shadow: 0 10px 30px rgba(0,0,0,.24); }
+.home-actions .quick-card { min-height: 96px; }
 .quick-card::after, .plan-card::after { content: ""; position: absolute; right: -20px; bottom: -28px; width: 92px; height: 92px; border-radius: 28px; background: rgba(255,255,255,.1); transform: rotate(18deg); }
 .quick-card span, .plan-card span { position: relative; z-index: 1; display: block; font-size: 18px; font-weight: 950; letter-spacing: -.35px; }
 .quick-card small, .plan-card small { position: relative; z-index: 1; display: block; margin-top: 6px; color: rgba(255,247,230,.82); font-weight: 750; line-height: 1.35; }

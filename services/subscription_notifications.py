@@ -131,9 +131,9 @@ async def _send_notifications_for_expiring(bot):
         expire_at = ensure_utc_aware(subscription["subscription_until"])
         time_left = expire_at - now
         text = (
-            f"⏰ <b>{_subscription_name(subscription)} скоро закончится!</b>\n\n"
+            f"⏰ <b>{_subscription_name(subscription)} скоро закончится</b>\n\n"
             f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
-            "Продлите подписку, чтобы не потерять доступ."
+            "Что сделать: нажмите «Продлить эту подписку», чтобы доступ не отключился."
         )
         keyboard = [[InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
         if await _has_multiple_active_visible_subscriptions(tg_id):
@@ -174,14 +174,14 @@ async def _send_notifications_for_expired(bot):
             last_expired_at = max(expired_dates)
             days_expired = max(0, (now - last_expired_at).days)
             text = (
-                "❌ <b>Ваша подписка закончилась!</b>\n\n"
+                "❌ <b>Подписка закончилась</b>\n\n"
                 f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
-                "Продлите подписку, чтобы вернуть доступ."
+                "Что сделать: нажмите «Купить / Продлить», чтобы вернуть доступ."
             )
         else:
             text = (
-                "❌ <b>У вас нет активной подписки!</b>\n\n"
-                "Приобретите подписку, чтобы получить доступ к быстрой и безопасной сети."
+                "❌ <b>Активной подписки нет</b>\n\n"
+                "Что сделать: нажмите «Купить / Продлить», чтобы получить доступ к VPN."
             )
 
         if await _send_message(bot, tg_id, text, _buy_keyboard()):
@@ -237,11 +237,11 @@ async def _send_notifications_for_low_traffic(bot):
                 reset_at = subscription["traffic_reset_at"]
                 days_to_reset = max(0, (reset_at - now).days)
                 text = (
-                    f"📦 <b>Заканчиваются ГБ антиглушилки</b>\n\n"
+                    f"📦 <b>Мало ГБ антиглушилки</b>\n\n"
                     f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
                     f"Осталось: <b>{remaining_bytes / GB_BYTES:.1f} ГБ</b>\n"
                     f"До обновления: <b>{days_to_reset} дн.</b>\n\n"
-                    "Можно докупить ГБ, чтобы антиглушилка работала без пауз."
+                    "Что сделать: нажмите «Купить ГБ», если хотите сохранить работу без пауз."
                 )
                 keyboard = [[InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
                 if await _has_multiple_active_visible_subscriptions(tg_id):

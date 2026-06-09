@@ -48,6 +48,28 @@ function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 
+function daysLeft(value) {
+  if (!value) return null;
+  return Math.ceil((new Date(value).getTime() - Date.now()) / 86400000);
+}
+
+function subBadges(s) {
+  const badges = [];
+  const left = daysLeft(s.subscription_until);
+  if (s.status === "active") badges.push({ text: left !== null && left <= 3 ? "Скоро закончится" : "Активна", cls: left !== null && left <= 3 ? "warn" : "ok" });
+  else badges.push({ text: "Истекла", cls: "warn" });
+  badges.push({ text: s.plan_kind === "bypass" ? "Антиглушилка" : "Обычная", cls: s.plan_kind === "bypass" ? "green" : "blue" });
+  if (s.traffic?.enabled) {
+    const remaining = Number(s.traffic.limit_gb || 0) - Number(s.traffic.used_gb || 0);
+    if (remaining < 10) badges.push({ text: "Мало ГБ", cls: "warn" });
+  }
+  return badges;
+}
+
+function badgesHtml(s) {
+  return `<div class="badge-row">${subBadges(s).map((badge) => `<span class="badge ${badge.cls}">${badge.text}</span>`).join("")}</div>`;
+}
+
 function renderAvatar(user) {
   const avatar = el("userAvatar");
   const name = user?.first_name || user?.username || "Way SPN";
@@ -186,7 +208,10 @@ function render() {
 }
 
 function renderHome() {
-  const hasBypass = activeSubs().some((s) => s.plan_kind === "bypass");
+  const active = activeSubs();
+  const primary = active.length ? { text: "Мои подписки", action: "openKeysList", hint: "Открыть ключи и статус" } : { text: "Купить / Продлить", action: "openNewPurchase", hint: "Новая подписка" };
+  const secondary = active.length ? { text: "Купить / Продлить", action: "openNewPurchase", hint: "Оформить новую подписку" } : { text: "Ключи", action: "openKeysList", hint: "Список ключей" };
+  const hasBypass = active.some((s) => s.plan_kind === "bypass");
   el("view-home").innerHTML = `
     <div class="grid">
       <div class="home-panel">
@@ -194,11 +219,14 @@ function renderHome() {
         <p class="title">Что хотите сделать?</p>
         <p class="muted">Покупка, продление, ключи и бонусы собраны в одном кабинете.</p>
       </div>
-      <div class="quick-grid">
-        <button class="quick-card gold" onclick="openNewPurchase()"><span>Купить</span><small>Новая подписка</small></button>
-        <button class="quick-card blue" onclick="openKeysList()"><span>Ключи</span><small>Ссылки и статус</small></button>
-        <button class="quick-card bronze" onclick="openRenewList()"><span>Продлить</span><small>Выбрать ключ</small></button>
-        ${hasBypass ? `<button class="quick-card green" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ</span><small>Для антиглушилки</small></button>` : ""}
+      <div class="quick-grid home-actions">
+        <button class="quick-card gold primary-action" onclick="${primary.action}()"><span>${primary.text}</span><small>${primary.hint}</small></button>
+        <button class="quick-card blue secondary-action" onclick="${secondary.action}()"><span>${secondary.text}</span><small>${secondary.hint}</small></button>
+      </div>
+      <div class="choice-list compact-actions">
+        <button class="choice-button" onclick="openRenewList()"><span>Продлить<small>Выбрать ключ вручную</small></span><b>›</b></button>
+        ${hasBypass ? `<button class="choice-button" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ<small>Для антиглушилки</small></span><b>›</b></button>` : ""}
+        <button class="choice-button" onclick="switchView('help', { preserve: true })"><span>Помощь<small>Инструкция и поддержка</small></span><b>›</b></button>
       </div>
     </div>`;
 }
@@ -244,15 +272,18 @@ function keysListHtml(title, subtitle, action = "detail") {
 function keyButton(s, action) {
   const handler = action === "renew" ? `openRenew(${s.id})` : `openSubDetail(${s.id})`;
   const planClass = s.plan_kind === "bypass" ? "bypass" : "regular";
-  return `<button class="choice-button key-choice ${planClass}" onclick="${handler}"><span><i></i>${subTitle(s)}<small>${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Истекла"}</small></span><b>›</b></button>`;
+  return `<button class="choice-button key-choice ${planClass}" onclick="${handler}"><span><i></i>${subTitle(s)}<small>${s.status === "active" ? `до ${date(s.subscription_until)}` : "истекла"}</small>${badgesHtml(s)}</span><b>›</b></button>`;
 }
 
 function subscriptionDetailHtml(s) {
   const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
+  const limitText = s.plan_kind === "bypass" ? "3 устройства" : "5 устройств";
   return `<div class="grid">
     <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
     <div class="card strong ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
-      <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Активна до ${date(s.subscription_until)}` : "Подписка истекла"}</p></div><span class="badge ${s.status === "active" ? "ok" : "warn"}">${s.status === "active" ? "Активна" : "Истекла"}</span></div>
+      <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Срок: до ${date(s.subscription_until)}` : "Срок закончился"}</p></div></div>
+      ${badgesHtml(s)}
+      <div class="hint-list"><div><b>Тип</b><span>${s.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная"}</span></div><div><b>Лимит</b><span>${limitText}</span></div></div>
       ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
     </div>
     <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>

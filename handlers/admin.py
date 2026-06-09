@@ -44,6 +44,7 @@ class BroadcastStates(StatesGroup):
     """Состояния для рассылок сообщений"""
     waiting_for_broadcast_all = State()
     waiting_for_broadcast_no_sub = State()
+    reviewing_broadcast = State()
     choosing_broadcast_buttons = State()
 
 
@@ -168,7 +169,6 @@ def _build_broadcast_admin_keyboard(selected_buttons: list[str] | None) -> Inlin
     rows.extend([
         [InlineKeyboardButton(text="❌ Без кнопок", callback_data="broadcast_no_buttons", style="danger")],
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="broadcast_preview", style="primary")],
-        [InlineKeyboardButton(text="✅ Начать рассылку", callback_data="broadcast_start", style="success")],
         [InlineKeyboardButton(text="🚫 Отменить рассылку", callback_data="broadcast_cancel", style="danger")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -184,10 +184,62 @@ def _broadcast_button_selection_text(selected_buttons: list[str] | None) -> str:
     )
 
 
+def _broadcast_mode_text(mode: str) -> str:
+    return "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
+
+
+def _broadcast_summary_text(mode: str, selected_buttons: list[str] | None = None) -> str:
+    selected_labels = [BROADCAST_BUTTONS[key]["text"] for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
+    selected_text = ", ".join(selected_labels) if selected_labels else "пока не выбраны"
+    return (
+        "📤 <b>Рассылка подготовлена</b>\n\n"
+        f"Кому: <b>{_broadcast_mode_text(mode)}</b>\n"
+        "Сообщение: <b>получено</b>\n"
+        f"Кнопки: <b>{selected_text}</b>\n\n"
+        "Следующий шаг: выбери кнопки или перейди к предпросмотру без кнопок."
+    )
+
+
+def _build_broadcast_summary_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔘 Выбрать кнопки", callback_data="broadcast_choose_buttons", style="primary")],
+        [InlineKeyboardButton(text="👁 Предпросмотр без кнопок", callback_data="broadcast_preview", style="primary")],
+        [InlineKeyboardButton(text="🚫 Отменить рассылку", callback_data="broadcast_cancel", style="danger")],
+    ])
+
+
+def _build_broadcast_ready_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Начать рассылку", callback_data="broadcast_start", style="success")],
+        [InlineKeyboardButton(text="🔘 Изменить кнопки", callback_data="broadcast_choose_buttons", style="primary")],
+        [InlineKeyboardButton(text="🚫 Отменить рассылку", callback_data="broadcast_cancel", style="danger")],
+    ])
+
+
 def _build_broadcast_stop_keyboard(broadcast_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⛔ Остановить рассылку", callback_data=f"broadcast_stop:{broadcast_id}", style="danger")],
     ])
+
+
+async def _send_broadcast_preview(callback: CallbackQuery, state: FSMContext) -> bool:
+    data = await state.get_data()
+    source_chat_id = data.get("source_chat_id")
+    source_message_id = data.get("source_message_id")
+    selected_buttons = data.get("selected_buttons") or []
+    if not source_chat_id or not source_message_id:
+        await callback.answer("Исходное сообщение не найдено", show_alert=True)
+        await state.clear()
+        return False
+
+    await callback.bot.copy_message(
+        chat_id=callback.from_user.id,
+        from_chat_id=source_chat_id,
+        message_id=source_message_id,
+        reply_markup=_build_broadcast_user_keyboard(selected_buttons),
+    )
+    await state.update_data(preview_sent=True)
+    return True
 
 
 async def _get_broadcast_users(mode: str):
@@ -228,14 +280,17 @@ async def _run_broadcast_copy(
     rate_limited_delay = 0.3
     mode_text = "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
 
-    await status_message.answer(
+    progress_message = await status_message.answer(
         f"📤 <b>Начинаю рассылку {mode_text}: {total_users} получателей...</b>\n\n"
-        "<i>Это может занять некоторое время...</i>",
+        "Отправлено: <b>0</b>\n"
+        "Заблокировано: <b>0</b>\n"
+        "Недоступно: <b>0</b>\n"
+        "Ошибок: <b>0</b>",
         reply_markup=_build_broadcast_stop_keyboard(broadcast_id),
     )
 
     stopped = False
-    for user_record in users:
+    for index, user_record in enumerate(users, start=1):
         if ACTIVE_BROADCASTS.get(broadcast_id, {}).get("stop_requested"):
             stopped = True
             logger.info(f"Broadcast {broadcast_id} stopped by admin before next recipient")
@@ -268,6 +323,20 @@ async def _run_broadcast_copy(
             else:
                 error_count += 1
                 logger.warning(f"Failed to send broadcast to user {user_id}: {str(e)[:100]}")
+
+        if index == total_users or index % 25 == 0:
+            try:
+                await progress_message.edit_text(
+                    f"📤 <b>Рассылка идет: {mode_text}</b>\n\n"
+                    f"Прогресс: <b>{index}/{total_users}</b>\n"
+                    f"Отправлено: <b>{sent_count}</b>\n"
+                    f"Заблокировано: <b>{blocked_count}</b>\n"
+                    f"Недоступно: <b>{unreachable_count}</b>\n"
+                    f"Ошибок: <b>{error_count}</b>",
+                    reply_markup=_build_broadcast_stop_keyboard(broadcast_id),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to update broadcast progress: {e}")
 
         await asyncio.sleep(rate_limited_delay)
 
@@ -1096,11 +1165,12 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
         selected_buttons=[],
+        preview_sent=False,
     )
-    await state.set_state(BroadcastStates.choosing_broadcast_buttons)
+    await state.set_state(BroadcastStates.reviewing_broadcast)
     await message.answer(
-        _broadcast_button_selection_text([]),
-        reply_markup=_build_broadcast_admin_keyboard([]),
+        _broadcast_summary_text("all", []),
+        reply_markup=_build_broadcast_summary_keyboard(),
     )
 
 
@@ -1142,12 +1212,31 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
         selected_buttons=[],
+        preview_sent=False,
     )
-    await state.set_state(BroadcastStates.choosing_broadcast_buttons)
+    await state.set_state(BroadcastStates.reviewing_broadcast)
     await message.answer(
-        _broadcast_button_selection_text([]),
-        reply_markup=_build_broadcast_admin_keyboard([]),
+        _broadcast_summary_text("no_sub", []),
+        reply_markup=_build_broadcast_summary_keyboard(),
     )
+
+
+@router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_choose_buttons")
+@router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_choose_buttons")
+async def choose_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    selected_buttons = data.get("selected_buttons") or []
+    await state.set_state(BroadcastStates.choosing_broadcast_buttons)
+    await callback.message.edit_text(
+        _broadcast_button_selection_text(selected_buttons),
+        reply_markup=_build_broadcast_admin_keyboard(selected_buttons),
+    )
+    await callback.answer()
 
 
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data.startswith("broadcast_toggle:"))
@@ -1171,7 +1260,7 @@ async def toggle_broadcast_button(callback: CallbackQuery, state: FSMContext):
         selected_buttons.append(key)
 
     selected_buttons = [button_key for button_key in BROADCAST_BUTTON_ORDER if button_key in selected_buttons]
-    await state.update_data(selected_buttons=selected_buttons)
+    await state.update_data(selected_buttons=selected_buttons, preview_sent=False)
     await callback.message.edit_text(
         _broadcast_button_selection_text(selected_buttons),
         reply_markup=_build_broadcast_admin_keyboard(selected_buttons),
@@ -1191,7 +1280,7 @@ async def clear_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Кнопок уже нет")
         return
 
-    await state.update_data(selected_buttons=[])
+    await state.update_data(selected_buttons=[], preview_sent=False)
     await callback.message.edit_text(
         _broadcast_button_selection_text([]),
         reply_markup=_build_broadcast_admin_keyboard([]),
@@ -1199,6 +1288,7 @@ async def clear_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Кнопки убраны")
 
 
+@router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_preview")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_preview")
 async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1206,21 +1296,14 @@ async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    data = await state.get_data()
-    source_chat_id = data.get("source_chat_id")
-    source_message_id = data.get("source_message_id")
-    selected_buttons = data.get("selected_buttons") or []
-    if not source_chat_id or not source_message_id:
-        await callback.answer("Исходное сообщение не найдено", show_alert=True)
-        await state.clear()
-        return
-
     try:
-        await callback.bot.copy_message(
-            chat_id=callback.from_user.id,
-            from_chat_id=source_chat_id,
-            message_id=source_message_id,
-            reply_markup=_build_broadcast_user_keyboard(selected_buttons),
+        if not await _send_broadcast_preview(callback, state):
+            return
+        data = await state.get_data()
+        await callback.message.edit_text(
+            _broadcast_summary_text(data.get("broadcast_mode"), data.get("selected_buttons") or [])
+            + "\n\n✅ <b>Предпросмотр отправлен.</b> Если всё выглядит правильно, запускай рассылку.",
+            reply_markup=_build_broadcast_ready_keyboard(),
         )
         await callback.answer("Предпросмотр отправлен")
     except Exception as e:
@@ -1228,6 +1311,7 @@ async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
         await callback.answer(f"Ошибка предпросмотра: {str(e)[:80]}", show_alert=True)
 
 
+@router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_cancel")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_cancel")
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1264,6 +1348,7 @@ async def stop_active_broadcast(callback: CallbackQuery):
     await callback.answer("Останавливаю рассылку")
 
 
+@router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_start")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_start")
 async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
     admin_id = callback.from_user.id
@@ -1277,9 +1362,13 @@ async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
     source_chat_id = data.get("source_chat_id")
     source_message_id = data.get("source_message_id")
     selected_buttons = data.get("selected_buttons") or []
+    preview_sent = data.get("preview_sent") is True
     if mode not in {"all", "no_sub"} or not source_chat_id or not source_message_id:
         await callback.answer("Данные рассылки устарели", show_alert=True)
         await state.clear()
+        return
+    if not preview_sent:
+        await callback.answer("Сначала отправь предпросмотр", show_alert=True)
         return
 
     try:

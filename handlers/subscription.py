@@ -43,6 +43,10 @@ def _subscription_name(subscription) -> str:
 
 
 def _subscription_short_status(subscription) -> str:
+    if subscription.get('generation') != 'v2':
+        return "архивная"
+    if not subscription.get('is_visible'):
+        return "скрытая"
     until = subscription.get('subscription_until')
     if not until:
         return "без срока"
@@ -55,6 +59,17 @@ def _format_traffic_gb(bytes_value: int | None) -> str:
     if not bytes_value:
         return "0 ГБ"
     return f"{bytes_value / GB_BYTES:.1f} ГБ"
+
+
+def _format_date(dt) -> str:
+    return dt.strftime('%d.%m.%Y') if dt else 'неизвестно'
+
+
+def _device_limit_text(subscription) -> str:
+    limit = subscription.get('hwid_device_limit')
+    if not limit:
+        limit = BYPASS_HWID_DEVICE_LIMIT if subscription.get('plan_kind') == 'bypass' else REGULAR_HWID_DEVICE_LIMIT
+    return f"{limit} устройства" if limit in (2, 3, 4) else f"{limit} устройств"
 
 
 async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
@@ -242,6 +257,10 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         return
 
     sub_url, remaining_str = await _get_subscription_access_data(subscription)
+    plan_title = 'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'
+    status_text = _subscription_short_status(subscription)
+    until_text = _format_date(subscription.get('subscription_until'))
+    limit_text = _device_limit_text(subscription)
     traffic_text = ""
 
     if subscription.get('plan_kind') == 'bypass':
@@ -258,24 +277,29 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
 
         limit_bytes = subscription.get('current_period_limit_bytes') or subscription.get('base_traffic_bytes') or 0
         reset_at = subscription.get('traffic_reset_at')
-        reset_text = reset_at.strftime('%d.%m.%Y') if reset_at else 'неизвестно'
+        reset_text = _format_date(reset_at)
         traffic_text = (
-            f"\n📦 Трафик: <b>{_format_traffic_gb(used_bytes)} / {_format_traffic_gb(limit_bytes)}</b>\n"
+            f"\n📦 Трафик антиглушилки: <b>{_format_traffic_gb(used_bytes)} / {_format_traffic_gb(limit_bytes)}</b>\n"
             f"🔄 Сброс трафика: <b>{reset_text}</b>"
         )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = [
         [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")],
-    ])
+    ]
+    if subscription.get('is_renewable'):
+        keyboard.append([InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")])
+    if subscription.get('plan_kind') == 'bypass' and status_text == 'активна':
+        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")])
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
         f"🔐 <b>{_subscription_name(subscription)}</b>\n\n"
         "<blockquote>"
-        f"📍 Статус: <b>{_subscription_short_status(subscription)}</b>\n"
-        f"📆 Осталось времени: <b>{remaining_str}</b>\n"
-        f"🌐 Тип: <b>{'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'}</b>"
+        f"📍 Статус: <b>{status_text}</b>\n"
+        f"📆 Срок: <b>до {until_text}</b>, осталось <b>{remaining_str}</b>\n"
+        f"🌐 Тип: <b>{plan_title}</b>\n"
+        f"🧩 Лимит: <b>{limit_text}</b>"
         f"{traffic_text}"
         "</blockquote>\n\n"
         "<b>Ваш ключ:</b>\n"
