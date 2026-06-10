@@ -3,7 +3,7 @@ from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, ADMIN_PANEL_VERSION, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
@@ -12,6 +12,11 @@ from services.image_handler import send_text_with_photo
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+def _admin_panel_url() -> str:
+    separator = "&" if "?" in ADMIN_PANEL_URL else "?"
+    return f"{ADMIN_PANEL_URL}{separator}v={ADMIN_PANEL_VERSION}"
 
 
 @router.message(CommandStart(deep_link=True))
@@ -114,7 +119,7 @@ async def show_main_menu(message: Message):
         keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
 
     if tg_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
+        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=_admin_panel_url()), style="primary")])
 
     keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
 

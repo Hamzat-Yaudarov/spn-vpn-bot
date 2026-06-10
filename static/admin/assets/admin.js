@@ -39,6 +39,22 @@ function label(text, inner) {
   return `<label><span>${text}</span>${inner}</label>`;
 }
 
+function helpCard(title, text) {
+  return `<div class="help-card"><b>${title}</b><span>${text}</span></div>`;
+}
+
+function paymentStatus(status) {
+  return ({ paid: "оплачен", pending: "ожидает оплаты", failed: "ошибка", expired: "истёк" })[status] || status || "неизвестно";
+}
+
+function planTitle(kind) {
+  return kind === "bypass" ? "С антиглушилкой" : "Обычная";
+}
+
+function discountTarget(kind) {
+  return ({ all: "на всё", subscription: "на все подписки", traffic_package: "на покупку ГБ", regular: "только обычные", bypass: "только антиглушилка" })[kind] || kind || "на всё";
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     state.view = button.dataset.view;
@@ -100,6 +116,11 @@ function renderDashboard() {
   const d = state.dashboard || {};
   el("view-dashboard").innerHTML = `<div class="grid">
     <div class="card">${note("Обзор", "Главные цифры по боту. Нажмите «Обновить», чтобы подтянуть свежие данные.")}</div>
+    <div class="help-grid">
+      ${helpCard("Что смотреть первым", "Если растёт «Без подписки», можно сделать рассылку через бота или создать скидку.")}
+      ${helpCard("Где управлять людьми", "Откройте «Пользователи», найдите tg_id и измените дни или скройте подписку.")}
+      ${helpCard("Где делать акции", "Откройте «Скидки»: без кода применяется автоматически, с кодом вводится пользователем.")}
+    </div>
     <div class="cards">
       ${stat("Пользователи", d.users, "Все, кто запускал бота")}
       ${stat("Активные подписки", d.active_subscriptions, "Сейчас работают")}
@@ -145,11 +166,11 @@ function renderUserDetail() {
 }
 
 function subHtml(s) {
-  const title = `${s.plan_kind || "regular"} #${s.type_index || s.slot_number}`;
-  return `<div class="item"><b>${title}</b><small>Срок: ${date(s.subscription_until)}</small><small>Видимость: ${s.is_visible ? "видна пользователю" : "скрыта"} · Продление: ${s.is_renewable ? "доступно" : "недоступно"}</small><div class="actions"><button class="button green" onclick="changeDays(${s.id},30)">+30 дней</button><button class="button red" onclick="changeDays(${s.id},-30)">-30 дней</button><button class="button ghost" onclick="archiveSub(${s.id})">Скрыть/архив</button><button class="button red" onclick="deleteSub(${s.id})">Удалить из БД</button></div><small>Удаление из БД не удаляет ключ в Remnawave. Для безопасного отключения лучше сначала убрать дни.</small></div>`;
+  const title = `${planTitle(s.plan_kind)} #${s.type_index || s.slot_number}`;
+  return `<div class="item important"><b>${title}</b><small>Срок действия: ${date(s.subscription_until)}</small><small>${s.is_visible ? "Пользователь видит эту подписку" : "Скрыта из интерфейса пользователя"}</small><small>${s.is_renewable ? "Можно продлевать" : "Продление запрещено"}</small><div class="actions"><button class="button green" onclick="changeDays(${s.id},30)">Добавить 30 дней</button><button class="button red" onclick="changeDays(${s.id},-30)">Убрать 30 дней</button><button class="button ghost" onclick="archiveSub(${s.id})">Скрыть / архивировать</button><button class="button red" onclick="deleteSub(${s.id})">Удалить запись</button></div><small class="warning">Важно: «Удалить запись» убирает подписку из БД. Ключ в Remnawave лучше сначала отключить через «Убрать 30 дней» или отдельное действие в Remnawave.</small></div>`;
 }
 
-function payHtml(p) { return `<div class="item"><b>${p.tariff_code}</b><small>${p.provider} · ${p.status} · ${rub(p.amount)} · ${date(p.created_at)}</small></div>`; }
+function payHtml(p) { return `<div class="item"><b>${p.tariff_code}</b><small>Статус: ${paymentStatus(p.status)} · способ: ${p.provider}</small><small>Сумма: ${rub(p.amount)} · дата: ${date(p.created_at)}</small></div>`; }
 async function changeDays(id, days) { await api(`/admin/api/subscriptions/${id}/days`, { method: "POST", body: JSON.stringify({ days }) }); toast("Срок изменён"); await openUser(state.selectedUser.user.tg_id); }
 async function archiveSub(id) { await api(`/admin/api/subscriptions/${id}/archive`, { method: "POST" }); toast("Подписка скрыта"); await openUser(state.selectedUser.user.tg_id); }
 async function deleteSub(id) { if (!confirm("Удалить запись подписки из БД?")) return; await api(`/admin/api/subscriptions/${id}`, { method: "DELETE" }); toast("Удалено из БД"); await openUser(state.selectedUser.user.tg_id); }
@@ -172,8 +193,8 @@ function renderLinks() {
     <h3>Рефералы пользователей</h3><div class="list">${state.referrals.map(refHtml).join("") || `<p class="muted">Пока нет данных</p>`}</div></div>`;
 }
 
-function linkHtml(l) { return `<div class="item"><b>${l.link.code}</b><small>${l.link.title || "без названия"}</small><small>Клики: ${l.total_clicks} · уникальные: ${l.unique_clicks} · новые: ${l.new_clicks} · оплаты: ${l.paid_payments} · выручка: ${rub(l.revenue)}</small><div class="actions"><button class="button ghost" onclick="toggleLink('${l.link.code}',${!l.link.is_active})">${l.link.is_active ? "Выключить" : "Включить"}</button></div></div>`; }
-function refHtml(r) { return `<div class="item"><b>${r.username || r.tg_id}</b><small>ID ${r.tg_id}</small><small>Клики: ${r.clicks} · новые: ${r.new_clicks} · рефералы: ${r.referred_users} · выручка: ${rub(r.referred_revenue)}</small></div>`; }
+function linkHtml(l) { return `<div class="item"><b>${l.link.code}</b><small>${l.link.title || "без названия"}</small><small>Всего переходов: ${l.total_clicks} · уникальных людей: ${l.unique_clicks}</small><small>Новых пользователей: ${l.new_clicks} · оплат: ${l.paid_payments} · выручка: ${rub(l.revenue)}</small><div class="actions"><button class="button ghost" onclick="toggleLink('${l.link.code}',${!l.link.is_active})">${l.link.is_active ? "Выключить ссылку" : "Включить ссылку"}</button></div></div>`; }
+function refHtml(r) { return `<div class="item"><b>${r.username || r.tg_id}</b><small>ID ${r.tg_id}</small><small>Переходов по его ссылке: ${r.clicks} · новых пользователей: ${r.new_clicks}</small><small>Рефералов в базе: ${r.referred_users} · выручка: ${rub(r.referred_revenue)}</small></div>`; }
 async function createLink() { await api("/admin/api/tracking-links", { method: "POST", body: JSON.stringify({ code: el("linkCode").value, title: el("linkTitle").value }) }); await reloadAll(); }
 async function toggleLink(code, active) { await api(`/admin/api/tracking-links/${code}/active`, { method: "POST", body: JSON.stringify({ active }) }); await reloadAll(); }
 
@@ -183,7 +204,7 @@ function renderNotifications() {
 }
 
 function ruleHtml(r) {
-  return `<div class="item"><b>${ruleTitle(r.notification_type)}</b><small>${ruleHint(r.notification_type)}</small><div class="form">${label("Статус", `<select id="en_${r.notification_type}"><option value="true" ${r.enabled ? "selected" : ""}>Включено</option><option value="false" ${!r.enabled ? "selected" : ""}>Выключено</option></select>`)}${label("Час МСК", `<input id="hour_${r.notification_type}" type="number" placeholder="19" value="${r.send_hour_msk ?? ""}">`)}${label("Cooldown, часов", `<input id="cool_${r.notification_type}" type="number" value="${r.cooldown_hours ?? ""}">`)}${label("Дней до конца", `<input id="days_${r.notification_type}" type="number" value="${r.days_before_expiry ?? ""}">`)}${label("Порог ГБ", `<input id="gb_${r.notification_type}" type="number" value="${r.low_traffic_gb ?? ""}">`)}${label("Дней до reset", `<input id="reset_${r.notification_type}" type="number" value="${r.min_days_to_reset ?? ""}">`)}<button class="button green" onclick="saveRule('${r.notification_type}')">Сохранить</button></div></div>`;
+  return `<div class="item important"><b>${ruleTitle(r.notification_type)}</b><small>${ruleHint(r.notification_type)}</small><div class="form">${label("Отправлять?", `<select id="en_${r.notification_type}"><option value="true" ${r.enabled ? "selected" : ""}>Да</option><option value="false" ${!r.enabled ? "selected" : ""}>Нет</option></select>`)}${label("Во сколько по МСК", `<input id="hour_${r.notification_type}" type="number" placeholder="19" value="${r.send_hour_msk ?? ""}">`)}${label("Не чаще чем раз в N часов", `<input id="cool_${r.notification_type}" type="number" value="${r.cooldown_hours ?? ""}">`)}${label("За сколько дней до конца", `<input id="days_${r.notification_type}" type="number" value="${r.days_before_expiry ?? ""}">`)}${label("Когда осталось меньше N ГБ", `<input id="gb_${r.notification_type}" type="number" value="${r.low_traffic_gb ?? ""}">`)}${label("Если до reset больше N дней", `<input id="reset_${r.notification_type}" type="number" value="${r.min_days_to_reset ?? ""}">`)}<button class="button green" onclick="saveRule('${r.notification_type}')">Сохранить правило</button></div></div>`;
 }
 
 function ruleTitle(type) { return ({ subscription_expiring: "Подписка скоро закончится", expired_or_no_subscription: "Нет активной подписки", low_bypass_traffic: "Мало ГБ anti-block" })[type] || type; }
@@ -197,7 +218,7 @@ function renderDiscounts() {
     <div class="list">${state.discounts.map(discountHtml).join("") || `<p class="muted">Скидок пока нет</p>`}</div></div>`;
 }
 
-function discountHtml(d) { return `<div class="item"><b>${d.title}</b><small>${d.code || "автоматическая"} · ${d.discount_type === "percent" ? `${d.discount_value}%` : rub(d.discount_value)} · цель: ${d.target_kind}</small><small>Использовано: ${d.used_count}/${d.max_uses || "∞"} · ${d.is_active ? "активна" : "выключена"}</small><div class="actions"><button class="button ghost" onclick="toggleDiscount(${d.id},${!d.is_active})">${d.is_active ? "Выключить" : "Включить"}</button></div></div>`; }
+function discountHtml(d) { return `<div class="item important"><b>${d.title}</b><small>${d.code ? `Код: ${d.code}` : "Автоматическая скидка без кода"}</small><small>Размер: ${d.discount_type === "percent" ? `${d.discount_value}%` : rub(d.discount_value)} · действует: ${discountTarget(d.target_kind)}</small><small>Использовано: ${d.used_count}/${d.max_uses || "без лимита"} · ${d.is_active ? "сейчас активна" : "сейчас выключена"}</small><div class="actions"><button class="button ghost" onclick="toggleDiscount(${d.id},${!d.is_active})">${d.is_active ? "Выключить скидку" : "Включить скидку"}</button></div></div>`; }
 async function createDiscount() { await api("/admin/api/discounts", { method: "POST", body: JSON.stringify({ title: el("discTitle").value, code: el("discCode").value || null, discount_type: el("discType").value, discount_value: el("discValue").value, target_kind: el("discTarget").value, max_uses: el("discMax").value ? Number(el("discMax").value) : null, is_active: true }) }); await reloadAll(); }
 async function toggleDiscount(id, active) { await api(`/admin/api/discounts/${id}/active`, { method: "POST", body: JSON.stringify({ active }) }); await reloadAll(); }
 
