@@ -1792,29 +1792,32 @@ async def set_discount_campaign_active(discount_id: int, is_active: bool) -> boo
 
 async def get_applicable_discount(tg_id: int, tariff_code: str, payment_kind: str, amount: float, discount_code: str | None = None, plan_kind: str | None = None):
     now = __import__('datetime').datetime.utcnow()
-    code_filter = "AND (code = $5)" if discount_code else "AND code IS NULL"
-    params = (tariff_code, payment_kind, now, amount, discount_code, plan_kind) if discount_code else (tariff_code, payment_kind, now, amount, plan_kind)
-    rows = await db_execute(
-        f"""
-        SELECT * FROM discount_campaigns
-        WHERE is_active = TRUE
-          AND (starts_at IS NULL OR starts_at <= $3)
-          AND (ends_at IS NULL OR ends_at >= $3)
-          AND (max_uses IS NULL OR used_count < max_uses)
-          AND (
-              target_kind = 'all'
-              OR target_kind = $2
-              OR target_kind = $1
-              OR target_kind = ${'$6' if discount_code else '$5'}
-              OR target_code = $1
-          )
-          {code_filter}
-        ORDER BY discount_value DESC, created_at DESC
-        LIMIT 1
-        """,
-        params,
-        fetch_one=True,
-    )
+    try:
+        rows = await db_execute(
+            """
+            SELECT * FROM discount_campaigns
+            WHERE is_active = TRUE
+              AND (starts_at IS NULL OR starts_at <= $3)
+              AND (ends_at IS NULL OR ends_at >= $3)
+              AND (max_uses IS NULL OR used_count < max_uses)
+              AND (
+                  target_kind = 'all'
+                  OR target_kind = $2
+                  OR target_kind = $1
+                  OR target_kind = $6
+                  OR target_code = $1
+              )
+              AND (($5::TEXT IS NULL AND code IS NULL) OR code = $5)
+            ORDER BY discount_value DESC, created_at DESC
+            LIMIT 1
+            """,
+            (tariff_code, payment_kind, now, amount, discount_code, plan_kind),
+            fetch_one=True,
+        )
+    except Exception as e:
+        import logging
+        logging.warning(f"Discount lookup failed, continuing without discount: {e}")
+        return None
     if not rows:
         return None
     discount = rows
