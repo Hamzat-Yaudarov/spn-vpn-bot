@@ -14,13 +14,21 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{ st
 async function reloadAll(){ await load(); toast("Обновлено"); }
 async function load(){
   try{
-    const [me,dashboard,users,promos,links,referrals,notifications,discounts] = await Promise.all([
-      api("/admin/api/me"), api("/admin/api/dashboard"), api("/admin/api/users"), api("/admin/api/promos"), api("/admin/api/tracking-links"), api("/admin/api/referrals"), api("/admin/api/notifications"), api("/admin/api/discounts")
+    const me = await api("/admin/api/me");
+    const requests = await Promise.allSettled([
+      api("/admin/api/dashboard"), api("/admin/api/users"), api("/admin/api/promos"), api("/admin/api/tracking-links"), api("/admin/api/referrals"), api("/admin/api/notifications"), api("/admin/api/discounts")
     ]);
-    Object.assign(state,{me,dashboard,users:users.users||[],promos:promos.promos||[],links:links.links||[],referrals:referrals.referrals||[],notifications,discounts:discounts.discounts||[]});
+    const [dashboard,users,promos,links,referrals,notifications,discounts] = requests.map((result, index) => {
+      if (result.status === "fulfilled") return result.value;
+      console.error("Admin section failed", index, result.reason);
+      return null;
+    });
+    Object.assign(state,{me,dashboard:dashboard||{},users:users?.users||[],promos:promos?.promos||[],links:links?.links||[],referrals:referrals?.referrals||[],notifications:notifications||{rules:[],state:[]},discounts:discounts?.discounts||[]});
     el("adminLine").textContent = me.username ? `@${me.username}` : `ID ${me.id}`;
     render();
-  }catch(e){ document.querySelector("main").innerHTML=`<div class="card"><h2>Нет доступа</h2><p class="muted">${e.message}</p></div>`; }
+    const failed = requests.filter((r) => r.status === "rejected").length;
+    if (failed) toast(`Загружено частично. Ошибок: ${failed}`);
+  }catch(e){ document.querySelector("main").innerHTML=`<div class="card"><h2>Нет доступа</h2><p class="muted">${e.message}</p><p class="muted">Откройте панель кнопкой в боте, не обычной ссылкой в браузере.</p></div>`; }
 }
 
 function render(){ renderDashboard(); renderUsers(); renderPromos(); renderLinks(); renderNotifications(); renderDiscounts(); }

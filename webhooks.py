@@ -4,8 +4,10 @@ import hashlib
 import html
 import hmac
 import json
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qsl
+from uuid import UUID
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -107,6 +109,10 @@ async def _admin_user(request: Request) -> dict:
 def _jsonable(value):
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
     if isinstance(value, dict):
         return {k: _jsonable(v) for k, v in value.items()}
     if isinstance(value, list):
