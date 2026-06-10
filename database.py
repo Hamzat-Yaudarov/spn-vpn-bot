@@ -155,10 +155,6 @@ async def run_migrations():
                 'payment_kind': {'type': 'TEXT', 'nullable': False, 'default': "'subscription'"},
                 'traffic_package_code': {'type': 'TEXT', 'nullable': True},
                 'tracking_code': {'type': 'TEXT', 'nullable': True},
-                'discount_id': {'type': 'BIGINT', 'nullable': True},
-                'discount_code': {'type': 'TEXT', 'nullable': True},
-                'discount_amount': {'type': 'NUMERIC', 'nullable': False, 'default': '0'},
-                'original_amount': {'type': 'NUMERIC', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
@@ -295,42 +291,6 @@ async def run_migrations():
                 'last_sent_at': {'type': 'TIMESTAMP', 'nullable': False, 'default': 'now()'},
                 'created_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
                 'updated_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
-            }
-
-            expected_notification_rules_columns = {
-                'notification_type': {'type': 'TEXT', 'nullable': False},
-                'enabled': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
-                'send_hour_msk': {'type': 'INT', 'nullable': True},
-                'cooldown_hours': {'type': 'INT', 'nullable': False},
-                'days_before_expiry': {'type': 'INT', 'nullable': True},
-                'low_traffic_gb': {'type': 'INT', 'nullable': True},
-                'min_days_to_reset': {'type': 'INT', 'nullable': True},
-                'updated_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
-            }
-
-            expected_discount_campaigns_columns = {
-                'code': {'type': 'TEXT', 'nullable': True},
-                'title': {'type': 'TEXT', 'nullable': False},
-                'discount_type': {'type': 'TEXT', 'nullable': False},
-                'discount_value': {'type': 'NUMERIC', 'nullable': False},
-                'target_kind': {'type': 'TEXT', 'nullable': False, 'default': "'all'"},
-                'target_code': {'type': 'TEXT', 'nullable': True},
-                'starts_at': {'type': 'TIMESTAMP', 'nullable': True},
-                'ends_at': {'type': 'TIMESTAMP', 'nullable': True},
-                'max_uses': {'type': 'INT', 'nullable': True},
-                'used_count': {'type': 'INT', 'nullable': False, 'default': '0'},
-                'per_user_limit': {'type': 'INT', 'nullable': False, 'default': '1'},
-                'is_active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
-                'created_by': {'type': 'BIGINT', 'nullable': True},
-                'created_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
-                'updated_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
-            }
-
-            expected_referral_clicks_columns = {
-                'referrer_id': {'type': 'BIGINT', 'nullable': False},
-                'clicked_tg_id': {'type': 'BIGINT', 'nullable': False},
-                'is_new_user': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
-                'clicked_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
             }
 
             # ═══════════════════════════════════════════════════════════
@@ -572,65 +532,6 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'notification_state' создана или уже существует")
 
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS notification_rules (
-                    id BIGSERIAL PRIMARY KEY,
-                    notification_type TEXT UNIQUE NOT NULL,
-                    enabled BOOLEAN DEFAULT TRUE NOT NULL,
-                    send_hour_msk INT,
-                    cooldown_hours INT NOT NULL,
-                    days_before_expiry INT,
-                    low_traffic_gb INT,
-                    min_days_to_reset INT,
-                    created_at TIMESTAMP DEFAULT now(),
-                    updated_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            await conn.execute("""
-                INSERT INTO notification_rules (
-                    notification_type, enabled, send_hour_msk, cooldown_hours,
-                    days_before_expiry, low_traffic_gb, min_days_to_reset
-                ) VALUES
-                    ('subscription_expiring', TRUE, 19, 20, 3, NULL, NULL),
-                    ('expired_or_no_subscription', TRUE, NULL, 86, NULL, NULL, NULL),
-                    ('low_bypass_traffic', TRUE, NULL, 36, NULL, 10, 8)
-                ON CONFLICT (notification_type) DO NOTHING
-            """)
-            logging.info("✅ Таблица 'notification_rules' создана или уже существует")
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS discount_campaigns (
-                    id BIGSERIAL PRIMARY KEY,
-                    code TEXT UNIQUE,
-                    title TEXT NOT NULL,
-                    discount_type TEXT NOT NULL,
-                    discount_value NUMERIC NOT NULL,
-                    target_kind TEXT DEFAULT 'all' NOT NULL,
-                    target_code TEXT,
-                    starts_at TIMESTAMP,
-                    ends_at TIMESTAMP,
-                    max_uses INT,
-                    used_count INT DEFAULT 0 NOT NULL,
-                    per_user_limit INT DEFAULT 1 NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE NOT NULL,
-                    created_by BIGINT,
-                    created_at TIMESTAMP DEFAULT now(),
-                    updated_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            logging.info("✅ Таблица 'discount_campaigns' создана или уже существует")
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS referral_link_clicks (
-                    id BIGSERIAL PRIMARY KEY,
-                    referrer_id BIGINT NOT NULL,
-                    clicked_tg_id BIGINT NOT NULL,
-                    is_new_user BOOLEAN DEFAULT FALSE NOT NULL,
-                    clicked_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            logging.info("✅ Таблица 'referral_link_clicks' создана или уже существует")
-
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -709,11 +610,6 @@ async def run_migrations():
                 # notification_state индексы
                 "CREATE INDEX IF NOT EXISTS idx_notification_state_lookup ON notification_state(tg_id, subscription_id, notification_type);",
                 "CREATE INDEX IF NOT EXISTS idx_notification_state_last_sent ON notification_state(last_sent_at);",
-                "CREATE INDEX IF NOT EXISTS idx_notification_rules_type ON notification_rules(notification_type);",
-                "CREATE INDEX IF NOT EXISTS idx_discount_campaigns_active ON discount_campaigns(is_active);",
-                "CREATE INDEX IF NOT EXISTS idx_discount_campaigns_code ON discount_campaigns(code);",
-                "CREATE INDEX IF NOT EXISTS idx_referral_clicks_referrer ON referral_link_clicks(referrer_id);",
-                "CREATE INDEX IF NOT EXISTS idx_referral_clicks_clicked ON referral_link_clicks(clicked_tg_id);",
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
@@ -825,9 +721,6 @@ async def run_migrations():
             await sync_table_schema(conn, 'tracking_links', expected_tracking_links_columns)
             await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
             await sync_table_schema(conn, 'notification_state', expected_notification_state_columns)
-            await sync_table_schema(conn, 'notification_rules', expected_notification_rules_columns)
-            await sync_table_schema(conn, 'discount_campaigns', expected_discount_campaigns_columns)
-            await sync_table_schema(conn, 'referral_link_clicks', expected_referral_clicks_columns)
 
             await conn.execute(
                 """
@@ -1557,323 +1450,6 @@ async def get_tracking_link_stats(code: str):
 
 
 # ────────────────────────────────────────────────
-#               ADMIN PANEL HELPERS
-# ────────────────────────────────────────────────
-
-async def get_admin_dashboard_stats() -> dict:
-    users = await db_execute("SELECT COUNT(*) AS count FROM users", fetch_one=True)
-    active_subscriptions = await db_execute(
-        """
-        SELECT
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE plan_kind = 'regular') AS regular,
-            COUNT(*) FILTER (WHERE plan_kind = 'bypass') AS bypass
-        FROM subscriptions
-        WHERE subscription_until IS NOT NULL
-          AND subscription_until > now() AT TIME ZONE 'UTC'
-        """,
-        fetch_one=True,
-    )
-    no_sub_users = await db_execute(
-        """
-        SELECT COUNT(*) AS count FROM users u
-        WHERE NOT EXISTS (
-            SELECT 1 FROM subscriptions s
-            WHERE s.tg_id = u.tg_id
-              AND s.subscription_until IS NOT NULL
-              AND s.subscription_until > now() AT TIME ZONE 'UTC'
-        )
-        """,
-        fetch_one=True,
-    )
-    payments = await db_execute(
-        """
-        SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS revenue
-        FROM payments
-        WHERE status = 'paid'
-        """,
-        fetch_one=True,
-    )
-    traffic = await db_execute(
-        """
-        SELECT COUNT(*) AS count, COALESCE(SUM(traffic_bytes), 0) AS bytes
-        FROM traffic_purchases
-        WHERE status = 'paid'
-        """,
-        fetch_one=True,
-    )
-    return {
-        "users": users["count"] if users else 0,
-        "active_subscriptions": active_subscriptions["total"] if active_subscriptions else 0,
-        "active_regular": active_subscriptions["regular"] if active_subscriptions else 0,
-        "active_bypass": active_subscriptions["bypass"] if active_subscriptions else 0,
-        "users_without_subscription": no_sub_users["count"] if no_sub_users else 0,
-        "paid_payments": payments["count"] if payments else 0,
-        "revenue": float(payments["revenue"] or 0) if payments else 0,
-        "traffic_purchases": traffic["count"] if traffic else 0,
-        "traffic_gb": round((traffic["bytes"] or 0) / (1024 ** 3), 1) if traffic else 0,
-    }
-
-
-async def admin_search_users(query: str | None = None, limit: int = 50):
-    if query:
-        like = f"%{query.lower()}%"
-        return await db_execute(
-            """
-            SELECT u.tg_id, u.username, u.created_at, u.tracking_code,
-                   COUNT(s.id) FILTER (WHERE s.subscription_until > now() AT TIME ZONE 'UTC') AS active_subscriptions,
-                   COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'paid'), 0) AS revenue
-            FROM users u
-            LEFT JOIN subscriptions s ON s.tg_id = u.tg_id
-            LEFT JOIN payments p ON p.tg_id = u.tg_id
-            WHERE CAST(u.tg_id AS TEXT) ILIKE $1 OR LOWER(COALESCE(u.username, '')) LIKE $1
-            GROUP BY u.tg_id, u.username, u.created_at, u.tracking_code
-            ORDER BY u.created_at DESC
-            LIMIT $2
-            """,
-            (like, limit),
-            fetch_all=True,
-        )
-    return await db_execute(
-        """
-        SELECT u.tg_id, u.username, u.created_at, u.tracking_code,
-               COUNT(s.id) FILTER (WHERE s.subscription_until > now() AT TIME ZONE 'UTC') AS active_subscriptions,
-               COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'paid'), 0) AS revenue
-        FROM users u
-        LEFT JOIN subscriptions s ON s.tg_id = u.tg_id
-        LEFT JOIN payments p ON p.tg_id = u.tg_id
-        GROUP BY u.tg_id, u.username, u.created_at, u.tracking_code
-        ORDER BY u.created_at DESC
-        LIMIT $1
-        """,
-        (limit,),
-        fetch_all=True,
-    )
-
-
-async def admin_get_user_detail(tg_id: int) -> dict | None:
-    user = await db_execute("SELECT * FROM users WHERE tg_id = $1", (tg_id,), fetch_one=True)
-    if not user:
-        return None
-    subscriptions = await get_user_subscriptions(tg_id)
-    payments = await db_execute(
-        "SELECT * FROM payments WHERE tg_id = $1 ORDER BY created_at DESC LIMIT 20",
-        (tg_id,),
-        fetch_all=True,
-    )
-    return {"user": user, "subscriptions": subscriptions or [], "payments": payments or []}
-
-
-async def admin_archive_subscription(subscription_id: int) -> bool:
-    row = await db_execute(
-        """
-        UPDATE subscriptions
-        SET is_visible = FALSE, is_renewable = FALSE, updated_at = now()
-        WHERE id = $1
-        RETURNING 1
-        """,
-        (subscription_id,),
-        fetch_one=True,
-    )
-    return row is not None
-
-
-async def admin_list_promo_codes():
-    return await db_execute(
-        """
-        SELECT p.*, COUNT(u.id) AS unique_users
-        FROM promo_codes p
-        LEFT JOIN promo_code_users u ON u.promo_code = p.code
-        GROUP BY p.id, p.code, p.days, p.max_uses, p.used_count, p.active, p.created_at
-        ORDER BY p.created_at DESC
-        """,
-        fetch_all=True,
-    )
-
-
-async def admin_set_promo_active(code: str, active: bool) -> bool:
-    row = await db_execute(
-        "UPDATE promo_codes SET active = $2 WHERE code = $1 RETURNING 1",
-        (code.upper(), active),
-        fetch_one=True,
-    )
-    return row is not None
-
-
-async def admin_delete_promo_code(code: str) -> bool:
-    row = await db_execute("DELETE FROM promo_codes WHERE code = $1 RETURNING 1", (code.upper(),), fetch_one=True)
-    return row is not None
-
-
-async def get_notification_rules():
-    return await db_execute("SELECT * FROM notification_rules ORDER BY notification_type ASC", fetch_all=True)
-
-
-async def update_notification_rule(notification_type: str, data: dict):
-    return await db_execute(
-        """
-        UPDATE notification_rules
-        SET enabled = $2,
-            send_hour_msk = $3,
-            cooldown_hours = $4,
-            days_before_expiry = $5,
-            low_traffic_gb = $6,
-            min_days_to_reset = $7,
-            updated_at = now()
-        WHERE notification_type = $1
-        RETURNING *
-        """,
-        (
-            notification_type,
-            bool(data.get("enabled", True)),
-            data.get("send_hour_msk"),
-            int(data.get("cooldown_hours") or 24),
-            data.get("days_before_expiry"),
-            data.get("low_traffic_gb"),
-            data.get("min_days_to_reset"),
-        ),
-        fetch_one=True,
-    )
-
-
-async def get_notification_state_overview(limit: int = 100):
-    return await db_execute(
-        """
-        SELECT ns.*, u.username
-        FROM notification_state ns
-        LEFT JOIN users u ON u.tg_id = ns.tg_id
-        ORDER BY ns.last_sent_at DESC
-        LIMIT $1
-        """,
-        (limit,),
-        fetch_all=True,
-    )
-
-
-async def create_discount_campaign(data: dict, created_by: int):
-    return await db_execute(
-        """
-        INSERT INTO discount_campaigns (
-            code, title, discount_type, discount_value, target_kind, target_code,
-            starts_at, ends_at, max_uses, per_user_limit, is_active, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-        RETURNING *
-        """,
-        (
-            (data.get("code") or None),
-            data["title"],
-            data["discount_type"],
-            float(data["discount_value"]),
-            data.get("target_kind") or "all",
-            data.get("target_code") or None,
-            data.get("starts_at"),
-            data.get("ends_at"),
-            data.get("max_uses"),
-            int(data.get("per_user_limit") or 1),
-            bool(data.get("is_active", True)),
-            created_by,
-        ),
-        fetch_one=True,
-    )
-
-
-async def list_discount_campaigns():
-    return await db_execute("SELECT * FROM discount_campaigns ORDER BY created_at DESC", fetch_all=True)
-
-
-async def set_discount_campaign_active(discount_id: int, is_active: bool) -> bool:
-    row = await db_execute(
-        "UPDATE discount_campaigns SET is_active = $2, updated_at = now() WHERE id = $1 RETURNING 1",
-        (discount_id, is_active),
-        fetch_one=True,
-    )
-    return row is not None
-
-
-async def get_applicable_discount(tg_id: int, tariff_code: str, payment_kind: str, amount: float, discount_code: str | None = None, plan_kind: str | None = None):
-    now = __import__('datetime').datetime.utcnow()
-    try:
-        rows = await db_execute(
-            """
-            SELECT * FROM discount_campaigns
-            WHERE is_active = TRUE
-              AND (starts_at IS NULL OR starts_at <= $3)
-              AND (ends_at IS NULL OR ends_at >= $3)
-              AND (max_uses IS NULL OR used_count < max_uses)
-              AND (
-                  target_kind = 'all'
-                  OR target_kind = $2
-                  OR target_kind = $1
-                  OR target_kind = $6
-                  OR target_code = $1
-              )
-              AND (($5::TEXT IS NULL AND code IS NULL) OR code = $5)
-            ORDER BY discount_value DESC, created_at DESC
-            LIMIT 1
-            """,
-            (tariff_code, payment_kind, now, amount, discount_code, plan_kind),
-            fetch_one=True,
-        )
-    except Exception as e:
-        import logging
-        logging.warning(f"Discount lookup failed, continuing without discount: {e}")
-        return None
-    if not rows:
-        return None
-    discount = rows
-    if discount["per_user_limit"]:
-        used = await db_execute(
-            "SELECT COUNT(*) AS count FROM payments WHERE tg_id = $1 AND discount_id = $2 AND status = 'paid'",
-            (tg_id, discount["id"]),
-            fetch_one=True,
-        )
-        if used and used["count"] >= discount["per_user_limit"]:
-            return None
-    value = float(discount["discount_value"])
-    discount_amount = amount * value / 100 if discount["discount_type"] == "percent" else value
-    discount_amount = min(max(0, amount - 1), max(0, round(discount_amount, 2)))
-    return {"campaign": discount, "discount_amount": discount_amount, "final_amount": round(amount - discount_amount, 2)}
-
-
-async def increment_discount_usage(discount_id: int | None):
-    if discount_id:
-        await db_execute(
-            "UPDATE discount_campaigns SET used_count = used_count + 1, updated_at = now() WHERE id = $1",
-            (discount_id,),
-        )
-
-
-async def record_referral_link_click(referrer_id: int, clicked_tg_id: int, is_new_user: bool):
-    await db_execute(
-        "INSERT INTO referral_link_clicks (referrer_id, clicked_tg_id, is_new_user) VALUES ($1, $2, $3)",
-        (referrer_id, clicked_tg_id, is_new_user),
-    )
-
-
-async def get_referral_overview(limit: int = 50):
-    return await db_execute(
-        """
-        SELECT u.tg_id, u.username,
-               COUNT(DISTINCT c.id) AS clicks,
-               COUNT(DISTINCT c.id) FILTER (WHERE c.is_new_user = TRUE) AS new_clicks,
-               COUNT(DISTINCT r.referred_user_id) AS referred_users,
-               COALESCE(SUM(e.amount), 0) AS referred_revenue,
-               COALESCE(SUM(e.referral_share), 0) AS referral_share
-        FROM users u
-        LEFT JOIN referral_link_clicks c ON c.referrer_id = u.tg_id
-        LEFT JOIN users r ON r.referrer_id = u.tg_id
-        LEFT JOIN referral_earnings e ON e.referrer_id = u.tg_id
-        GROUP BY u.tg_id, u.username
-        HAVING COUNT(DISTINCT c.id) > 0 OR COUNT(DISTINCT r.referred_user_id) > 0 OR COALESCE(SUM(e.amount), 0) > 0
-        ORDER BY referred_revenue DESC, clicks DESC
-        LIMIT $1
-        """,
-        (limit,),
-        fetch_all=True,
-    )
-
-
-# ────────────────────────────────────────────────
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
@@ -1889,10 +1465,6 @@ async def create_payment(
     target_slot_number: int | None = None,
     payment_kind: str = 'subscription',
     traffic_package_code: str | None = None,
-    discount_id: int | None = None,
-    discount_code: str | None = None,
-    discount_amount: float = 0,
-    original_amount: float | None = None,
 ):
     """Создать запись о платеже"""
     from datetime import datetime
@@ -1911,13 +1483,9 @@ async def create_payment(
             target_slot_number,
             payment_kind,
             traffic_package_code,
-            tracking_code,
-            discount_id,
-            discount_code,
-            discount_amount,
-            original_amount
+            tracking_code
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         """,
         (
             tg_id,
@@ -1932,10 +1500,6 @@ async def create_payment(
             payment_kind,
             traffic_package_code,
             tracking_code,
-            discount_id,
-            discount_code,
-            discount_amount,
-            original_amount,
         )
     )
 
@@ -2192,13 +1756,10 @@ async def update_payment_status(payment_id: int, status: str):
 
 async def update_payment_status_by_invoice(invoice_id: str, status: str):
     """Обновить статус платежа по invoice_id"""
-    row = await db_execute(
-        "UPDATE payments SET status = $1, updated_at = now() WHERE invoice_id = $2 RETURNING discount_id, status",
+    await db_execute(
+        "UPDATE payments SET status = $1 WHERE invoice_id = $2",
         (status, invoice_id)
-        , fetch_one=True
     )
-    if status == "paid" and row and row.get("discount_id"):
-        await increment_discount_usage(row["discount_id"])
 
 
 # ────────────────────────────────────────────────

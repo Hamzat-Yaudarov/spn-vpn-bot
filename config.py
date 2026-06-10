@@ -11,8 +11,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 MINIAPP_URL = os.getenv("MINIAPP_URL", "https://wayspn.ru/app")
-ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", "https://wayspn.ru/admin")
-ADMIN_PANEL_VERSION = "20260610-3"
 
 # ────────────────────────────────────────────────
 #           SUPPORT & NEWS CHANNELS

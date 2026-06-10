@@ -339,9 +339,7 @@ function renderBuy() {
 function paymentHtml(title) {
   return `<div class="grid">
     <button class="button ghost" onclick="backFromPayment()">← Назад</button>
-    <div class="section-note payment-note"><p class="step">Шаг 3 из 3</p><p class="title">${title}</p><p class="muted">Выберите способ оплаты. Если есть скидочный код, введите его перед оплатой.</p></div>
-    <div class="card"><input id="discountCode" placeholder="Скидочный код, если есть"></div>
-    <div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div>
+    <div class="section-note payment-note"><p class="step">Шаг 3 из 3</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p></div><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div>
   </div>`;
 }
 
@@ -386,16 +384,14 @@ async function payPrepared(provider) {
   if (!state.pendingPayment) return;
   try {
     let data;
-    const discountCode = document.getElementById("discountCode")?.value?.trim() || null;
-    const payload = { ...state.pendingPayment, provider, discount_code: discountCode };
     if (state.pendingPayment.type === "traffic") {
-      data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify(payload) });
+      data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     } else {
-      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify(payload) });
+      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     }
     startPaymentPolling({ ...state.pendingPayment, invoice_id: data.invoice_id, provider });
     openLink(data.pay_url);
-    showToast(data.discount ? `Скидка применена. К оплате ${data.amount} ₽` : "Счёт создан. Ждём оплату автоматически.");
+    showToast("Счёт создан. Ждём оплату автоматически.");
   } catch (e) {
     showToast(e.message);
   }

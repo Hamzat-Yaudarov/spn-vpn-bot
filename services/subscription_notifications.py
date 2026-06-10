@@ -25,24 +25,6 @@ EXPIRING_COOLDOWN_HOURS = 20
 EXPIRED_COOLDOWN_HOURS = 86
 LOW_TRAFFIC_COOLDOWN_HOURS = 36
 
-DEFAULT_RULES = {
-    EXPIRING_NOTIFICATION_TYPE: {"enabled": True, "send_hour_msk": 19, "cooldown_hours": EXPIRING_COOLDOWN_HOURS, "days_before_expiry": 3},
-    EXPIRED_NOTIFICATION_TYPE: {"enabled": True, "cooldown_hours": EXPIRED_COOLDOWN_HOURS},
-    LOW_TRAFFIC_NOTIFICATION_TYPE: {"enabled": True, "cooldown_hours": LOW_TRAFFIC_COOLDOWN_HOURS, "low_traffic_gb": 10, "min_days_to_reset": 8},
-}
-
-
-async def _notification_rules() -> dict:
-    rules = {key: value.copy() for key, value in DEFAULT_RULES.items()}
-    try:
-        rows = await db.get_notification_rules()
-        for row in rows or []:
-            rule = rules.setdefault(row["notification_type"], {})
-            rule.update(dict(row))
-    except Exception as e:
-        logger.warning("Failed to load notification rules, using defaults: %s", e)
-    return rules
-
 
 def ensure_utc_aware(dt):
     if dt is None or not isinstance(dt, datetime):
@@ -97,25 +79,18 @@ async def check_and_send_notifications(bot):
     try:
         while True:
             now_msk = datetime.now(MSK)
-            rules = await _notification_rules()
-            expiring_rule = rules.get(EXPIRING_NOTIFICATION_TYPE, DEFAULT_RULES[EXPIRING_NOTIFICATION_TYPE])
-            send_hour = expiring_rule.get("send_hour_msk") if expiring_rule.get("send_hour_msk") is not None else 19
 
-            if expiring_rule.get("enabled", True) and now_msk.hour == send_hour and now_msk.minute == 0 and last_expiring_run_date != now_msk.date():
+            if now_msk.hour == 19 and now_msk.minute == 0 and last_expiring_run_date != now_msk.date():
                 last_expiring_run_date = now_msk.date()
                 logger.info("⏰ Scheduled check: 19:00 MSK - expiring subscriptions")
-                await _safe_run(_send_notifications_for_expiring, bot, expiring_rule)
+                await _safe_run(_send_notifications_for_expiring, bot)
                 await asyncio.sleep(60)
 
             now_utc = datetime.utcnow()
             if not last_periodic_check_at or now_utc - last_periodic_check_at >= timedelta(hours=1):
                 last_periodic_check_at = now_utc
-                low_rule = rules.get(LOW_TRAFFIC_NOTIFICATION_TYPE, DEFAULT_RULES[LOW_TRAFFIC_NOTIFICATION_TYPE])
-                expired_rule = rules.get(EXPIRED_NOTIFICATION_TYPE, DEFAULT_RULES[EXPIRED_NOTIFICATION_TYPE])
-                if low_rule.get("enabled", True):
-                    await _safe_run(_send_notifications_for_low_traffic, bot, low_rule)
-                if expired_rule.get("enabled", True):
-                    await _safe_run(_send_notifications_for_expired, bot, expired_rule)
+                await _safe_run(_send_notifications_for_low_traffic, bot)
+                await _safe_run(_send_notifications_for_expired, bot)
 
             await asyncio.sleep(30)
     except asyncio.CancelledError:
@@ -123,17 +98,15 @@ async def check_and_send_notifications(bot):
         raise
 
 
-async def _safe_run(func, bot, rule=None):
+async def _safe_run(func, bot):
     try:
-        await func(bot, rule or {})
+        await func(bot)
     except Exception as e:
         logger.error("Notification task %s failed: %s", func.__name__, e, exc_info=True)
 
 
-async def _send_notifications_for_expiring(bot, rule):
+async def _send_notifications_for_expiring(bot):
     now = datetime.now(timezone.utc)
-    days_before = int(rule.get("days_before_expiry") or 3)
-    cooldown = int(rule.get("cooldown_hours") or EXPIRING_COOLDOWN_HOURS)
     subscriptions = await db.db_execute(
         """
         SELECT id, tg_id, slot_number, type_index, plan_kind, subscription_until
@@ -144,7 +117,7 @@ async def _send_notifications_for_expiring(bot, rule):
           AND subscription_until <= $2
         ORDER BY tg_id ASC, subscription_until ASC
         """,
-        (now.replace(tzinfo=None), (now + timedelta(days=days_before)).replace(tzinfo=None)),
+        (now.replace(tzinfo=None), (now + timedelta(days=3)).replace(tzinfo=None)),
         fetch_all=True,
     )
 
@@ -152,7 +125,7 @@ async def _send_notifications_for_expiring(bot, rule):
     for i, subscription in enumerate(subscriptions or []):
         tg_id = subscription["tg_id"]
         subscription_id = subscription["id"]
-        if not await db.can_send_notification(tg_id, EXPIRING_NOTIFICATION_TYPE, cooldown, subscription_id):
+        if not await db.can_send_notification(tg_id, EXPIRING_NOTIFICATION_TYPE, EXPIRING_COOLDOWN_HOURS, subscription_id):
             continue
 
         expire_at = ensure_utc_aware(subscription["subscription_until"])
@@ -176,7 +149,7 @@ async def _send_notifications_for_expiring(bot, rule):
     logger.info("✅ Expiring notification batch complete: %s sent", sent)
 
 
-async def _send_notifications_for_expired(bot, rule):
+async def _send_notifications_for_expired(bot):
     users = await db.db_execute("SELECT tg_id FROM users ORDER BY tg_id ASC", fetch_all=True)
     now = datetime.utcnow()
     sent = 0
@@ -190,7 +163,7 @@ async def _send_notifications_for_expired(bot, rule):
         )
         if has_active:
             continue
-        if not await db.can_send_notification(tg_id, EXPIRED_NOTIFICATION_TYPE, int(rule.get("cooldown_hours") or EXPIRED_COOLDOWN_HOURS)):
+        if not await db.can_send_notification(tg_id, EXPIRED_NOTIFICATION_TYPE, EXPIRED_COOLDOWN_HOURS):
             continue
 
         expired_dates = [
@@ -220,11 +193,8 @@ async def _send_notifications_for_expired(bot, rule):
     logger.info("✅ Expired/no-sub notification batch complete: %s sent", sent)
 
 
-async def _send_notifications_for_low_traffic(bot, rule):
+async def _send_notifications_for_low_traffic(bot):
     now = datetime.utcnow()
-    low_traffic_gb = int(rule.get("low_traffic_gb") or 10)
-    min_days_to_reset = int(rule.get("min_days_to_reset") or 8)
-    cooldown = int(rule.get("cooldown_hours") or LOW_TRAFFIC_COOLDOWN_HOURS)
     subscriptions = await db.db_execute(
         """
         SELECT id, tg_id, slot_number, type_index, plan_kind, remnawave_uuid,
@@ -239,7 +209,7 @@ async def _send_notifications_for_low_traffic(bot, rule):
           AND traffic_reset_at > $2
         ORDER BY tg_id ASC, id ASC
         """,
-        (now, now + timedelta(days=min_days_to_reset)),
+        (now, now + timedelta(days=8)),
         fetch_all=True,
     )
 
@@ -254,14 +224,14 @@ async def _send_notifications_for_low_traffic(bot, rule):
             try:
                 tg_id = subscription["tg_id"]
                 subscription_id = subscription["id"]
-                if not await db.can_send_notification(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, cooldown, subscription_id):
+                if not await db.can_send_notification(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, LOW_TRAFFIC_COOLDOWN_HOURS, subscription_id):
                     continue
 
                 user_info = await remnawave_get_user_info(session, subscription["remnawave_uuid"])
                 used_bytes = ((user_info or {}).get("userTraffic") or {}).get("usedTrafficBytes") or 0
                 limit_bytes = subscription.get("current_period_limit_bytes") or 0
                 remaining_bytes = max(0, limit_bytes - used_bytes)
-                if remaining_bytes >= low_traffic_gb * GB_BYTES:
+                if remaining_bytes >= 10 * GB_BYTES:
                     continue
 
                 reset_at = subscription["traffic_reset_at"]

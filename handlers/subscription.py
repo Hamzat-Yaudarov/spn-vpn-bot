@@ -72,18 +72,6 @@ def _device_limit_text(subscription) -> str:
     return f"{limit} устройства" if limit in (2, 3, 4) else f"{limit} устройств"
 
 
-def _payment_amount_text(amount: float, original_amount: float, discount) -> str:
-    if not discount:
-        return f"{amount} ₽"
-    return f"<s>{original_amount} ₽</s> <b>{amount} ₽</b> (скидка {discount['discount_amount']} ₽)"
-
-
-async def _discounted_amount(tg_id: int, code: str, payment_kind: str, original_amount: float, plan_kind: str | None = None):
-    discount = await db.get_applicable_discount(tg_id, code, payment_kind, original_amount, plan_kind=plan_kind)
-    amount = discount["final_amount"] if discount else original_amount
-    return amount, discount
-
-
 async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
     """Получить ссылку подписки и остаток времени."""
     remaining_str = "неизвестно"
@@ -602,8 +590,7 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
         await state.clear()
         return
 
-    original_amount = package['price']
-    amount, discount = await _discounted_amount(tg_id, package_code, "traffic_package", original_amount, "traffic_package")
+    amount = package['price']
 
     if provider == "cryptobot":
         invoice = await create_cryptobot_invoice(callback.bot, amount, package_code, tg_id)
@@ -630,10 +617,6 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
         payment_target="traffic",
         payment_kind="traffic_package",
         traffic_package_code=package_code,
-        discount_id=discount["campaign"]["id"] if discount else None,
-        discount_code=discount["campaign"].get("code") if discount else None,
-        discount_amount=discount["discount_amount"] if discount else 0,
-        original_amount=original_amount,
     )
     await db.create_traffic_purchase(
         subscription_id,
@@ -651,7 +634,7 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
     ])
     await edit_text_with_photo(
         callback,
-        f"📦 <b>Счёт на {package['gb']} ГБ</b>\n\nСумма: {_payment_amount_text(amount, original_amount, discount)}",
+        f"📦 <b>Счёт на {package['gb']} ГБ</b>\n\nСумма: {amount}₽",
         kb,
         "Оплати",
     )
@@ -733,8 +716,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
-    original_amount = tariff["price"]
-    amount, discount = await _discounted_amount(tg_id, tariff_code, "subscription", original_amount, tariff.get("kind"))
+    amount = tariff["price"]
 
     existing_invoice_id = await db.get_active_payment_for_user_and_tariff(
         tg_id,
@@ -743,10 +725,6 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         subscription_id=target_subscription_id,
         payment_target=purchase_mode,
         target_slot_number=target_slot_number,
-        discount_id=discount["campaign"]["id"] if discount else None,
-        discount_code=discount["campaign"].get("code") if discount else None,
-        discount_amount=discount["discount_amount"] if discount else 0,
-        original_amount=original_amount,
     )
 
     if existing_invoice_id:
@@ -792,7 +770,7 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     text = (
         f"<b>Счёт на оплату {target_text}</b>\n\n"
         f"Тариф: {tariff_code}\n"
-        f"Сумма: {_payment_amount_text(amount, original_amount, discount)}\n\n"
+        f"Сумма: {amount} ₽\n\n"
         "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
         "Если не активировалось, нажми «Проверить оплату»."
     )
@@ -821,8 +799,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
-    original_amount = tariff["price"]
-    amount, discount = await _discounted_amount(tg_id, tariff_code, "subscription", original_amount, tariff.get("kind"))
+    amount = tariff["price"]
 
     existing_payment_id = await db.get_active_payment_for_user_and_tariff(
         tg_id,
@@ -831,10 +808,6 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         subscription_id=target_subscription_id,
         payment_target=purchase_mode,
         target_slot_number=target_slot_number,
-        discount_id=discount["campaign"]["id"] if discount else None,
-        discount_code=discount["campaign"].get("code") if discount else None,
-        discount_amount=discount["discount_amount"] if discount else 0,
-        original_amount=original_amount,
     )
 
     if existing_payment_id:
@@ -880,7 +853,7 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
     ])
-    await edit_text_with_photo(callback, f"<b>💳 Yookassa</b>\n\nСумма: {_payment_amount_text(amount, original_amount, discount)}", kb, "Оплати")
+    await edit_text_with_photo(callback, "<b>💳 Yookassa</b>", kb, "Оплати")
     await state.clear()
 
 
