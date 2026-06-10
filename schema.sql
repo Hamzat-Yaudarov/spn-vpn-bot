@@ -139,6 +139,10 @@ CREATE TABLE IF NOT EXISTS payments (
     payment_kind TEXT DEFAULT 'subscription',
     traffic_package_code TEXT,
     tracking_code TEXT,
+    discount_id BIGINT,
+    discount_code TEXT,
+    discount_amount NUMERIC DEFAULT 0,
+    original_amount NUMERIC,
     status TEXT DEFAULT 'pending'
 );
 
@@ -206,6 +210,57 @@ CREATE TABLE IF NOT EXISTS tracking_link_clicks (
     clicked_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS notification_state (
+    id BIGSERIAL PRIMARY KEY,
+    tg_id BIGINT NOT NULL,
+    subscription_id BIGINT DEFAULT 0 NOT NULL,
+    notification_type TEXT NOT NULL,
+    last_sent_at TIMESTAMP DEFAULT now() NOT NULL,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tg_id, subscription_id, notification_type)
+);
+
+CREATE TABLE IF NOT EXISTS notification_rules (
+    id BIGSERIAL PRIMARY KEY,
+    notification_type TEXT UNIQUE NOT NULL,
+    enabled BOOLEAN DEFAULT TRUE NOT NULL,
+    send_hour_msk INT,
+    cooldown_hours INT NOT NULL,
+    days_before_expiry INT,
+    low_traffic_gb INT,
+    min_days_to_reset INT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS discount_campaigns (
+    id BIGSERIAL PRIMARY KEY,
+    code TEXT UNIQUE,
+    title TEXT NOT NULL,
+    discount_type TEXT NOT NULL,
+    discount_value NUMERIC NOT NULL,
+    target_kind TEXT DEFAULT 'all' NOT NULL,
+    target_code TEXT,
+    starts_at TIMESTAMP,
+    ends_at TIMESTAMP,
+    max_uses INT,
+    used_count INT DEFAULT 0 NOT NULL,
+    per_user_limit INT DEFAULT 1 NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE NOT NULL,
+    created_by BIGINT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS referral_link_clicks (
+    id BIGSERIAL PRIMARY KEY,
+    referrer_id BIGINT NOT NULL,
+    clicked_tg_id BIGINT NOT NULL,
+    is_new_user BOOLEAN DEFAULT FALSE NOT NULL,
+    clicked_at TIMESTAMP DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
@@ -240,3 +295,10 @@ CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_tr
 CREATE INDEX IF NOT EXISTS idx_tracking_links_code ON tracking_links(code);
 CREATE INDEX IF NOT EXISTS idx_tracking_clicks_code ON tracking_link_clicks(code);
 CREATE INDEX IF NOT EXISTS idx_tracking_clicks_tg_id ON tracking_link_clicks(tg_id);
+CREATE INDEX IF NOT EXISTS idx_notification_state_lookup ON notification_state(tg_id, subscription_id, notification_type);
+CREATE INDEX IF NOT EXISTS idx_notification_state_last_sent ON notification_state(last_sent_at);
+CREATE INDEX IF NOT EXISTS idx_notification_rules_type ON notification_rules(notification_type);
+CREATE INDEX IF NOT EXISTS idx_discount_campaigns_active ON discount_campaigns(is_active);
+CREATE INDEX IF NOT EXISTS idx_discount_campaigns_code ON discount_campaigns(code);
+CREATE INDEX IF NOT EXISTS idx_referral_clicks_referrer ON referral_link_clicks(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_referral_clicks_clicked ON referral_link_clicks(clicked_tg_id);

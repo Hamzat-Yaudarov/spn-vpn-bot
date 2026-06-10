@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from config import (
+    ADMIN_ID,
     BOT_TOKEN,
     BYPASS_TRAFFIC_PACKAGES,
     REGULAR_TARIFFS,
@@ -23,7 +24,7 @@ from config import (
 import database as db
 from services.cryptobot import create_cryptobot_invoice
 from services.payment_processing import process_paid_payment
-from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
+from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info, remnawave_set_subscription_expiry
 from services.yookassa import create_yookassa_payment
 
 
@@ -31,9 +32,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SPN VPN Bot Webhooks")
 STATIC_DIR = Path(__file__).parent / "static" / "miniapp"
+ADMIN_STATIC_DIR = Path(__file__).parent / "static" / "admin"
 
 if STATIC_DIR.exists():
     app.mount("/app/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="miniapp_assets")
+if ADMIN_STATIC_DIR.exists():
+    app.mount("/admin/assets", StaticFiles(directory=ADMIN_STATIC_DIR / "assets"), name="admin_assets")
 
 # Глобальная переменная для хранения экземпляра бота
 _bot = None
@@ -91,6 +95,25 @@ async def _miniapp_user(request: Request) -> dict:
     username = user.get("username") or user.get("first_name") or f"user_{user['id']}"
     await db.create_user(int(user["id"]), username)
     return user
+
+
+async def _admin_user(request: Request) -> dict:
+    user = await _miniapp_user(request)
+    if int(user["id"]) != ADMIN_ID:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+def _jsonable(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "items"):
+        return {k: _jsonable(v) for k, v in dict(value).items()}
+    return value
 
 
 def _format_dt(value):
@@ -155,6 +178,19 @@ async def miniapp_index():
 @app.get("/app/")
 async def miniapp_index_slash():
     return await miniapp_index()
+
+
+@app.get("/admin")
+async def admin_index():
+    index_path = ADMIN_STATIC_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Admin panel is not built")
+    return FileResponse(index_path)
+
+
+@app.get("/admin/")
+async def admin_index_slash():
+    return await admin_index()
 
 
 @app.get("/app/open-happ")
@@ -285,6 +321,7 @@ async def miniapp_create_subscription_payment(request: Request):
     provider = body.get("provider")
     payment_target = body.get("payment_target", "new")
     subscription_id = body.get("subscription_id")
+    discount_code = (body.get("discount_code") or None)
 
     if tariff_code not in TARIFFS or provider not in {"cryptobot", "yookassa"}:
         raise HTTPException(status_code=400, detail="Invalid tariff or provider")
@@ -303,7 +340,9 @@ async def miniapp_create_subscription_payment(request: Request):
         if target_slot_number is None:
             raise HTTPException(status_code=400, detail="Subscription limit reached")
 
-    amount = tariff["price"]
+    original_amount = tariff["price"]
+    discount = await db.get_applicable_discount(tg_id, tariff_code, "subscription", original_amount, discount_code=discount_code, plan_kind=tariff.get("kind"))
+    amount = discount["final_amount"] if discount else original_amount
     if provider == "cryptobot":
         invoice = await create_cryptobot_invoice(_bot, amount, tariff_code, tg_id)
         invoice_id = str(invoice["invoice_id"]) if invoice else None
@@ -325,8 +364,12 @@ async def miniapp_create_subscription_payment(request: Request):
         subscription_id=int(subscription_id) if subscription_id else None,
         payment_target=payment_target,
         target_slot_number=target_slot_number,
+        discount_id=discount["campaign"]["id"] if discount else None,
+        discount_code=discount["campaign"].get("code") if discount else None,
+        discount_amount=discount["discount_amount"] if discount else 0,
+        original_amount=original_amount,
     )
-    return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider})
+    return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider, "amount": amount, "original_amount": original_amount, "discount": _jsonable(discount) if discount else None})
 
 
 @app.post("/miniapp/api/payments/traffic")
@@ -340,6 +383,7 @@ async def miniapp_create_traffic_payment(request: Request):
     provider = body.get("provider")
     package_code = body.get("package_code")
     subscription_id = body.get("subscription_id")
+    discount_code = (body.get("discount_code") or None)
     package = BYPASS_TRAFFIC_PACKAGES.get(package_code)
     if provider not in {"cryptobot", "yookassa"} or not package or not subscription_id:
         raise HTTPException(status_code=400, detail="Invalid traffic payment")
@@ -348,7 +392,9 @@ async def miniapp_create_traffic_payment(request: Request):
     if not subscription or subscription.get("plan_kind") != "bypass":
         raise HTTPException(status_code=400, detail="Invalid bypass subscription")
 
-    amount = package["price"]
+    original_amount = package["price"]
+    discount = await db.get_applicable_discount(tg_id, package_code, "traffic_package", original_amount, discount_code=discount_code, plan_kind="traffic_package")
+    amount = discount["final_amount"] if discount else original_amount
     if provider == "cryptobot":
         invoice = await create_cryptobot_invoice(_bot, amount, package_code, tg_id)
         invoice_id = str(invoice["invoice_id"]) if invoice else None
@@ -371,9 +417,13 @@ async def miniapp_create_traffic_payment(request: Request):
         payment_target="traffic",
         payment_kind="traffic_package",
         traffic_package_code=package_code,
+        discount_id=discount["campaign"]["id"] if discount else None,
+        discount_code=discount["campaign"].get("code") if discount else None,
+        discount_amount=discount["discount_amount"] if discount else 0,
+        original_amount=original_amount,
     )
     await db.create_traffic_purchase(int(subscription_id), package_code, package["gb"] * GB_BYTES, amount, provider, invoice_id)
-    return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider})
+    return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider, "amount": amount, "original_amount": original_amount, "discount": _jsonable(discount) if discount else None})
 
 
 @app.get("/miniapp/api/payments/{invoice_id}")
@@ -383,6 +433,180 @@ async def miniapp_payment_status(invoice_id: str, request: Request):
     if not payment or payment["tg_id"] != int(user["id"]):
         raise HTTPException(status_code=404, detail="Payment not found")
     return JSONResponse({"invoice_id": invoice_id, "status": payment["status"]})
+
+
+@app.get("/admin/api/me")
+async def admin_me(request: Request):
+    user = await _admin_user(request)
+    return JSONResponse({"id": user["id"], "username": user.get("username"), "first_name": user.get("first_name")})
+
+
+@app.get("/admin/api/dashboard")
+async def admin_dashboard(request: Request):
+    await _admin_user(request)
+    return JSONResponse(_jsonable(await db.get_admin_dashboard_stats()))
+
+
+@app.get("/admin/api/users")
+async def admin_users(request: Request, q: str | None = None):
+    await _admin_user(request)
+    return JSONResponse({"users": _jsonable(await db.admin_search_users(q))})
+
+
+@app.get("/admin/api/users/{tg_id}")
+async def admin_user_detail(tg_id: int, request: Request):
+    await _admin_user(request)
+    detail = await db.admin_get_user_detail(tg_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="User not found")
+    return JSONResponse(_jsonable(detail))
+
+
+@app.post("/admin/api/subscriptions/{subscription_id}/days")
+async def admin_change_subscription_days(subscription_id: int, request: Request):
+    await _admin_user(request)
+    payload = await request.json()
+    days = int(payload.get("days") or 0)
+    if days == 0:
+        raise HTTPException(status_code=400, detail="days must not be 0")
+    subscription = await db.get_subscription_by_id(subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    from datetime import timedelta
+    current_until = subscription.get("subscription_until") or datetime.utcnow()
+    if current_until < datetime.utcnow():
+        current_until = datetime.utcnow()
+    new_until = current_until + timedelta(days=days)
+    if subscription.get("remnawave_uuid"):
+        await remnawave_set_subscription_expiry(None, str(subscription["remnawave_uuid"]), new_until)
+    await db.db_execute("UPDATE subscriptions SET subscription_until = $1, updated_at = now() WHERE id = $2", (new_until, subscription_id))
+    await db.sync_primary_subscription_to_user(subscription["tg_id"])
+    return JSONResponse({"ok": True, "subscription_until": new_until.isoformat()})
+
+
+@app.post("/admin/api/subscriptions/{subscription_id}/archive")
+async def admin_archive_subscription(subscription_id: int, request: Request):
+    await _admin_user(request)
+    ok = await db.admin_archive_subscription(subscription_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/admin/api/subscriptions/{subscription_id}")
+async def admin_delete_subscription(subscription_id: int, request: Request):
+    await _admin_user(request)
+    subscription = await db.get_subscription_by_id(subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    await db.delete_subscription_record(subscription_id)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/admin/api/promos")
+async def admin_promos(request: Request):
+    await _admin_user(request)
+    return JSONResponse({"promos": _jsonable(await db.admin_list_promo_codes())})
+
+
+@app.post("/admin/api/promos")
+async def admin_create_promo(request: Request):
+    await _admin_user(request)
+    payload = await request.json()
+    code = str(payload.get("code") or "").strip().upper()
+    days = int(payload.get("days") or 0)
+    max_uses = int(payload.get("max_uses") or 0)
+    if len(code) < 3 or not code.isalnum() or days <= 0 or max_uses <= 0:
+        raise HTTPException(status_code=400, detail="Invalid promo data")
+    await db.create_promo_code(code, days, max_uses)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/admin/api/promos/{code}/active")
+async def admin_toggle_promo(code: str, request: Request):
+    await _admin_user(request)
+    payload = await request.json()
+    ok = await db.admin_set_promo_active(code, bool(payload.get("active")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/admin/api/promos/{code}")
+async def admin_delete_promo(code: str, request: Request):
+    await _admin_user(request)
+    return JSONResponse({"ok": await db.admin_delete_promo_code(code)})
+
+
+@app.get("/admin/api/tracking-links")
+async def admin_tracking_links(request: Request):
+    await _admin_user(request)
+    links = await db.list_tracking_links()
+    stats = []
+    for link in links or []:
+        stats.append(await db.get_tracking_link_stats(link["code"]))
+    return JSONResponse({"links": _jsonable(stats)})
+
+
+@app.post("/admin/api/tracking-links")
+async def admin_create_tracking_link(request: Request):
+    user = await _admin_user(request)
+    payload = await request.json()
+    code = str(payload.get("code") or "").strip().lower()
+    if len(code) < 3:
+        raise HTTPException(status_code=400, detail="Invalid code")
+    return JSONResponse(_jsonable(await db.create_tracking_link(code, payload.get("title") or None, int(user["id"]))))
+
+
+@app.post("/admin/api/tracking-links/{code}/active")
+async def admin_toggle_tracking_link(code: str, request: Request):
+    await _admin_user(request)
+    payload = await request.json()
+    return JSONResponse({"ok": await db.set_tracking_link_active(code.lower(), bool(payload.get("active")))})
+
+
+@app.get("/admin/api/referrals")
+async def admin_referrals(request: Request):
+    await _admin_user(request)
+    return JSONResponse({"referrals": _jsonable(await db.get_referral_overview())})
+
+
+@app.get("/admin/api/notifications")
+async def admin_notifications(request: Request):
+    await _admin_user(request)
+    return JSONResponse({"rules": _jsonable(await db.get_notification_rules()), "state": _jsonable(await db.get_notification_state_overview())})
+
+
+@app.post("/admin/api/notifications/{notification_type}")
+async def admin_update_notification(notification_type: str, request: Request):
+    await _admin_user(request)
+    row = await db.update_notification_rule(notification_type, await request.json())
+    if not row:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return JSONResponse(_jsonable(row))
+
+
+@app.get("/admin/api/discounts")
+async def admin_discounts(request: Request):
+    await _admin_user(request)
+    return JSONResponse({"discounts": _jsonable(await db.list_discount_campaigns())})
+
+
+@app.post("/admin/api/discounts")
+async def admin_create_discount(request: Request):
+    user = await _admin_user(request)
+    payload = await request.json()
+    if not payload.get("title") or payload.get("discount_type") not in {"percent", "fixed"}:
+        raise HTTPException(status_code=400, detail="Invalid discount data")
+    row = await db.create_discount_campaign(payload, int(user["id"]))
+    return JSONResponse(_jsonable(row))
+
+
+@app.post("/admin/api/discounts/{discount_id}/active")
+async def admin_toggle_discount(discount_id: int, request: Request):
+    await _admin_user(request)
+    payload = await request.json()
+    return JSONResponse({"ok": await db.set_discount_campaign_active(discount_id, bool(payload.get("active")))})
 
 
 async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:

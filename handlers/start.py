@@ -3,7 +3,7 @@ from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
@@ -34,6 +34,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 referrer_id = int(args[1].split("_")[1])
                 # Проверяем что это не сам пользователь
                 if referrer_id != tg_id:
+                    await db.record_referral_link_click(referrer_id, tg_id, is_new_user=not user_already_exists)
                     if not user_already_exists:
                         logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
                     else:
@@ -111,6 +112,9 @@ async def show_main_menu(message: Message):
     # Добавляем кнопку партнёрства если пользователь партнёр
     if is_partner:
         keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
+
+    if tg_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
 
     keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
 

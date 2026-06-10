@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 import database as db
 from handlers.start import show_main_menu
 from services.image_handler import edit_text_with_photo
@@ -65,6 +65,9 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     # Добавляем кнопку партнёрства если пользователь партнёр
     if is_partner:
         keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
+
+    if tg_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
 
     keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
 
