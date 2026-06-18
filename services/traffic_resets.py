@@ -19,6 +19,8 @@ TRAFFIC_RESET_CHECK_INTERVAL = 900
 
 
 async def process_due_traffic_resets():
+    await process_pending_traffic_limit_sync()
+
     subscriptions = await db.get_bypass_subscriptions_for_traffic_reset()
     if not subscriptions:
         return
@@ -79,6 +81,40 @@ async def process_due_traffic_resets():
                 )
             except Exception as e:
                 logger.error("Traffic reset error for subscription %s: %s", subscription.get('id'), e, exc_info=True)
+
+
+async def process_pending_traffic_limit_sync():
+    subscriptions = await db.get_bypass_subscriptions_for_limit_sync()
+    if not subscriptions:
+        return
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        for subscription in subscriptions:
+            try:
+                limit_bytes = subscription.get('current_period_limit_bytes') or subscription.get('base_traffic_bytes') or BYPASS_BASE_TRAFFIC_GB * GB_BYTES
+                updated = await remnawave_update_user_profile(
+                    session,
+                    subscription['remnawave_uuid'],
+                    traffic_limit_bytes=limit_bytes,
+                    traffic_limit_strategy="NO_RESET",
+                    active_internal_squads=[BYPASS_SQUAD_UUID],
+                    hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
+                    telegram_id=subscription['tg_id'],
+                )
+                if not updated:
+                    logger.warning("Traffic limit sync failed for subscription %s", subscription['id'])
+                    continue
+
+                await db.mark_traffic_limit_synced(subscription['id'])
+                logger.info(
+                    "Traffic limit synced for subscription %s: limit=%s",
+                    subscription['id'],
+                    limit_bytes,
+                )
+            except Exception as e:
+                logger.error("Traffic limit sync error for subscription %s: %s", subscription.get('id'), e, exc_info=True)
 
 
 async def run_traffic_reset_loop():

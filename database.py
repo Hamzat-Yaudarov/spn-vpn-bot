@@ -7,7 +7,9 @@ from config import (
     GIFT_REQUEST_COOLDOWN,
     PROMO_REQUEST_COOLDOWN,
     PAYMENT_CHECK_COOLDOWN,
+    BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
+    GB_BYTES,
     REGULAR_HWID_DEVICE_LIMIT,
 )
 
@@ -783,6 +785,25 @@ async def run_migrations():
                 """,
                 BYPASS_HWID_DEVICE_LIMIT,
                 REGULAR_HWID_DEVICE_LIMIT,
+            )
+
+            bypass_base_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES
+            await conn.execute(
+                """
+                UPDATE subscriptions
+                SET base_traffic_bytes = $1,
+                    current_period_limit_bytes = GREATEST(
+                        COALESCE(current_period_limit_bytes, 0),
+                        $1 + COALESCE(carried_traffic_bytes, 0) + COALESCE(current_paid_traffic_bytes, 0)
+                    ),
+                    last_traffic_sync_at = NULL,
+                    updated_at = now()
+                WHERE generation = 'v2'
+                  AND plan_kind = 'bypass'
+                  AND is_visible = TRUE
+                  AND COALESCE(base_traffic_bytes, 0) < $1
+                """,
+                bypass_base_bytes,
             )
 
             logging.info("✅ Синхронизация схемы завершена")
@@ -1662,10 +1683,46 @@ async def add_traffic_to_subscription(subscription_id: int, traffic_bytes: int) 
         UPDATE subscriptions
         SET current_paid_traffic_bytes = current_paid_traffic_bytes + $1,
             current_period_limit_bytes = current_period_limit_bytes + $1,
+            last_traffic_sync_at = now(),
             updated_at = now()
         WHERE id = $2
         """,
         (traffic_bytes, subscription_id)
+    )
+
+
+async def get_bypass_subscriptions_for_limit_sync():
+    """Получить активные bypass-подписки, лимит которых надо синхронизировать с Remnawave."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE generation = 'v2'
+          AND plan_kind = 'bypass'
+          AND is_visible = TRUE
+          AND traffic_enabled = TRUE
+          AND remnawave_uuid IS NOT NULL
+          AND subscription_until IS NOT NULL
+          AND subscription_until > now() AT TIME ZONE 'UTC'
+          AND current_period_limit_bytes > 0
+          AND (
+              last_traffic_sync_at IS NULL
+              OR updated_at > last_traffic_sync_at
+          )
+        ORDER BY updated_at ASC
+        """,
+        fetch_all=True,
+    )
+
+
+async def mark_traffic_limit_synced(subscription_id: int) -> None:
+    """Отметить, что лимит подписки синхронизирован с Remnawave."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET last_traffic_sync_at = now()
+        WHERE id = $1
+        """,
+        (subscription_id,)
     )
 
 

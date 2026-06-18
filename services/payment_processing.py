@@ -18,6 +18,7 @@ from config import (
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
+    remnawave_set_subscription_expiry,
     remnawave_update_user_profile,
 )
 
@@ -137,7 +138,10 @@ async def process_paid_payment(
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
         device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
         base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-        traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+        traffic_limit_bytes = max(
+            subscription.get("current_period_limit_bytes") or 0,
+            base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
+        ) if plan_kind == "bypass" else 0
         traffic_limit_strategy = "NO_RESET"
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
@@ -262,6 +266,14 @@ async def process_paid_payment(
                     new_until,
                 )
 
+            traffic_reset_at = None
+            if plan_kind == "bypass":
+                traffic_reset_at = subscription.get("traffic_reset_at") if existing_subscription and existing_subscription > now else None
+                traffic_reset_at = traffic_reset_at or now + timedelta(days=30)
+
+            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
+                logger.warning("Failed to sync Remnawave expiry for subscription %s", subscription["id"])
+
             await db.update_subscription_record(
                 subscription["id"],
                 uuid,
@@ -279,8 +291,9 @@ async def process_paid_payment(
                     traffic_enabled = $2,
                     base_traffic_bytes = $3,
                     current_period_limit_bytes = $4,
-                    traffic_reset_at = COALESCE(traffic_reset_at, $5),
+                    traffic_reset_at = $5,
                     hwid_device_limit = $6,
+                    last_traffic_sync_at = now(),
                     purchase_days = $7
                 WHERE id = $8
                 """,
@@ -289,7 +302,7 @@ async def process_paid_payment(
                     plan_kind == "bypass",
                     base_traffic_bytes,
                     traffic_limit_bytes,
-                    now + timedelta(days=30) if plan_kind == "bypass" else None,
+                    traffic_reset_at,
                     device_limit,
                     days,
                     subscription["id"],

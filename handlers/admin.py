@@ -556,7 +556,7 @@ async def admin_new_code(message: Message):
             await message.answer("❌ Код промокода должен содержать только буквы и цифры")
             return
 
-        if len(code) < 3:
+        if len(code) < 2:
             await message.answer("❌ Код промокода должен быть не менее 3 символов")
             return
 
@@ -709,7 +709,10 @@ async def admin_give_sub(message: Message):
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
         device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
         base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-        traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+        traffic_limit_bytes = max(
+            subscription.get("current_period_limit_bytes") or 0,
+            base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
+        ) if plan_kind == "bypass" else 0
         now = datetime.utcnow()
         current_until = subscription.get('subscription_until')
         if current_until and current_until > now:
@@ -761,8 +764,9 @@ async def admin_give_sub(message: Message):
                     traffic_enabled = $4,
                     base_traffic_bytes = $5,
                     current_period_limit_bytes = $6,
-                    traffic_reset_at = COALESCE(traffic_reset_at, $7),
+                    traffic_reset_at = $7,
                     hwid_device_limit = $8,
+                    last_traffic_sync_at = now(),
                     updated_at = now()
                 WHERE id = $9
                 """,
@@ -773,7 +777,7 @@ async def admin_give_sub(message: Message):
                     plan_kind == "bypass",
                     base_traffic_bytes,
                     traffic_limit_bytes,
-                    now + timedelta(days=30) if plan_kind == "bypass" else None,
+                    (subscription.get("traffic_reset_at") if plan_kind == "bypass" and current_until and current_until > now else None) or (now + timedelta(days=30) if plan_kind == "bypass" else None),
                     device_limit,
                     subscription['id'],
                 )

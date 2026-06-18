@@ -25,6 +25,7 @@ from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
     remnawave_get_user_info,
+    remnawave_set_subscription_expiry,
 )
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 from states import UserStates
@@ -74,7 +75,7 @@ def _device_limit_text(subscription) -> str:
 
 async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
     """Получить ссылку подписки и остаток времени."""
-    remaining_str = "неизвестно"
+    remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat()) if subscription.get('subscription_until') else "неизвестно"
     sub_url = None
 
     try:
@@ -83,17 +84,10 @@ async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             if subscription.get('remnawave_uuid'):
                 sub_url = await remnawave_get_subscription_url(session, subscription['remnawave_uuid'])
-                user_info = await remnawave_get_user_info(session, subscription['remnawave_uuid'])
-
-                if user_info and "expireAt" in user_info:
-                    remaining_str = _format_remaining(user_info["expireAt"])
-                elif subscription.get('subscription_until'):
-                    remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
-            elif subscription.get('subscription_until'):
-                remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat())
     except Exception as e:
         logging.error(f"Error fetching subscription info from Remnawave: {e}")
-        remaining_str = "ошибка загрузки"
+        if not subscription.get('subscription_until'):
+            remaining_str = "ошибка загрузки"
 
     return sub_url, remaining_str
 
@@ -897,7 +891,10 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
             device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
             base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-            traffic_limit_bytes = subscription.get("current_period_limit_bytes") or base_traffic_bytes if plan_kind == "bypass" else 0
+            traffic_limit_bytes = max(
+                subscription.get("current_period_limit_bytes") or 0,
+                base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
+            ) if plan_kind == "bypass" else 0
             remna_username = subscription.get("remnawave_username") or _build_new_remnawave_username(
                 tg_id,
                 plan_kind,
@@ -931,6 +928,17 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         else:
             new_until = now + timedelta(days=tariff["days"])
 
+        traffic_reset_at = None
+        if plan_kind == "bypass":
+            traffic_reset_at = subscription.get("traffic_reset_at") if existing_subscription and existing_subscription > now else None
+            traffic_reset_at = traffic_reset_at or now + timedelta(days=30)
+
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
+                logging.warning(f"Failed to sync Remnawave expiry for referral balance subscription {subscription['id']}")
+
         await db.update_subscription_record(
             subscription['id'],
             uuid,
@@ -948,8 +956,9 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 traffic_enabled = $2,
                 base_traffic_bytes = $3,
                 current_period_limit_bytes = $4,
-                traffic_reset_at = COALESCE(traffic_reset_at, $5),
+                traffic_reset_at = $5,
                 hwid_device_limit = $6,
+                last_traffic_sync_at = now(),
                 purchase_days = $7
             WHERE id = $8
             """,
@@ -958,7 +967,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 plan_kind == "bypass",
                 base_traffic_bytes,
                 traffic_limit_bytes,
-                now + timedelta(days=30) if plan_kind == "bypass" else None,
+                traffic_reset_at,
                 device_limit,
                 tariff["days"],
                 subscription['id'],

@@ -9,7 +9,8 @@ from states import UserStates
 import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
-    remnawave_get_subscription_url
+    remnawave_get_subscription_url,
+    remnawave_set_subscription_expiry,
 )
 from handlers.start import show_main_menu
 from services.image_handler import send_text_with_photo
@@ -244,6 +245,12 @@ async def process_promo_input(message: Message, state: FSMContext):
             # Подписки нет или она истекла - создаём новую
             new_until = now + timedelta(days=days)
             logger.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
+
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
+                logger.warning("Failed to sync Remnawave expiry for promo subscription %s", subscription['id'])
 
         await db.update_subscription_record(
             subscription['id'],
