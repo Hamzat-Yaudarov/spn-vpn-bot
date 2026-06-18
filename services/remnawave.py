@@ -222,6 +222,88 @@ async def remnawave_get_user_usage(session: aiohttp.ClientSession, user_uuid: st
     return user_info.get("userTraffic") or {}
 
 
+async def remnawave_get_hwid_devices(session: aiohttp.ClientSession, user_uuid: str) -> list[dict] | None:
+    """Получить список HWID-устройств пользователя."""
+    async def _get_devices():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.get(
+                f"{REMNAWAVE_BASE_URL}/hwid/devices/{user_uuid}",
+                headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    response = data.get("response", {})
+                    return response.get("devices") or []
+                if resp.status == 404:
+                    return []
+                error_text = await resp.text()
+                raise RuntimeError(f"Get HWID devices failed ({resp.status}): {error_text}")
+
+    return await safe_api_call(
+        _get_devices,
+        error_message=f"Failed to get HWID devices for {user_uuid}"
+    )
+
+
+async def remnawave_delete_hwid_device(session: aiohttp.ClientSession, user_uuid: str, hwid: str) -> bool:
+    """Удалить одно HWID-устройство пользователя."""
+    async def _delete_device():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.post(
+                f"{REMNAWAVE_BASE_URL}/hwid/devices/delete",
+                headers={
+                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={"userUuid": str(user_uuid), "hwid": hwid},
+            ) as resp:
+                if resp.status == 200:
+                    return True
+                error_text = await resp.text()
+                raise RuntimeError(f"Delete HWID device failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(
+            _delete_device,
+            error_message=f"Failed to delete HWID device for {user_uuid}"
+        )
+        return result is not None
+    except Exception as e:
+        logging.error(f"Delete HWID device error: {e}")
+        return False
+
+
+async def remnawave_delete_all_hwid_devices(session: aiohttp.ClientSession, user_uuid: str) -> bool:
+    """Удалить все HWID-устройства пользователя."""
+    async def _delete_all_devices():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.post(
+                f"{REMNAWAVE_BASE_URL}/hwid/devices/delete-all",
+                headers={
+                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={"userUuid": str(user_uuid)},
+            ) as resp:
+                if resp.status == 200:
+                    return True
+                error_text = await resp.text()
+                raise RuntimeError(f"Delete all HWID devices failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(
+            _delete_all_devices,
+            error_message=f"Failed to delete all HWID devices for {user_uuid}"
+        )
+        return result is not None
+    except Exception as e:
+        logging.error(f"Delete all HWID devices error: {e}")
+        return False
+
+
 async def remnawave_set_subscription_expiry(
     session: aiohttp.ClientSession,
     user_uuid: str,

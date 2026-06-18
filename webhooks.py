@@ -23,7 +23,13 @@ from config import (
 import database as db
 from services.cryptobot import create_cryptobot_invoice
 from services.payment_processing import process_paid_payment
-from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
+from services.remnawave import (
+    remnawave_delete_all_hwid_devices,
+    remnawave_delete_hwid_device,
+    remnawave_get_hwid_devices,
+    remnawave_get_subscription_url,
+    remnawave_get_user_info,
+)
 from services.yookassa import create_yookassa_payment
 
 
@@ -113,6 +119,27 @@ def _serialize_tariffs(tariffs: dict) -> list[dict]:
         }
         for code, tariff in tariffs.items()
     ]
+
+
+def _serialize_device(device: dict) -> dict:
+    return {
+        "hwid": device.get("hwid"),
+        "platform": device.get("platform"),
+        "os_version": device.get("osVersion"),
+        "device_model": device.get("deviceModel"),
+        "user_agent": device.get("userAgent"),
+        "created_at": device.get("createdAt"),
+        "updated_at": device.get("updatedAt"),
+    }
+
+
+async def _get_miniapp_subscription_or_404(subscription_id: int, tg_id: int):
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+    if not subscription or subscription.get("generation") != "v2" or not subscription.get("is_visible"):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    if not subscription.get("remnawave_uuid"):
+        raise HTTPException(status_code=400, detail="Subscription is not active yet")
+    return subscription
 
 
 async def _serialize_subscription(subscription) -> dict:
@@ -248,6 +275,41 @@ async def miniapp_subscriptions(request: Request):
     subscriptions = await db.get_visible_subscriptions(int(user["id"]))
     serialized = [await _serialize_subscription(subscription) for subscription in subscriptions]
     return JSONResponse({"subscriptions": serialized})
+
+
+@app.get("/miniapp/api/subscriptions/{subscription_id}/devices")
+async def miniapp_subscription_devices(subscription_id: int, request: Request):
+    user = await _miniapp_user(request)
+    subscription = await _get_miniapp_subscription_or_404(subscription_id, int(user["id"]))
+    devices = await remnawave_get_hwid_devices(None, subscription["remnawave_uuid"])
+    if devices is None:
+        raise HTTPException(status_code=502, detail="Could not fetch devices")
+    return JSONResponse({"devices": [_serialize_device(device) for device in devices]})
+
+
+@app.post("/miniapp/api/subscriptions/{subscription_id}/devices/delete")
+async def miniapp_delete_subscription_device(subscription_id: int, request: Request):
+    user = await _miniapp_user(request)
+    subscription = await _get_miniapp_subscription_or_404(subscription_id, int(user["id"]))
+    body = await request.json()
+    hwid = body.get("hwid")
+    if not hwid:
+        raise HTTPException(status_code=400, detail="hwid is required")
+
+    deleted = await remnawave_delete_hwid_device(None, subscription["remnawave_uuid"], hwid)
+    if not deleted:
+        raise HTTPException(status_code=502, detail="Could not delete device")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/miniapp/api/subscriptions/{subscription_id}/devices/delete-all")
+async def miniapp_delete_all_subscription_devices(subscription_id: int, request: Request):
+    user = await _miniapp_user(request)
+    subscription = await _get_miniapp_subscription_or_404(subscription_id, int(user["id"]))
+    deleted = await remnawave_delete_all_hwid_devices(None, subscription["remnawave_uuid"])
+    if not deleted:
+        raise HTTPException(status_code=502, detail="Could not delete devices")
+    return JSONResponse({"ok": True})
 
 
 @app.get("/miniapp/api/referral")

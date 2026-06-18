@@ -19,6 +19,8 @@ const state = {
   activePayment: null,
   paymentPollTimer: null,
   currentView: "home",
+  devices: {},
+  devicesLoading: false,
 };
 
 function api(path, options = {}) {
@@ -47,6 +49,7 @@ function selectedSub() { return state.subs.find((s) => s.id === state.selectedSu
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
+function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
 
 function daysLeft(value) {
   if (!value) return null;
@@ -90,6 +93,9 @@ document.addEventListener("click", (event) => {
   const subId = Number(target.dataset.subId);
   if (target.dataset.action === "renew") openRenew(subId);
   if (target.dataset.action === "traffic") openTraffic(subId);
+  if (target.dataset.action === "devices") openDevices(subId);
+  if (target.dataset.action === "delete-device") deleteDevice(subId, target.dataset.hwid || "");
+  if (target.dataset.action === "delete-all-devices") deleteAllDevices(subId);
   if (target.dataset.action === "happ") {
     event.preventDefault();
     openKeyInHapp(target.dataset.url || "");
@@ -256,6 +262,7 @@ function renderKeys() {
   }
 
   if (state.keysMode === "detail") container.innerHTML = subscriptionDetailHtml(sub);
+  if (state.keysMode === "devices") container.innerHTML = devicesHtml(sub);
   if (state.keysMode === "renew") container.innerHTML = renewHtml(sub);
   if (state.keysMode === "traffic") container.innerHTML = trafficHtml(sub);
   if (state.keysMode === "traffic-payment") container.innerHTML = paymentHtml("ГБ для " + subTitle(sub));
@@ -288,7 +295,31 @@ function subscriptionDetailHtml(s) {
     </div>
     <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <button class="button ghost" data-action="renew" data-sub-id="${s.id}">Продлить</button>
+    <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
     ${s.traffic.enabled ? `<button class="button green" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
+  </div>`;
+}
+
+function deviceTitle(device) {
+  const platform = device.platform || "Устройство";
+  return device.device_model ? `${platform} • ${device.device_model}` : platform;
+}
+
+function devicesHtml(s) {
+  const devices = state.devices[s.id] || [];
+  if (state.devicesLoading) {
+    return `<div class="grid"><button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button><div class="card empty"><h2>Загружаем устройства...</h2></div></div>`;
+  }
+
+  const list = devices.length
+    ? devices.map((device, index) => `<div class="card device-card"><div class="row start"><div><p class="title">${escapeHtml(deviceTitle(device))}</p><p class="muted">Подключено: ${date(device.created_at)}</p>${device.hwid ? `<p class="small">HWID: ${escapeHtml(device.hwid)}</p>` : ""}</div><span class="badge blue">${index + 1}</span></div>${device.hwid ? `<button class="button danger" data-action="delete-device" data-sub-id="${s.id}" data-hwid="${escapeHtml(device.hwid)}">Удалить устройство</button>` : ""}</div>`).join("")
+    : `<div class="card empty"><h2>Устройств пока нет</h2><p class="muted">Когда ключ подключат на телефоне или компьютере, устройство появится здесь.</p></div>`;
+
+  return `<div class="grid">
+    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
+    <div class="section-note"><p class="step">Устройства</p><p class="title">${subTitle(s)}</p><p class="muted">Удалите устройство, если нужно освободить слот для нового подключения.</p></div>
+    ${list}
+    ${devices.length ? `<button class="button danger" data-action="delete-all-devices" data-sub-id="${s.id}">Удалить все устройства</button>` : ""}
   </div>`;
 }
 
@@ -317,7 +348,7 @@ function renderBuy() {
       <div class="section-note"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p></div>
       <div class="plan-grid">
         <button class="plan-card plan-regular" onclick="selectBuyPlan('regular')"><span>Обычная</span><b>5 устройств</b><small>Для ежедневного подключения.</small></button>
-        <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>80 ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
+        <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>150 ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
       </div>
     </div>`;
     return;
@@ -327,7 +358,7 @@ function renderBuy() {
     const tariffs = state.tariffs[state.buyPlan] || [];
     container.innerHTML = `<div class="grid">
       <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
-      <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 80 ГБ в месяц."}</p></div>
+      <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 150 ГБ в месяц."}</p></div>
       <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
     </div>`;
     return;
@@ -351,6 +382,44 @@ function openRenewList() { state.keysMode = "renew-list"; state.selectedSubId = 
 function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"; switchView("subs", { preserve: true }); }
 function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs", { preserve: true }); }
 function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs", { preserve: true }); }
+
+async function openDevices(id) {
+  state.selectedSubId = id;
+  state.keysMode = "devices";
+  state.devicesLoading = true;
+  renderKeys();
+  try {
+    const data = await api(`/miniapp/api/subscriptions/${id}/devices`);
+    state.devices[id] = data.devices || [];
+  } catch (e) {
+    showToast(e.message);
+    state.devices[id] = [];
+  } finally {
+    state.devicesLoading = false;
+    renderKeys();
+  }
+}
+
+async function deleteDevice(id, hwid) {
+  if (!hwid) return;
+  try {
+    await api(`/miniapp/api/subscriptions/${id}/devices/delete`, { method: "POST", body: JSON.stringify({ hwid }) });
+    showToast("Устройство удалено");
+    await openDevices(id);
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function deleteAllDevices(id) {
+  try {
+    await api(`/miniapp/api/subscriptions/${id}/devices/delete-all`, { method: "POST", body: JSON.stringify({}) });
+    showToast("Все устройства удалены");
+    await openDevices(id);
+  } catch (e) {
+    showToast(e.message);
+  }
+}
 
 function prepareNewPayment(tariffCode) {
   state.buyTariffCode = tariffCode;

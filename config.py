@@ -91,11 +91,11 @@ BYPASS_TARIFFS = {
 }
 
 BYPASS_TRAFFIC_PACKAGES = {
-    "gb_10": {"gb": 10, "price": 49},
-    "gb_20": {"gb": 20, "price": 94},
-    "gb_40": {"gb": 40, "price": 180},
-    "gb_80": {"gb": 80, "price": 349},
-    "gb_150": {"gb": 150, "price": 699},
+    "gb_10": {"gb": 10, "price": 24},
+    "gb_20": {"gb": 20, "price": 45},
+    "gb_40": {"gb": 40, "price": 79},
+    "gb_80": {"gb": 80, "price": 149},
+    "gb_150": {"gb": 150, "price": 289},
 }
 
 TARIFFS = {**REGULAR_TARIFFS, **BYPASS_TARIFFS}

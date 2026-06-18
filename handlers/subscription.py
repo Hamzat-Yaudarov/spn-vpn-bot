@@ -1,4 +1,5 @@
 import logging
+import html
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -22,6 +23,9 @@ from config import (
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
 from services.image_handler import edit_text_with_photo
 from services.remnawave import (
+    remnawave_delete_all_hwid_devices,
+    remnawave_delete_hwid_device,
+    remnawave_get_hwid_devices,
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
     remnawave_get_user_info,
@@ -64,6 +68,25 @@ def _format_traffic_gb(bytes_value: int | None) -> str:
 
 def _format_date(dt) -> str:
     return dt.strftime('%d.%m.%Y') if dt else 'неизвестно'
+
+
+def _format_device_date(value: str | None) -> str:
+    if not value:
+        return "неизвестно"
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00')).strftime('%d.%m.%Y')
+    except Exception:
+        return value[:10]
+
+
+def _device_title(device: dict) -> str:
+    platform = device.get('platform') or 'Устройство'
+    model = device.get('deviceModel')
+    return f"{platform} • {model}" if model else platform
+
+
+def _html(value: str | None) -> str:
+    return html.escape(str(value or ""), quote=False)
 
 
 def _device_limit_text(subscription) -> str:
@@ -279,6 +302,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
 
     keyboard = [
         [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="📱 Устройства", callback_data=f"subscription_devices_{subscription_id}", style="primary")],
     ]
     if subscription.get('is_renewable'):
         keyboard.append([InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")])
@@ -301,6 +325,107 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
     )
 
     await edit_text_with_photo(callback, text, kb, "Моя подписка")
+
+
+async def _show_subscription_devices(callback: CallbackQuery, subscription_id: int):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not subscription or subscription.get('generation') != 'v2' or not subscription.get('is_visible'):
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    if not subscription.get('remnawave_uuid'):
+        await callback.answer("У ключа пока нет UUID Remnawave", show_alert=True)
+        return
+
+    devices = []
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            devices = await remnawave_get_hwid_devices(session, subscription['remnawave_uuid']) or []
+    except Exception as e:
+        logging.error(f"Failed to get devices for subscription {subscription_id}: {e}")
+        await callback.answer("Не удалось загрузить устройства", show_alert=True)
+        return
+
+    keyboard = []
+    text_lines = [
+        f"📱 <b>Устройства {_subscription_name(subscription)}</b>",
+        "",
+    ]
+
+    if devices:
+        for index, device in enumerate(devices, start=1):
+            hwid = device.get('hwid') or ''
+            title = _device_title(device)
+            created_at = _format_device_date(device.get('createdAt'))
+            text_lines.append(f"{index}. <b>{_html(title)}</b>")
+            text_lines.append(f"   Подключено: {_html(created_at)}")
+            if hwid:
+                text_lines.append(f"   HWID: <code>{_html(hwid)}</code>")
+                keyboard.append([InlineKeyboardButton(text=f"Удалить {index}. {title}", callback_data=f"device_delete_{subscription_id}_{index - 1}", style="danger")])
+            text_lines.append("")
+        keyboard.append([InlineKeyboardButton(text="🧹 Удалить все устройства", callback_data=f"device_delete_all_{subscription_id}", style="danger")])
+    else:
+        text_lines.append("Подключённых устройств пока нет.")
+
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
+
+    await edit_text_with_photo(
+        callback,
+        "\n".join(text_lines),
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Моя подписка",
+    )
+
+
+async def _delete_subscription_device(callback: CallbackQuery, subscription_id: int, device_index: int):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not subscription or not subscription.get('remnawave_uuid'):
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        devices = await remnawave_get_hwid_devices(session, subscription['remnawave_uuid']) or []
+        if device_index < 0 or device_index >= len(devices) or not devices[device_index].get('hwid'):
+            await callback.answer("Устройство не найдено", show_alert=True)
+            return
+
+        deleted = await remnawave_delete_hwid_device(session, subscription['remnawave_uuid'], devices[device_index]['hwid'])
+
+    if not deleted:
+        await callback.answer("Не удалось удалить устройство", show_alert=True)
+        return
+
+    await callback.answer("Устройство удалено")
+    await _show_subscription_devices(callback, subscription_id)
+
+
+async def _delete_all_subscription_devices(callback: CallbackQuery, subscription_id: int):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not subscription or not subscription.get('remnawave_uuid'):
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        deleted = await remnawave_delete_all_hwid_devices(session, subscription['remnawave_uuid'])
+
+    if not deleted:
+        await callback.answer("Не удалось удалить устройства", show_alert=True)
+        return
+
+    await callback.answer("Все устройства удалены")
+    await _show_subscription_devices(callback, subscription_id)
 
 
 async def _show_subscription_instruction(callback: CallbackQuery, subscription_id: int):
@@ -468,6 +593,28 @@ async def process_my_subscription_view(callback: CallbackQuery, state: FSMContex
 async def process_subscription_instruction(callback: CallbackQuery, state: FSMContext):
     subscription_id = int(callback.data.split("_")[-1])
     await _show_subscription_instruction(callback, subscription_id)
+
+
+@router.callback_query(F.data.startswith("subscription_devices_"))
+async def process_subscription_devices(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    await _show_subscription_devices(callback, subscription_id)
+
+
+@router.callback_query(F.data.startswith("device_delete_all_"))
+async def process_device_delete_all(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    await _delete_all_subscription_devices(callback, subscription_id)
+
+
+@router.callback_query(F.data.startswith("device_delete_"))
+async def process_device_delete(callback: CallbackQuery, state: FSMContext):
+    if callback.data.startswith("device_delete_all_"):
+        return
+    parts = callback.data.split("_")
+    subscription_id = int(parts[-2])
+    device_index = int(parts[-1])
+    await _delete_subscription_device(callback, subscription_id, device_index)
 
 
 @router.callback_query(F.data.startswith("renew_subscription_"))
