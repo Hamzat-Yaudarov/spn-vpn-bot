@@ -17,13 +17,39 @@ logger = logging.getLogger(__name__)
 MSK = ZoneInfo("Europe/Moscow")
 TELEGRAM_RATE_LIMIT = 0.1
 
-EXPIRING_NOTIFICATION_TYPE = "subscription_expiring"
 EXPIRED_NOTIFICATION_TYPE = "expired_or_no_subscription"
 LOW_TRAFFIC_NOTIFICATION_TYPE = "low_bypass_traffic"
 
-EXPIRING_COOLDOWN_HOURS = 20
+EXPIRING_ONCE_COOLDOWN_HOURS = 24 * 365 * 20
 EXPIRED_COOLDOWN_HOURS = 86
 LOW_TRAFFIC_COOLDOWN_HOURS = 36
+
+EXPIRING_STAGES = [
+    {
+        "type": "expires_today",
+        "threshold": timedelta(hours=12),
+        "title": "Подписка заканчивается сегодня",
+        "body": "Лучше продлить сейчас, чтобы ключ не отключился.",
+    },
+    {
+        "type": "expires_1d",
+        "threshold": timedelta(days=1),
+        "title": "Остался 1 день подписки",
+        "body": "Продлите заранее: оставшиеся дни сохранятся и добавятся к новому сроку.",
+    },
+    {
+        "type": "expires_3d",
+        "threshold": timedelta(days=3),
+        "title": "До окончания осталось 3 дня",
+        "body": "Можно продлить в пару кликов, чтобы доступ продолжил работать без пауз.",
+    },
+    {
+        "type": "expires_7d",
+        "threshold": timedelta(days=7),
+        "title": "До окончания осталось 7 дней",
+        "body": "Если продлите заранее, текущие дни не сгорят.",
+    },
+]
 
 
 def ensure_utc_aware(dt):
@@ -68,7 +94,7 @@ async def _has_multiple_active_visible_subscriptions(tg_id: int) -> bool:
 async def check_and_send_notifications(bot):
     """
     Фоновая задача уведомлений:
-    - подписка истекает: ежедневно в 19:00 МСК, если осталось <3 дней;
+    - подписка истекает: ежедневно в 19:00 МСК на этапах 7/3/1 день и сегодня;
     - мало ГБ: раз в 36 часов, если осталось <10 ГБ и до обновления >8 дней;
     - нет активной подписки/закончилась: раз в 86 часов.
     """
@@ -117,7 +143,7 @@ async def _send_notifications_for_expiring(bot):
           AND subscription_until <= $2
         ORDER BY tg_id ASC, subscription_until ASC
         """,
-        (now.replace(tzinfo=None), (now + timedelta(days=3)).replace(tzinfo=None)),
+        (now.replace(tzinfo=None), (now + timedelta(days=7)).replace(tzinfo=None)),
         fetch_all=True,
     )
 
@@ -125,15 +151,19 @@ async def _send_notifications_for_expiring(bot):
     for i, subscription in enumerate(subscriptions or []):
         tg_id = subscription["tg_id"]
         subscription_id = subscription["id"]
-        if not await db.can_send_notification(tg_id, EXPIRING_NOTIFICATION_TYPE, EXPIRING_COOLDOWN_HOURS, subscription_id):
-            continue
-
         expire_at = ensure_utc_aware(subscription["subscription_until"])
         time_left = expire_at - now
+        stage = _pick_expiring_stage(time_left)
+        if not stage:
+            continue
+        if not await db.can_send_notification(tg_id, stage["type"], EXPIRING_ONCE_COOLDOWN_HOURS, subscription_id):
+            continue
+
         text = (
-            f"⏰ <b>{_subscription_name(subscription)} скоро закончится</b>\n\n"
+            f"⏰ <b>{stage['title']}</b>\n\n"
+            f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
             f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
-            "Что сделать: нажмите «Продлить эту подписку», чтобы доступ не отключился."
+            f"{stage['body']}"
         )
         keyboard = [[InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
         if await _has_multiple_active_visible_subscriptions(tg_id):
@@ -141,12 +171,21 @@ async def _send_notifications_for_expiring(bot):
         keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         if await _send_message(bot, tg_id, text, kb):
-            await db.mark_notification_state_sent(tg_id, EXPIRING_NOTIFICATION_TYPE, subscription_id)
+            await db.mark_notification_state_sent(tg_id, stage["type"], subscription_id)
             sent += 1
         if i < len(subscriptions) - 1:
             await asyncio.sleep(TELEGRAM_RATE_LIMIT)
 
     logger.info("✅ Expiring notification batch complete: %s sent", sent)
+
+
+def _pick_expiring_stage(time_left: timedelta) -> dict | None:
+    if time_left.total_seconds() <= 0:
+        return None
+    for stage in EXPIRING_STAGES:
+        if time_left <= stage["threshold"]:
+            return stage
+    return None
 
 
 async def _send_notifications_for_expired(bot):

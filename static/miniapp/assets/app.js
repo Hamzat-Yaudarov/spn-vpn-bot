@@ -56,6 +56,32 @@ function daysLeft(value) {
   return Math.ceil((new Date(value).getTime() - Date.now()) / 86400000);
 }
 
+function timeLeftText(value) {
+  const left = daysLeft(value);
+  if (left === null) return "неизвестно";
+  if (left <= 0) return "сегодня";
+  if (left === 1) return "1 день";
+  if (left > 1 && left < 5) return `${left} дня`;
+  return `${left} дней`;
+}
+
+function trafficRemaining(s) {
+  if (!s.traffic?.enabled) return null;
+  return Math.max(0, Number(s.traffic.limit_gb || 0) - Number(s.traffic.used_gb || 0));
+}
+
+function nearestActiveSub() {
+  return activeSubs().sort((a, b) => new Date(a.subscription_until) - new Date(b.subscription_until))[0] || null;
+}
+
+function statusTone(s) {
+  if (!s || s.status !== "active") return "warn";
+  const left = daysLeft(s.subscription_until);
+  if (left !== null && left <= 1) return "danger";
+  if (left !== null && left <= 3) return "warn";
+  return "ok";
+}
+
 function subBadges(s) {
   const badges = [];
   const left = daysLeft(s.subscription_until);
@@ -215,22 +241,39 @@ function render() {
 
 function renderHome() {
   const active = activeSubs();
-  const primary = active.length ? { text: "Мои подписки", action: "openKeysList", hint: "Открыть ключи и статус" } : { text: "Купить / Продлить", action: "openNewPurchase", hint: "Новая подписка" };
-  const secondary = active.length ? { text: "Купить / Продлить", action: "openNewPurchase", hint: "Оформить новую подписку" } : { text: "Ключи", action: "openKeysList", hint: "Список ключей" };
+  const nearest = nearestActiveSub();
   const hasBypass = active.some((s) => s.plan_kind === "bypass");
+  const nearestTone = statusTone(nearest);
+  const activeText = active.length ? `${active.length} активн.` : "нет активных";
+  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Статус, трафик, устройства" } : { text: "Купить подписку", action: "openNewPurchase", hint: "Первый ключ за минуту" };
+  const secondary = active.length ? { text: "Продлить", action: "openRenewList", hint: "Дни не сгорят" } : { text: "Помощь", action: "switchView('help', { preserve: true })", hint: "Как подключиться" };
+  const primaryAction = primary.action.includes("(") ? primary.action : `${primary.action}()`;
+  const secondaryAction = secondary.action.includes("(") ? secondary.action : `${secondary.action}()`;
   el("view-home").innerHTML = `
-    <div class="grid">
-      <div class="home-panel">
-        <p class="step">Быстрые действия</p>
-        <p class="title">Что хотите сделать?</p>
-        <p class="muted">Покупка, продление, ключи и бонусы собраны в одном кабинете.</p>
+    <div class="home-dashboard">
+      <div class="hero-dashboard">
+        <div class="hero-glow"></div>
+        <p class="step">Личный кабинет</p>
+        <h2>${active.length ? "VPN под контролем" : "Добро пожаловать в Way SPN"}</h2>
+        <p class="muted">Ключи, трафик, устройства и продление собраны в одном месте.</p>
+        <div class="status-strip">
+          <div><span>Ключи</span><b>${activeText}</b></div>
+          <div><span>Ближайший срок</span><b>${nearest ? timeLeftText(nearest.subscription_until) : "-"}</b></div>
+        </div>
       </div>
-      <div class="quick-grid home-actions">
-        <button class="quick-card gold primary-action" onclick="${primary.action}()"><span>${primary.text}</span><small>${primary.hint}</small></button>
-        <button class="quick-card blue secondary-action" onclick="${secondary.action}()"><span>${secondary.text}</span><small>${secondary.hint}</small></button>
+
+      ${nearest ? `<button class="status-card ${nearestTone}" onclick="openSubDetail(${nearest.id})">
+        <span class="status-orb"></span>
+        <div><p class="title">${subTitle(nearest)}</p><p class="muted">до ${date(nearest.subscription_until)} · осталось ${timeLeftText(nearest.subscription_until)}</p></div>
+        <b>›</b>
+      </button>` : `<div class="card empty soft-empty"><h2>Активных ключей пока нет</h2><p class="muted">Выберите подписку, оплатите удобным способом, и ключ появится автоматически.</p></div>`}
+
+      <div class="quick-grid home-actions elevated-actions">
+        <button class="quick-card gold primary-action" onclick="${primaryAction}"><span>${primary.text}</span><small>${primary.hint}</small></button>
+        <button class="quick-card blue secondary-action" onclick="${secondaryAction}"><span>${secondary.text}</span><small>${secondary.hint}</small></button>
       </div>
       <div class="choice-list compact-actions">
-        <button class="choice-button" onclick="openRenewList()"><span>Продлить<small>Выбрать ключ вручную</small></span><b>›</b></button>
+        ${active.length ? `<button class="choice-button" onclick="openNewPurchase()"><span>Купить ещё ключ<small>Обычный или с антиглушилкой</small></span><b>›</b></button>` : ""}
         ${hasBypass ? `<button class="choice-button" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ<small>Для антиглушилки</small></span><b>›</b></button>` : ""}
         <button class="choice-button" onclick="switchView('help', { preserve: true })"><span>Помощь<small>Инструкция и поддержка</small></span><b>›</b></button>
       </div>
@@ -284,19 +327,23 @@ function keyButton(s, action) {
 
 function subscriptionDetailHtml(s) {
   const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
+  const remaining = trafficRemaining(s);
   const limitText = s.plan_kind === "bypass" ? "3 устройства" : "5 устройств";
+  const tone = statusTone(s);
   return `<div class="grid">
     <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
-    <div class="card strong ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
-      <div class="row start"><div><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `Срок: до ${date(s.subscription_until)}` : "Срок закончился"}</p></div></div>
+    <div class="card key-hero ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
+      <div class="key-hero-top"><div><p class="step">${s.plan_kind === "bypass" ? "Антиглушилка" : "Обычный ключ"}</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `до ${date(s.subscription_until)} · ${timeLeftText(s.subscription_until)}` : "Срок закончился"}</p></div><span class="status-dot ${tone}"></span></div>
       ${badgesHtml(s)}
-      <div class="hint-list"><div><b>Тип</b><span>${s.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная"}</span></div><div><b>Лимит</b><span>${limitText}</span></div></div>
-      ${s.traffic.enabled ? `<div class="grid"><div><div class="row"><span class="small">Трафик антиглушилки</span><span class="small">${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span></div><div class="progress"><span style="width:${percent}%"></span></div><p class="small">Сброс: ${date(s.traffic.reset_at)}</p></div></div>` : ""}
+      <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${limitText}</b></div></div>
+      ${s.traffic.enabled ? `<div class="traffic-panel"><div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
     </div>
-    <div class="card"><p class="title">Ключ подключения</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox">${s.subscription_url}</div><div class="grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Добавить ключ в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать ключ</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
-    <button class="button ghost" data-action="renew" data-sub-id="${s.id}">Продлить</button>
-    <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
-    ${s.traffic.enabled ? `<button class="button green" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
+    <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <div class="action-grid sticky-actions">
+      <button class="button accent" data-action="renew" data-sub-id="${s.id}">Продлить</button>
+      <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
+      ${s.traffic.enabled ? `<button class="button green wide" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
+    </div>
   </div>`;
 }
 
