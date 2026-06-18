@@ -41,6 +41,16 @@ STATIC_DIR = Path(__file__).parent / "static" / "miniapp"
 if STATIC_DIR.exists():
     app.mount("/app/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="miniapp_assets")
 
+
+@app.middleware("http")
+async def no_cache_miniapp(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/app" or request.url.path.startswith("/app/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # Глобальная переменная для хранения экземпляра бота
 _bot = None
 
