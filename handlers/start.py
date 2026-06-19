@@ -3,7 +3,7 @@ from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
@@ -84,15 +84,17 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         await show_main_menu(message)
 
 
-async def show_main_menu(message: Message):
+async def show_main_menu(message: Message, user_id: int | None = None):
     """Показать главное меню"""
-    tg_id = message.from_user.id
+    tg_id = user_id if user_id is not None else message.from_user.id
     is_partner = await db.is_partner(tg_id)
 
     keyboard = [
         [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
         [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
+    if tg_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
     visible_subscriptions = await db.get_visible_subscriptions(tg_id)
     if visible_subscriptions:
         keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])

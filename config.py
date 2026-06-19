@@ -12,9 +12,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 MINIAPP_URL = os.getenv("MINIAPP_URL", "https://wayspn.ru/app")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "WaySPN_robot").lstrip("@")
-ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "")
-ADMIN_PANEL_SECRET = os.getenv("ADMIN_PANEL_SECRET", BOT_TOKEN)
-ADMIN_PANEL_SESSION_HOURS = int(os.getenv("ADMIN_PANEL_SESSION_HOURS", "12"))
+_MINIAPP_URL_WITHOUT_SLASH = MINIAPP_URL.rstrip("/")
+ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", f"{_MINIAPP_URL_WITHOUT_SLASH.rsplit('/', 1)[0]}/admin")
 
 # ────────────────────────────────────────────────
 #           SUPPORT & NEWS CHANNELS

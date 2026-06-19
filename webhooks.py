@@ -1,11 +1,7 @@
 import logging
 import asyncio
-import hashlib
 import html
-import hmac
-import json
 from pathlib import Path
-from urllib.parse import parse_qsl
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +29,7 @@ from services.remnawave import (
 from services.yookassa import create_yookassa_payment
 from services.subscription_sync import reconcile_subscription_expiry
 from services.discounts import calculate_discounted_price
+from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 from admin_web import router as admin_router
 
 
@@ -73,34 +70,10 @@ def set_bot(bot):
 
 
 def _validate_webapp_init_data(init_data: str) -> dict:
-    if not init_data:
-        raise HTTPException(status_code=401, detail="Missing Telegram initData")
-
-    parsed = dict(parse_qsl(init_data, keep_blank_values=True))
-    received_hash = parsed.pop("hash", None)
-    if not received_hash:
-        raise HTTPException(status_code=401, detail="Missing initData hash")
-
-    data_check_string = "\n".join(f"{key}={value}" for key, value in sorted(parsed.items()))
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-
-    if not hmac.compare_digest(calculated_hash, received_hash):
-        raise HTTPException(status_code=401, detail="Invalid Telegram initData")
-
-    user_raw = parsed.get("user")
-    if not user_raw:
-        raise HTTPException(status_code=401, detail="Missing Telegram user")
-
     try:
-        user = json.loads(user_raw)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=401, detail="Invalid Telegram user")
-
-    if not user.get("id"):
-        raise HTTPException(status_code=401, detail="Missing Telegram user id")
-
-    return user
+        return validate_telegram_init_data(init_data, BOT_TOKEN)
+    except TelegramAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 async def _miniapp_user(request: Request) -> dict:

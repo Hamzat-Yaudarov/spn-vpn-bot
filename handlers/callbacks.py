@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 import database as db
 from handlers.start import show_main_menu
 from services.image_handler import edit_text_with_photo
@@ -31,7 +31,7 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
         "Соглашение принято! Добро пожаловать!"
     )
 
-    await show_main_menu(callback.message)
+    await show_main_menu(callback.message, callback.from_user.id)
 
 
 @router.callback_query(F.data == "back_to_menu")
@@ -47,6 +47,8 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
         [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
     ]
+    if tg_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
     visible_subscriptions = await db.get_visible_subscriptions(tg_id)
     if visible_subscriptions:
         keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])

@@ -4,19 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Way SPN — Управление</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="stylesheet" href="/admin/assets/admin.css?v=20260620-01" />
   </head>
   <body>
-    <section id="loginView" class="login-view">
-      <form id="loginForm" class="login-card">
+    <section id="accessView" class="login-view">
+      <div class="login-card">
         <div class="brand-mark">W</div>
         <p class="eyebrow">Way SPN</p>
         <h1>Панель управления</h1>
-        <p class="muted">Введите пароль администратора.</p>
-        <label>Пароль<input id="password" type="password" autocomplete="current-password" required /></label>
-        <button class="button primary" type="submit">Войти</button>
-        <p id="loginError" class="error"></p>
-      </form>
+        <p id="accessMessage" class="muted">Проверяем доступ через Telegram…</p>
+      </div>
     </section>
 
     <div id="adminApp" class="admin-app hidden">
@@ -29,7 +27,7 @@
           <button class="nav-item" data-section="links">Ссылки</button>
           <button class="nav-item" data-section="discounts">Скидки</button>
         </nav>
-        <button id="logoutButton" class="nav-item logout">Выйти</button>
+        <button id="closeButton" class="nav-item logout">Закрыть</button>
       </aside>
 
       <main class="content">

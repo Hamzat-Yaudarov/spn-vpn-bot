@@ -1,39 +1,30 @@
-import hashlib
-import hmac
 import logging
 import re
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import database as db
 from config import (
     ADMIN_ID,
-    ADMIN_PANEL_PASSWORD,
-    ADMIN_PANEL_SECRET,
-    ADMIN_PANEL_SESSION_HOURS,
     BYPASS_TRAFFIC_PACKAGES,
+    BOT_TOKEN,
     BOT_USERNAME,
     TARIFFS,
 )
 from services.remnawave import remnawave_set_subscription_expiry
 from services.subscription_sync import refresh_subscription_expiry
+from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ADMIN_STATIC_DIR = Path(__file__).parent / "static" / "admin"
-SESSION_COOKIE = "wayspn_admin_session"
 TRACKING_CODE_RE = re.compile(r"^[a-zA-Z0-9_-]{3,64}$")
 PROMO_CODE_RE = re.compile(r"^[A-Z0-9]{2,32}$")
-
-
-class LoginBody(BaseModel):
-    password: str = Field(min_length=1, max_length=256)
 
 
 class AdjustDaysBody(BaseModel):
@@ -65,36 +56,17 @@ class DiscountBody(BaseModel):
     ends_at: datetime
 
 
-def _session_secret() -> bytes:
-    secret = ADMIN_PANEL_SECRET or ""
-    if not secret:
-        raise HTTPException(status_code=503, detail="ADMIN_PANEL_SECRET is not configured")
-    return secret.encode("utf-8")
-
-
-def _create_session() -> str:
-    expires = int(time.time() + ADMIN_PANEL_SESSION_HOURS * 3600)
-    payload = f"{ADMIN_ID}:{expires}"
-    signature = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{signature}"
-
-
-def _validate_session(value: str | None) -> bool:
-    if not value:
-        return False
-    try:
-        admin_id, expires, signature = value.split(":", 2)
-        payload = f"{admin_id}:{expires}"
-        expected = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
-        return int(admin_id) == ADMIN_ID and int(expires) > int(time.time()) and hmac.compare_digest(signature, expected)
-    except (ValueError, HTTPException):
-        return False
-
-
 async def require_admin(request: Request):
-    if not _validate_session(request.cookies.get(SESSION_COOKIE)):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return ADMIN_ID
+    auth_header = request.headers.get("Authorization", "")
+    init_data = auth_header[4:] if auth_header.startswith("tma ") else ""
+    try:
+        user = validate_telegram_init_data(init_data, BOT_TOKEN)
+    except TelegramAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    if int(user["id"]) != ADMIN_ID:
+        logger.warning("Admin panel access denied for Telegram user %s", user["id"])
+        raise HTTPException(status_code=403, detail="Доступ разрешён только администратору")
+    return int(user["id"])
 
 
 def _utc_naive(value: datetime) -> datetime:
@@ -117,31 +89,6 @@ async def admin_index():
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="Admin panel is not built")
     return FileResponse(index_path)
-
-
-@router.post("/admin/api/login")
-async def admin_login(body: LoginBody, response: Response):
-    if not ADMIN_PANEL_PASSWORD:
-        raise HTTPException(status_code=503, detail="ADMIN_PANEL_PASSWORD is not configured")
-    if not hmac.compare_digest(body.password, ADMIN_PANEL_PASSWORD):
-        raise HTTPException(status_code=401, detail="Неверный пароль")
-    response.set_cookie(
-        SESSION_COOKIE,
-        _create_session(),
-        max_age=ADMIN_PANEL_SESSION_HOURS * 3600,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        path="/admin",
-    )
-    logger.info("Web admin authenticated")
-    return {"ok": True}
-
-
-@router.post("/admin/api/logout")
-async def admin_logout(response: Response):
-    response.delete_cookie(SESSION_COOKIE, path="/admin")
-    return {"ok": True}
 
 
 @router.get("/admin/api/session")

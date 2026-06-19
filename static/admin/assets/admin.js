@@ -5,29 +5,28 @@ const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "
 const money = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
 const date = (value, withTime = false) => value ? new Date(value).toLocaleString("ru-RU", withTime ? { dateStyle: "short", timeStyle: "short" } : { dateStyle: "short" }) : "—";
 const isActiveDate = (value) => value && new Date(value).getTime() > Date.now();
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+const initData = tg?.initData || "";
 
 async function api(path, options = {}) {
-  const response = await fetch(`/admin/api${path}`, { credentials: "same-origin", headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+  const response = await fetch(`/admin/api${path}`, { headers: { "Content-Type": "application/json", Authorization: `tma ${initData}`, ...(options.headers || {}) }, ...options });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && path !== "/login") showLogin();
+    if (response.status === 401 || response.status === 403) showAccess(data.detail);
     throw new Error(data.detail || "Ошибка запроса");
   }
   return data;
 }
 
 function toast(message, bad = false) { const el = $("toast"); el.textContent = message; el.className = `toast show${bad ? " bad" : ""}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = "toast", 2600); }
-function showLogin() { $("adminApp").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
-function showApp() { $("loginView").classList.add("hidden"); $("adminApp").classList.remove("hidden"); switchSection(state.section); }
+function showAccess(message = "Откройте панель кнопкой «Админ-панель» в боте.") { $("adminApp").classList.add("hidden"); $("accessView").classList.remove("hidden"); $("accessMessage").textContent = message; }
+function showApp() { $("accessView").classList.add("hidden"); $("adminApp").classList.remove("hidden"); switchSection(state.section); }
 
-async function boot() { try { await api("/session"); showApp(); } catch { showLogin(); } }
+async function boot() { if (!initData) { showAccess(); return; } try { await api("/session"); showApp(); } catch (error) { showAccess(error.message); } }
 
-$("loginForm").addEventListener("submit", async (event) => {
-  event.preventDefault(); $("loginError").textContent = "";
-  try { await api("/login", { method: "POST", body: JSON.stringify({ password: $("password").value }) }); $("password").value = ""; showApp(); }
-  catch (error) { $("loginError").textContent = error.message; }
-});
-$("logoutButton").addEventListener("click", async () => { await api("/logout", { method: "POST" }).catch(() => {}); showLogin(); });
+$("closeButton").addEventListener("click", () => { if (tg) tg.close(); else history.back(); });
 
 document.querySelectorAll(".nav-item[data-section]").forEach((button) => button.addEventListener("click", () => switchSection(button.dataset.section)));
 function switchSection(section) {
