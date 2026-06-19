@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Way SPN</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/assets/app.css?v=20260619-04" />
+    <link rel="stylesheet" href="/app/assets/app.css?v=20260619-05" />
   </head>
   <body class="view-home-active">
     <div class="shell">
@@ -13,13 +13,19 @@
         <div>
           <p class="eyebrow">Way SPN</p>
           <h1>Личный кабинет</h1>
-          <p id="userLine" class="muted">Загружаем данные...</p>
+          <p id="userLine" class="muted skeleton-text" aria-label="Загрузка"></p>
         </div>
-        <div id="userAvatar" class="avatar">W</div>
+        <div id="userAvatar" class="avatar skeleton-avatar" aria-hidden="true"></div>
       </header>
 
       <main>
-        <section id="view-home" class="view active"></section>
+        <section id="view-home" class="view active">
+          <div class="loading-dashboard" role="status" aria-label="Загрузка кабинета" aria-busy="true">
+            <div class="loading-summary"><span class="skeleton-block"></span><span class="skeleton-block"></span></div>
+            <span class="skeleton-block loading-wide"></span>
+            <div class="loading-actions"><span class="skeleton-block"></span><span class="skeleton-block"></span></div>
+          </div>
+        </section>
         <section id="view-subs" class="view"></section>
         <section id="view-buy" class="view"></section>
         <section id="view-ref" class="view"></section>
@@ -27,11 +33,11 @@
       </main>
 
       <nav class="tabbar">
-        <button class="tab active" data-view="home">Главная</button>
-        <button class="tab" data-view="subs">Ключи</button>
-        <button class="tab" data-view="buy">Купить</button>
-        <button class="tab" data-view="ref">Бонусы</button>
-        <button class="tab" data-view="help">Помощь</button>
+        <button class="tab active" data-view="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19.5z"/><path d="M9 21v-7h6v7"/></svg><span>Главная</span></button>
+        <button class="tab" data-view="subs"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="m12 12 8-8m-3 3 3 3m-6 0 3 3"/></svg><span>Ключи</span></button>
+        <button class="tab" data-view="buy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1 13H6z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/></svg><span>Купить</span></button>
+        <button class="tab" data-view="ref"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8H8.5a2.5 2.5 0 1 1 2.5-2.5zm0 0h3.5A2.5 2.5 0 1 0 13 5.5z"/></svg><span>Бонусы</span></button>
+        <button class="tab" data-view="help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.2 2.1c-.8.4-1 1-1 1.9m0 4h.01"/></svg><span>Помощь</span></button>
       </nav>
     </div>
 
@@ -48,6 +54,6 @@
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/app/assets/app.js?v=20260619-04"></script>
+    <script src="/app/assets/app.js?v=20260619-05"></script>
   </body>
 </html>

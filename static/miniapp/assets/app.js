@@ -82,15 +82,23 @@ function statusTone(s) {
   return "ok";
 }
 
+function trafficTone(s) {
+  const remaining = trafficRemaining(s);
+  if (remaining === null) return "";
+  if (remaining <= 3) return "danger";
+  if (remaining <= 10) return "warn";
+  return "";
+}
+
 function subBadges(s) {
   const badges = [];
   const left = daysLeft(s.subscription_until);
-  if (s.status === "active") badges.push({ text: left !== null && left <= 3 ? "Скоро закончится" : "Активна", cls: left !== null && left <= 3 ? "warn" : "ok" });
-  else badges.push({ text: "Истекла", cls: "warn" });
+  if (s.status === "active") badges.push({ text: left !== null && left <= 3 ? "Скоро закончится" : "Активна", cls: left !== null && left <= 1 ? "danger" : left !== null && left <= 3 ? "warn" : "ok" });
+  else badges.push({ text: "Истекла", cls: "danger" });
   badges.push({ text: s.plan_kind === "bypass" ? "Антиглушилка" : "Обычная", cls: s.plan_kind === "bypass" ? "green" : "blue" });
   if (s.traffic?.enabled) {
     const remaining = Number(s.traffic.limit_gb || 0) - Number(s.traffic.used_gb || 0);
-    if (remaining < 10) badges.push({ text: "Мало ГБ", cls: "warn" });
+    if (remaining < 10) badges.push({ text: "Мало ГБ", cls: remaining <= 3 ? "danger" : "warn" });
   }
   return badges;
 }
@@ -101,12 +109,20 @@ function badgesHtml(s) {
 
 function renderAvatar(user) {
   const avatar = el("userAvatar");
+  avatar.classList.remove("skeleton-avatar");
+  avatar.removeAttribute("aria-hidden");
   const name = user?.first_name || user?.username || "Way SPN";
   if (user?.photo_url) {
     avatar.innerHTML = `<img src="${user.photo_url}" alt="${name}">`;
   } else {
     avatar.textContent = name.trim().slice(0, 1).toUpperCase() || "W";
   }
+}
+
+function finishHeaderLoading() {
+  el("userLine").classList.remove("skeleton-text");
+  el("userLine").removeAttribute("aria-label");
+  el("userAvatar").classList.remove("skeleton-avatar");
 }
 
 document.querySelectorAll(".tab").forEach((button) => {
@@ -166,10 +182,13 @@ async function load() {
     state.tariffs = tariffs;
     state.subs = subscriptions.subscriptions || [];
     state.referral = referral;
+    finishHeaderLoading();
     el("userLine").textContent = me.first_name ? `Добро пожаловать, ${me.first_name}` : "Управляйте подписками в пару кликов";
     renderAvatar(me);
     render();
   } catch (e) {
+    finishHeaderLoading();
+    renderAvatar(null);
     el("userLine").textContent = "Откройте кабинет внутри Telegram";
     document.querySelector("main").innerHTML = `<section class="view active"><div class="card empty"><h2>Не удалось открыть MiniApp</h2><p class="muted">${e.message}</p></div></section>`;
   }
@@ -322,13 +341,14 @@ function subscriptionDetailHtml(s) {
   const remaining = trafficRemaining(s);
   const limitText = s.plan_kind === "bypass" ? "3 устройства" : "5 устройств";
   const tone = statusTone(s);
+  const trafficToneClass = trafficTone(s);
   return `<div class="grid">
     <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
     <div class="card key-hero ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
       <div class="key-hero-top"><div><p class="step">${s.plan_kind === "bypass" ? "Антиглушилка" : "Обычный ключ"}</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `до ${date(s.subscription_until)} · ${timeLeftText(s.subscription_until)}` : "Срок закончился"}</p></div><span class="status-dot ${tone}"></span></div>
       ${badgesHtml(s)}
       <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${limitText}</b></div></div>
-      ${s.traffic.enabled ? `<div class="traffic-panel"><div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
+      ${s.traffic.enabled ? `<div class="traffic-panel ${trafficToneClass}">${trafficToneClass ? `<p class="traffic-alert">${trafficToneClass === "danger" ? "Трафик почти закончился" : "Трафик заканчивается"}</p>` : ""}<div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
     </div>
     <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Откройте ключ в Happ или скопируйте его.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <div class="action-grid sticky-actions">
