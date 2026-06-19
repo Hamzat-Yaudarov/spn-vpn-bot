@@ -201,6 +201,17 @@ async def run_migrations():
                 'promo_code': {'type': 'TEXT', 'nullable': False},
             }
 
+            expected_discounts_columns = {
+                'name': {'type': 'TEXT', 'nullable': False},
+                'discount_type': {'type': 'TEXT', 'nullable': False},
+                'value': {'type': 'NUMERIC', 'nullable': False},
+                'target_type': {'type': 'TEXT', 'nullable': False},
+                'target_code': {'type': 'TEXT', 'nullable': True},
+                'starts_at': {'type': 'TIMESTAMP', 'nullable': False},
+                'ends_at': {'type': 'TIMESTAMP', 'nullable': False},
+                'active': {'type': 'BOOLEAN', 'nullable': False, 'default': 'TRUE'},
+            }
+
             expected_partnerships_columns = {
                 'tg_id': {'type': 'BIGINT', 'nullable': False},
                 'percentage': {'type': 'INT', 'nullable': False},
@@ -584,6 +595,23 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'promo_code_users' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS discounts (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    discount_type TEXT NOT NULL,
+                    value NUMERIC NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_code TEXT,
+                    starts_at TIMESTAMP NOT NULL,
+                    ends_at TIMESTAMP NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблица 'discounts' создана или уже существует")
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 2: СОЗДАНИЕ ИНДЕКСОВ (для быстрого поиска)
             # ═══════════════════════════════════════════════════════════
@@ -616,6 +644,7 @@ async def run_migrations():
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
+                "CREATE INDEX IF NOT EXISTS idx_discounts_active_period ON discounts(active, starts_at, ends_at);",
                 "CREATE INDEX IF NOT EXISTS idx_promo_code_users_tg_id ON promo_code_users(tg_id);",
                 "CREATE INDEX IF NOT EXISTS idx_promo_code_users_code ON promo_code_users(promo_code);",
 
@@ -713,6 +742,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'payments', expected_payments_columns)
             await sync_table_schema(conn, 'promo_codes', expected_promo_columns)
             await sync_table_schema(conn, 'promo_code_users', expected_promo_usage_columns)
+            await sync_table_schema(conn, 'discounts', expected_discounts_columns)
             await sync_table_schema(conn, 'partnerships', expected_partnerships_columns)
             await sync_table_schema(conn, 'partner_referrals', expected_partner_referrals_columns)
             await sync_table_schema(conn, 'partner_earnings', expected_partner_earnings_columns)
@@ -1571,6 +1601,7 @@ async def get_active_payment_for_user_and_tariff(
     tariff_code: str,
     provider: str,
     *,
+    amount: float | None = None,
     subscription_id: int | None = None,
     payment_target: str = 'new',
     target_slot_number: int | None = None,
@@ -1598,10 +1629,11 @@ async def get_active_payment_for_user_and_tariff(
           AND subscription_id IS NOT DISTINCT FROM $4
           AND payment_target = $5
           AND target_slot_number IS NOT DISTINCT FROM $6
+          AND ($7::numeric IS NULL OR amount = $7)
         ORDER BY id DESC
         LIMIT 1
         """,
-        (tg_id, tariff_code, provider, subscription_id, payment_target, target_slot_number),
+        (tg_id, tariff_code, provider, subscription_id, payment_target, target_slot_number, amount),
         fetch_one=True
     )
 
@@ -2790,3 +2822,176 @@ async def mark_referral_withdrawal_completed(withdrawal_id: int):
         "UPDATE referral_withdrawals SET status = 'completed' WHERE id = $1",
         (withdrawal_id,)
     )
+
+
+# ────────────────────────────────────────────────
+#                WEB ADMIN PANEL
+# ────────────────────────────────────────────────
+
+async def admin_dashboard_stats():
+    """Ключевые показатели для веб-панели."""
+    return await db_execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM users) AS total_users,
+            (SELECT COUNT(*) FROM users WHERE created_at >= now() - interval '7 days') AS new_users_7d,
+            (SELECT COUNT(*) FROM subscriptions WHERE is_visible = TRUE AND subscription_until > now() AT TIME ZONE 'UTC') AS active_subscriptions,
+            (SELECT COUNT(*) FROM payments WHERE status = 'paid') AS paid_payments,
+            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid') AS total_revenue,
+            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid' AND updated_at >= now() - interval '30 days') AS revenue_30d
+        """,
+        fetch_one=True,
+    )
+
+
+async def admin_list_users(search: str = "", limit: int = 50, offset: int = 0):
+    pattern = f"%{search.strip()}%"
+    where = "WHERE CAST(u.tg_id AS TEXT) ILIKE $1 OR COALESCE(u.username, '') ILIKE $1" if search.strip() else ""
+    params = (pattern, limit, offset) if search.strip() else (limit, offset)
+    limit_param = "$2" if search.strip() else "$1"
+    offset_param = "$3" if search.strip() else "$2"
+
+    users = await db_execute(
+        f"""
+        SELECT
+            u.tg_id,
+            u.username,
+            u.created_at,
+            u.tracking_code,
+            u.first_payment,
+            (SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id = u.tg_id AND s.is_visible = TRUE) AS subscriptions_count,
+            (SELECT COUNT(*) FROM subscriptions s WHERE s.tg_id = u.tg_id AND s.is_visible = TRUE AND s.subscription_until > now() AT TIME ZONE 'UTC') AS active_subscriptions,
+            (SELECT MAX(s.subscription_until) FROM subscriptions s WHERE s.tg_id = u.tg_id AND s.is_visible = TRUE) AS latest_expiry,
+            (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.tg_id = u.tg_id AND p.status = 'paid') AS revenue
+        FROM users u
+        {where}
+        ORDER BY u.created_at DESC, u.tg_id DESC
+        LIMIT {limit_param} OFFSET {offset_param}
+        """,
+        params,
+        fetch_all=True,
+    )
+
+    count_params = (pattern,) if search.strip() else ()
+    total = await db_execute(
+        f"SELECT COUNT(*) AS count FROM users u {where}",
+        count_params,
+        fetch_one=True,
+    )
+    return {"items": users or [], "total": total["count"] if total else 0}
+
+
+async def admin_get_user_bundle(tg_id: int):
+    user = await get_user(tg_id)
+    if not user:
+        return None
+    subscriptions = await get_user_subscriptions(tg_id)
+    payments = await db_execute(
+        """
+        SELECT id, tariff_code, amount, provider, status, payment_kind, created_at, updated_at
+        FROM payments
+        WHERE tg_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+        """,
+        (tg_id,),
+        fetch_all=True,
+    )
+    return {"user": user, "subscriptions": subscriptions or [], "payments": payments or []}
+
+
+async def list_promo_codes():
+    return await db_execute(
+        """
+        SELECT code, days, max_uses, used_count, active, created_at
+        FROM promo_codes
+        ORDER BY created_at DESC, code ASC
+        """,
+        fetch_all=True,
+    )
+
+
+async def set_promo_code_active(code: str, active: bool) -> bool:
+    result = await db_execute(
+        "UPDATE promo_codes SET active = $2 WHERE code = $1 RETURNING 1",
+        (code.upper(), active),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+async def list_tracking_links_with_stats():
+    return await db_execute(
+        """
+        SELECT
+            l.code,
+            l.title,
+            l.is_active,
+            l.created_at,
+            (SELECT COUNT(*) FROM tracking_link_clicks c WHERE c.code = l.code) AS clicks,
+            (SELECT COUNT(DISTINCT c.tg_id) FROM tracking_link_clicks c WHERE c.code = l.code) AS unique_clicks,
+            (SELECT COUNT(*) FROM users u WHERE u.tracking_code = l.code) AS users_count,
+            (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.tracking_code = l.code AND p.status = 'paid') AS revenue
+        FROM tracking_links l
+        ORDER BY l.created_at DESC, l.code ASC
+        """,
+        fetch_all=True,
+    )
+
+
+async def create_discount(
+    name: str,
+    discount_type: str,
+    value: float,
+    target_type: str,
+    target_code: str | None,
+    starts_at,
+    ends_at,
+):
+    return await db_execute(
+        """
+        INSERT INTO discounts (name, discount_type, value, target_type, target_code, starts_at, ends_at, active)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+        RETURNING *
+        """,
+        (name, discount_type, value, target_type, target_code, starts_at, ends_at),
+        fetch_one=True,
+    )
+
+
+async def list_discounts():
+    return await db_execute(
+        "SELECT * FROM discounts ORDER BY created_at DESC, id DESC",
+        fetch_all=True,
+    )
+
+
+async def get_active_discounts(at_time=None):
+    at_time = at_time or datetime.utcnow()
+    return await db_execute(
+        """
+        SELECT * FROM discounts
+        WHERE active = TRUE AND starts_at <= $1 AND ends_at >= $1
+        ORDER BY value DESC, id DESC
+        """,
+        (at_time,),
+        fetch_all=True,
+    )
+
+
+async def set_discount_active(discount_id: int, active: bool) -> bool:
+    result = await db_execute(
+        "UPDATE discounts SET active = $2, updated_at = now() WHERE id = $1 RETURNING 1",
+        (discount_id, active),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+async def delete_discount(discount_id: int) -> bool:
+    result = await db_execute(
+        "DELETE FROM discounts WHERE id = $1 RETURNING 1",
+        (discount_id,),
+        fetch_one=True,
+    )
+    return result is not None

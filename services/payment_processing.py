@@ -126,7 +126,7 @@ async def process_paid_payment(
 
         tariff = TARIFFS[tariff_code]
         days = tariff["days"]
-        amount = tariff["price"]
+        amount = float(payment_record.get("amount") or tariff["price"])
 
         subscription, error = await _get_or_create_target_subscription(tg_id, payment_record, tariff)
         if error:

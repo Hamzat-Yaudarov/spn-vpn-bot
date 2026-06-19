@@ -4,6 +4,13 @@ if (tg) {
   tg.expand();
 }
 
+["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+  document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
+});
+document.addEventListener("touchmove", (event) => {
+  if (event.touches.length > 1) event.preventDefault();
+}, { passive: false });
+
 const initData = tg?.initData || "";
 const state = {
   me: null,
@@ -47,6 +54,12 @@ function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглуш
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
+function priceHtml(item) {
+  if (Number(item.original_price) > Number(item.price)) {
+    return `<span class="offer-price"><s>${rub(item.original_price)}</s><b>${rub(item.price)}</b><em>${escapeHtml(item.discount?.name || "Скидка")}</em></span>`;
+  }
+  return `<b>${rub(item.price)}</b>`;
+}
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
@@ -387,7 +400,7 @@ function renewHtml(s) {
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
     <div class="section-note"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
-    <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+    <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span>${priceHtml(t)}</button>`).join("")}</div>
   </div>`;
 }
 
@@ -396,7 +409,7 @@ function trafficHtml(s) {
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
     <div class="section-note"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
-    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span><b>${rub(p.price)}</b></button>`).join("")}</div>
+    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span>${priceHtml(p)}</button>`).join("")}</div>
   </div>`;
 }
 
@@ -418,7 +431,7 @@ function renderBuy() {
     container.innerHTML = `<div class="grid">
       <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
       <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 150 ГБ в месяц."}</p></div>
-      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span><b>${rub(t.price)}</b></button>`).join("")}</div>
+      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span>${priceHtml(t)}</button>`).join("")}</div>
     </div>`;
     return;
   }

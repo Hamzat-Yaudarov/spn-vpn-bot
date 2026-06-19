@@ -33,6 +33,7 @@ from services.remnawave import (
 )
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 from services.subscription_sync import refresh_subscription_expiry
+from services.discounts import calculate_discounted_price, current_price
 from states import UserStates
 
 
@@ -160,16 +161,19 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     plan_kind = data.get("plan_kind", "regular")
     purchase_mode = data.get("purchase_mode", "new")
     tariffs = REGULAR_TARIFFS if plan_kind == "regular" else BYPASS_TARIFFS
+    discounts = await db.get_active_discounts()
 
     keyboard = []
     for tariff_code, tariff in tariffs.items():
+        pricing = calculate_discounted_price(tariff["price"], discounts, product_type="subscription", code=tariff_code, plan_kind=plan_kind)
+        price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
         if purchase_mode == "renew":
             period = "1 месяц" if tariff["days"] == 30 else "3 месяца" if tariff["days"] == 90 else tariff["title"]
-            label = f"{period} — {tariff['price']}₽"
+            label = f"{period} — {price_label}"
         else:
             devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
             devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
-            label = f"{tariff['title']} — {tariff['price']}₽ ({devices})"
+            label = f"{tariff['title']} — {price_label} ({devices})"
         keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
 
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
@@ -675,11 +679,14 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
+    discounts = await db.get_active_discounts()
     keyboard = []
     for package_code, package in BYPASS_TRAFFIC_PACKAGES.items():
+        pricing = calculate_discounted_price(package["price"], discounts, product_type="traffic", code=package_code, plan_kind="bypass")
+        price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
         keyboard.append([
             InlineKeyboardButton(
-                text=f"{package['gb']} ГБ — {package['price']}₽",
+                text=f"{package['gb']} ГБ — {price_label}",
                 callback_data=f"gb_package_{package_code}",
                 style="success",
             )
@@ -704,6 +711,7 @@ async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Пакет не найден", show_alert=True)
         return
 
+    pricing = await current_price(package["price"], product_type="traffic", code=package_code, plan_kind="bypass")
     await state.update_data(gb_package_code=package_code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot", style="success")],
@@ -712,7 +720,7 @@ async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
     ])
     await edit_text_with_photo(
         callback,
-        f"📦 <b>Пакет {package['gb']} ГБ</b>\n\nСумма: <b>{package['price']}₽</b>\n\nВыбери способ оплаты:",
+        f"📦 <b>Пакет {package['gb']} ГБ</b>\n\nСумма: <b>{pricing['price']:g}₽</b>\n\nВыбери способ оплаты:",
         kb,
         "Выбери способ оплаты",
     )
@@ -736,7 +744,7 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
         await state.clear()
         return
 
-    amount = package['price']
+    amount = (await current_price(package['price'], product_type="traffic", code=package_code, plan_kind="bypass"))["price"]
 
     if provider == "cryptobot":
         invoice = await create_cryptobot_invoice(callback.bot, amount, package_code, tg_id)
@@ -812,6 +820,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     await state.update_data(tariff_code=tariff_code)
 
     tariff = TARIFFS[tariff_code]
+    pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"])
     stats = await db.get_referral_stats(tg_id)
     referral_balance = stats['current_balance']
 
@@ -832,7 +841,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     text = (
         f"<b>{purchase_text}</b>\n"
         f"Тариф: {tariff_code}\n"
-        f"Сумма: {tariff['price']} ₽\n"
+        f"Сумма: {pricing['price']:g} ₽\n"
         f"Баланс от рефералов: {referral_balance:.2f} ₽\n\n"
         "Выбери способ оплаты:"
     )
@@ -862,12 +871,13 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
-    amount = tariff["price"]
+    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
 
     existing_invoice_id = await db.get_active_payment_for_user_and_tariff(
         tg_id,
         tariff_code,
         "cryptobot",
+        amount=amount,
         subscription_id=target_subscription_id,
         payment_target=purchase_mode,
         target_slot_number=target_slot_number,
@@ -945,12 +955,13 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
         await state.update_data(target_slot_number=target_slot_number)
 
     tariff = TARIFFS[tariff_code]
-    amount = tariff["price"]
+    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
 
     existing_payment_id = await db.get_active_payment_for_user_and_tariff(
         tg_id,
         tariff_code,
         "yookassa",
+        amount=amount,
         subscription_id=target_subscription_id,
         payment_target=purchase_mode,
         target_slot_number=target_slot_number,
@@ -1016,7 +1027,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         return
 
     tariff = TARIFFS[tariff_code]
-    amount = tariff["price"]
+    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
 
     if not await db.acquire_user_lock(tg_id):
         await callback.answer("Подожди пару секунд ⏳", show_alert=True)

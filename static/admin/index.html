@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Way SPN — Управление</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css?v=20260620-01" />
+  </head>
+  <body>
+    <section id="loginView" class="login-view">
+      <form id="loginForm" class="login-card">
+        <div class="brand-mark">W</div>
+        <p class="eyebrow">Way SPN</p>
+        <h1>Панель управления</h1>
+        <p class="muted">Введите пароль администратора.</p>
+        <label>Пароль<input id="password" type="password" autocomplete="current-password" required /></label>
+        <button class="button primary" type="submit">Войти</button>
+        <p id="loginError" class="error"></p>
+      </form>
+    </section>
+
+    <div id="adminApp" class="admin-app hidden">
+      <aside class="sidebar">
+        <div class="brand"><span>W</span><div><b>Way SPN</b><small>Управление</small></div></div>
+        <nav>
+          <button class="nav-item active" data-section="dashboard">Обзор</button>
+          <button class="nav-item" data-section="users">Пользователи</button>
+          <button class="nav-item" data-section="promos">Промокоды</button>
+          <button class="nav-item" data-section="links">Ссылки</button>
+          <button class="nav-item" data-section="discounts">Скидки</button>
+        </nav>
+        <button id="logoutButton" class="nav-item logout">Выйти</button>
+      </aside>
+
+      <main class="content">
+        <header class="topbar"><div><p class="eyebrow">Way SPN</p><h1 id="pageTitle">Обзор</h1></div><span id="connectionState" class="status">Подключено</span></header>
+
+        <section id="section-dashboard" class="section active">
+          <div id="statsGrid" class="stats-grid loading"></div>
+          <div class="panel welcome-panel"><div><p class="eyebrow">Центр управления</p><h2>Всё важное — без команд в чате</h2><p class="muted">Пользователи, подписки, промокоды, рекламные ссылки и скидки собраны здесь.</p></div><div class="glow"></div></div>
+        </section>
+
+        <section id="section-users" class="section">
+          <div class="section-head"><div><h2>Пользователи</h2><p class="muted">Поиск по Telegram ID или имени.</p></div><form id="userSearchForm" class="search"><input id="userSearch" placeholder="ID или username" /><button class="button" type="submit">Найти</button></form></div>
+          <div class="panel table-panel"><div id="usersTable" class="table-wrap"></div><div id="usersPagination" class="pagination"></div></div>
+        </section>
+
+        <section id="section-promos" class="section">
+          <div class="section-head"><div><h2>Промокоды</h2><p class="muted">Бонусные дни с ограничением активаций.</p></div></div>
+          <form id="promoForm" class="panel form-grid">
+            <label>Код<input name="code" maxlength="32" placeholder="SUMMER30" required /></label>
+            <label>Дней<input name="days" type="number" min="1" value="7" required /></label>
+            <label>Лимит активаций<input name="max_uses" type="number" min="1" value="100" required /></label>
+            <button class="button primary" type="submit">Создать промокод</button>
+          </form>
+          <div class="panel table-panel"><div id="promosTable" class="table-wrap"></div></div>
+        </section>
+
+        <section id="section-links" class="section">
+          <div class="section-head"><div><h2>Tracking-ссылки</h2><p class="muted">Смотрите переходы, пользователей и выручку.</p></div></div>
+          <form id="linkForm" class="panel form-grid">
+            <label>Код ссылки<input name="code" maxlength="64" placeholder="blogger_ivan" required /></label>
+            <label class="span-2">Название<input name="title" maxlength="160" placeholder="Реклама у блогера" /></label>
+            <button class="button primary" type="submit">Создать ссылку</button>
+          </form>
+          <div class="panel table-panel"><div id="linksTable" class="table-wrap"></div></div>
+        </section>
+
+        <section id="section-discounts" class="section">
+          <div class="section-head"><div><h2>Скидки</h2><p class="muted">Автоматические скидки с точным сроком действия.</p></div></div>
+          <form id="discountForm" class="panel form-grid discount-form">
+            <label class="span-2">Название<input name="name" maxlength="120" placeholder="Летняя акция" required /></label>
+            <label>Тип<select name="discount_type"><option value="percent">Процент</option><option value="fixed">Сумма в ₽</option></select></label>
+            <label>Размер<input name="value" type="number" min="1" step="0.01" value="10" required /></label>
+            <label>На что<select id="discountTarget" name="target_type"><option value="all">На всё</option><option value="subscription">Все подписки</option><option value="regular">Обычные подписки</option><option value="bypass">Антиглушилка</option><option value="tariff">Конкретный тариф</option><option value="traffic">Все пакеты ГБ</option><option value="traffic_package">Конкретный пакет ГБ</option></select></label>
+            <label id="targetCodeLabel" class="hidden">Тариф или пакет<select id="targetCode" name="target_code"></select></label>
+            <label>Начало<input name="starts_at" type="datetime-local" required /></label>
+            <label>Окончание<input name="ends_at" type="datetime-local" required /></label>
+            <button class="button primary" type="submit">Запланировать скидку</button>
+          </form>
+          <div class="panel table-panel"><div id="discountsTable" class="table-wrap"></div></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="userDialog" class="dialog"><div class="dialog-head"><div><p class="eyebrow">Пользователь</p><h2 id="dialogTitle"></h2></div><button id="closeDialog" class="icon-button">×</button></div><div id="userDetails"></div></dialog>
+    <div id="toast" class="toast"></div>
+    <script src="/admin/assets/admin.js?v=20260620-01"></script>
+  </body>
+</html>

@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS promo_code_users (
     FOREIGN KEY (promo_code) REFERENCES promo_codes(code) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS discounts (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    discount_type TEXT NOT NULL,
+    value NUMERIC NOT NULL,
+    target_type TEXT NOT NULL,
+    target_code TEXT,
+    starts_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP NOT NULL,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS traffic_purchases (
     id BIGSERIAL PRIMARY KEY,
     subscription_id BIGINT NOT NULL,
@@ -233,6 +247,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_tracking_code ON payments(tracking_code)
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);
+CREATE INDEX IF NOT EXISTS idx_discounts_active_period ON discounts(active, starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_promo_code_users_tg_id ON promo_code_users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_promo_code_users_code ON promo_code_users(promo_code);
 CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);
