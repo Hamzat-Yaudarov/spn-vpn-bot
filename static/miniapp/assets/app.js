@@ -244,39 +244,31 @@ function renderHome() {
   const nearest = nearestActiveSub();
   const hasBypass = active.some((s) => s.plan_kind === "bypass");
   const nearestTone = statusTone(nearest);
-  const activeText = active.length ? `${active.length} активн.` : "нет активных";
-  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Статус, трафик, устройства" } : { text: "Купить подписку", action: "openNewPurchase", hint: "Первый ключ за минуту" };
-  const secondary = active.length ? { text: "Продлить", action: "openRenewList", hint: "Дни не сгорят" } : { text: "Помощь", action: "switchView('help', { preserve: true })", hint: "Как подключиться" };
+  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Управление" } : { text: "Купить подписку", action: "openNewPurchase", hint: "Выбрать тариф" };
+  const secondary = active.length ? { text: "Продлить", action: "openRenewList", hint: "Выбрать ключ" } : { text: "Помощь", action: "switchView('help', { preserve: true })", hint: "Инструкции" };
   const primaryAction = primary.action.includes("(") ? primary.action : `${primary.action}()`;
   const secondaryAction = secondary.action.includes("(") ? secondary.action : `${secondary.action}()`;
   el("view-home").innerHTML = `
     <div class="home-dashboard">
-      <div class="hero-dashboard">
-        <div class="hero-glow"></div>
-        <p class="step">Личный кабинет</p>
-        <h2>${active.length ? "VPN под контролем" : "Добро пожаловать в Way SPN"}</h2>
-        <p class="muted">Ключи, трафик, устройства и продление собраны в одном месте.</p>
-        <div class="status-strip">
-          <div><span>Ключи</span><b>${activeText}</b></div>
-          <div><span>Ближайший срок</span><b>${nearest ? timeLeftText(nearest.subscription_until) : "-"}</b></div>
-        </div>
+      <div class="summary-grid">
+        <div class="summary-card blue"><span>Активные ключи</span><b>${active.length}</b></div>
+        <div class="summary-card green"><span>Антиглушилка</span><b>${hasBypass ? "Подключена" : "Нет"}</b></div>
       </div>
 
       ${nearest ? `<button class="status-card ${nearestTone}" onclick="openSubDetail(${nearest.id})">
         <span class="status-orb"></span>
         <div><p class="title">${subTitle(nearest)}</p><p class="muted">до ${date(nearest.subscription_until)} · осталось ${timeLeftText(nearest.subscription_until)}</p></div>
         <b>›</b>
-      </button>` : `<div class="card empty soft-empty"><h2>Активных ключей пока нет</h2><p class="muted">Выберите подписку, оплатите удобным способом, и ключ появится автоматически.</p></div>`}
+      </button>` : `<div class="card empty soft-empty"><h2>Активных ключей пока нет</h2><p class="muted">Выберите подписку — ключ появится после оплаты.</p></div>`}
 
       <div class="quick-grid home-actions elevated-actions">
         <button class="quick-card gold primary-action" onclick="${primaryAction}"><span>${primary.text}</span><small>${primary.hint}</small></button>
         <button class="quick-card blue secondary-action" onclick="${secondaryAction}"><span>${secondary.text}</span><small>${secondary.hint}</small></button>
       </div>
-      <div class="choice-list compact-actions">
+      ${active.length || hasBypass ? `<div class="choice-list compact-actions">
         ${active.length ? `<button class="choice-button" onclick="openNewPurchase()"><span>Купить ещё ключ<small>Обычный или с антиглушилкой</small></span><b>›</b></button>` : ""}
         ${hasBypass ? `<button class="choice-button" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ<small>Для антиглушилки</small></span><b>›</b></button>` : ""}
-        <button class="choice-button" onclick="switchView('help', { preserve: true })"><span>Помощь<small>Инструкция и поддержка</small></span><b>›</b></button>
-      </div>
+      </div>` : ""}
     </div>`;
 }
 
@@ -288,7 +280,7 @@ function renderKeys() {
   }
 
   if (state.keysMode === "list") {
-    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ, чтобы открыть информацию, скопировать ссылку или продлить.");
+    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ для управления.");
     return;
   }
 
@@ -314,7 +306,7 @@ function renderKeys() {
 
 function keysListHtml(title, subtitle, action = "detail") {
   return `<div class="grid">
-    <div class="section-note"><p class="step">Раздел ключей</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
+    <div class="section-note"><p class="step">Ключи</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
     <div class="choice-list">${state.subs.map((s) => keyButton(s, action)).join("")}</div>
   </div>`;
 }
@@ -338,7 +330,7 @@ function subscriptionDetailHtml(s) {
       <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${limitText}</b></div></div>
       ${s.traffic.enabled ? `<div class="traffic-panel"><div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
     </div>
-    <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Добавьте ключ в Happ автоматически или скопируйте ссылку вручную.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
+    <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Откройте ключ в Happ или скопируйте его.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <div class="action-grid sticky-actions">
       <button class="button accent" data-action="renew" data-sub-id="${s.id}">Продлить</button>
       <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
@@ -392,7 +384,7 @@ function renderBuy() {
   const container = el("view-buy");
   if (state.buyMode === "plan") {
     container.innerHTML = `<div class="grid">
-      <div class="section-note"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p><p class="muted">Новая подписка будет создана отдельным ключом.</p></div>
+      <div class="section-note"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p></div>
       <div class="plan-grid">
         <button class="plan-card plan-regular" onclick="selectBuyPlan('regular')"><span>Обычная</span><b>5 устройств</b><small>Для ежедневного подключения.</small></button>
         <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>150 ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
@@ -528,8 +520,8 @@ function renderReferral() {
 
 function renderHelp() {
   el("view-help").innerHTML = `<div class="grid">
-    <div class="section-note help-note"><p class="step">Помощь</p><p class="title">Подключение и поддержка</p><p class="muted">Быстрые подсказки, если нужно добавить ключ или написать нам.</p></div>
-    <div class="help-card blue"><span>1</span><div><p class="title">Добавьте ключ в Happ</p><p class="muted">Откройте “Ключи”, выберите подписку и нажмите “Добавить ключ в Happ”.</p></div></div>
+    <div class="section-note help-note"><p class="step">Помощь</p><p class="title">Подключение и поддержка</p></div>
+    <div class="help-card blue"><span>1</span><div><p class="title">Добавьте ключ в Happ</p><p class="muted">Откройте «Ключи», выберите подписку и нажмите «Открыть в Happ».</p></div></div>
     <div class="help-card green"><span>2</span><div><p class="title">Если Happ не открылся</p><p class="muted">Ключ уже будет скопирован. Откройте Happ вручную и вставьте его через “+”.</p></div></div>
     <div class="card support-card"><p class="title">Поддержка</p><p class="muted">Если что-то не получается, напишите нам в Telegram.</p><button class="button blue" onclick="openLink('https://t.me/wayspn_support')">Открыть поддержку</button></div>
   </div>`;
