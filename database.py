@@ -1,6 +1,7 @@
 import asyncio
 import asyncpg
 import logging
+from datetime import datetime
 from config import (
     DATABASE_URL,
     PAYMENT_EXPIRY_TIME,
@@ -1263,6 +1264,29 @@ async def update_subscription_record(subscription_id: int, uuid: str, username: 
         WHERE id = $5
         """,
         (uuid, username, subscription_until, squad_uuid, subscription_id, next_notification, notification_type)
+    )
+
+    subscription = await get_subscription_by_id(subscription_id)
+    if subscription:
+        await sync_primary_subscription_to_user(subscription['tg_id'])
+
+
+async def sync_subscription_expiry(subscription_id: int, subscription_until):
+    """Синхронизировать фактический срок подписки из Remnawave."""
+    next_notification, notification_type = _calculate_notification_fields(subscription_until)
+    is_active = bool(subscription_until and subscription_until > datetime.utcnow())
+
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET subscription_until = $1,
+            is_active = $2,
+            next_notification_time = $3,
+            notification_type = $4,
+            updated_at = now()
+        WHERE id = $5
+        """,
+        (subscription_until, is_active, next_notification, notification_type, subscription_id),
     )
 
     subscription = await get_subscription_by_id(subscription_id)

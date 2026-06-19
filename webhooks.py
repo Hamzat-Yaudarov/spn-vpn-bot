@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from datetime import datetime
+from datetime import datetime, timezone
 from config import (
     BOT_TOKEN,
     BYPASS_TRAFFIC_PACKAGES,
@@ -31,6 +31,7 @@ from services.remnawave import (
     remnawave_get_user_info,
 )
 from services.yookassa import create_yookassa_payment
+from services.subscription_sync import reconcile_subscription_expiry
 
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,11 @@ async def _miniapp_user(request: Request) -> dict:
 
 
 def _format_dt(value):
-    return value.isoformat() if value else None
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _format_gb(bytes_value: int | None) -> float:
@@ -154,22 +159,28 @@ async def _get_miniapp_subscription_or_404(subscription_id: int, tg_id: int):
 
 async def _serialize_subscription(subscription) -> dict:
     sub_url = None
+    user_info = None
     used_bytes = subscription.get("last_known_used_traffic_bytes") or 0
+    effective_until = subscription.get("subscription_until")
     if subscription.get("remnawave_uuid"):
         try:
             sub_url = await remnawave_get_subscription_url(None, subscription["remnawave_uuid"])
-            if subscription.get("plan_kind") == "bypass":
-                user_info = await remnawave_get_user_info(None, subscription["remnawave_uuid"])
-                used_bytes = (user_info.get("userTraffic") or {}).get("usedTrafficBytes") or used_bytes if user_info else used_bytes
         except Exception as e:
-            logger.warning("MiniApp failed to fetch subscription data for %s: %s", subscription.get("id"), e)
+            logger.warning("MiniApp failed to fetch subscription URL for %s: %s", subscription.get("id"), e)
+        try:
+            user_info = await remnawave_get_user_info(None, subscription["remnawave_uuid"])
+            effective_until = await reconcile_subscription_expiry(subscription, user_info)
+        except Exception as e:
+            logger.warning("MiniApp failed to fetch subscription expiry for %s: %s", subscription.get("id"), e)
+        if subscription.get("plan_kind") == "bypass" and user_info:
+            used_bytes = (user_info.get("userTraffic") or {}).get("usedTrafficBytes") or used_bytes
 
     return {
         "id": subscription["id"],
         "plan_kind": subscription.get("plan_kind") or "regular",
         "type_index": subscription.get("type_index") or subscription.get("slot_number"),
-        "status": "active" if subscription.get("subscription_until") and subscription["subscription_until"] > datetime.utcnow() else "expired",
-        "subscription_until": _format_dt(subscription.get("subscription_until")),
+        "status": "active" if effective_until and effective_until > datetime.utcnow() else "expired",
+        "subscription_until": _format_dt(effective_until),
         "remnawave_uuid": str(subscription.get("remnawave_uuid")) if subscription.get("remnawave_uuid") else None,
         "subscription_url": sub_url,
         "traffic": {

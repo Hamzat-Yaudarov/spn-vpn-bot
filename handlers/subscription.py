@@ -32,6 +32,7 @@ from services.remnawave import (
     remnawave_set_subscription_expiry,
 )
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
+from services.subscription_sync import refresh_subscription_expiry
 from states import UserStates
 
 
@@ -96,23 +97,26 @@ def _device_limit_text(subscription) -> str:
     return f"{limit} устройства" if limit in (2, 3, 4) else f"{limit} устройств"
 
 
-async def _get_subscription_access_data(subscription) -> tuple[str | None, str]:
+async def _get_subscription_access_data(subscription) -> tuple[str | None, str, datetime | None]:
     """Получить ссылку подписки и остаток времени."""
-    remaining_str = _format_remaining(subscription['subscription_until'].replace(tzinfo=timezone.utc).isoformat()) if subscription.get('subscription_until') else "неизвестно"
+    effective_until = subscription.get('subscription_until')
     sub_url = None
 
-    try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            if subscription.get('remnawave_uuid'):
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        if subscription.get('remnawave_uuid'):
+            try:
                 sub_url = await remnawave_get_subscription_url(session, subscription['remnawave_uuid'])
-    except Exception as e:
-        logging.error(f"Error fetching subscription info from Remnawave: {e}")
-        if not subscription.get('subscription_until'):
-            remaining_str = "ошибка загрузки"
+            except Exception as e:
+                logging.error(f"Error fetching subscription URL from Remnawave: {e}")
+            try:
+                effective_until = await refresh_subscription_expiry(subscription, session)
+            except Exception as e:
+                logging.error(f"Error fetching subscription expiry from Remnawave: {e}")
 
-    return sub_url, remaining_str
+    remaining_str = _format_remaining(effective_until.replace(tzinfo=timezone.utc).isoformat()) if effective_until else "неизвестно"
+    return sub_url, remaining_str, effective_until
 
 
 def _build_instruction_text(sub_url: str) -> str:
@@ -273,10 +277,11 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    sub_url, remaining_str = await _get_subscription_access_data(subscription)
+    sub_url, remaining_str, effective_until = await _get_subscription_access_data(subscription)
     plan_title = 'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'
-    status_text = _subscription_short_status(subscription)
-    until_text = _format_date(subscription.get('subscription_until'))
+    display_subscription = {**subscription, 'subscription_until': effective_until}
+    status_text = _subscription_short_status(display_subscription)
+    until_text = _format_date(effective_until)
     limit_text = _device_limit_text(subscription)
     traffic_text = ""
 
@@ -436,7 +441,7 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    sub_url, _ = await _get_subscription_access_data(subscription)
+    sub_url, _, _ = await _get_subscription_access_data(subscription)
     if not sub_url:
         await callback.answer("Не удалось получить ключ подписки", show_alert=True)
         return
