@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07111f" />
     <meta name="description" content="SPN — стабильное интернет-соединение. Покупка и управление подпиской без Telegram." />
     <title>SPN — стабильный интернет</title>
-    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-05" />
+    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-07" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -47,21 +47,22 @@
       <section id="accountView" class="account-view hidden">
         <aside class="account-sidebar">
           <div class="account-brand"><span class="logo-mark">S</span><div><b>SPN</b><small>Личный кабинет</small></div></div>
-          <nav><button class="active" data-account-section="overview">Обзор</button><button data-account-section="plans">Купить подписку</button><button data-account-section="traffic">Купить ГБ</button><button data-account-section="history">История</button></nav>
+          <nav><button class="active" data-account-section="overview">Главная</button><button data-account-section="plans">Купить подписку</button><button data-account-section="traffic">Купить ГБ</button><button data-account-section="history">История</button></nav>
           <button id="logoutButton" class="logout-button">Выйти из аккаунта</button>
         </aside>
         <div class="account-main">
           <header class="account-topbar"><div><p class="muted">Добро пожаловать</p><h1 id="accountGreeting">Ваш аккаунт</h1></div><button id="mobileMenu" class="mobile-menu">☰</button><div class="profile-pill"><span id="profileLetter">S</span><b id="profileLogin">—</b></div></header>
 
+          <button id="sectionNavigationButton" class="button primary section-navigation">Купить подписку</button>
+
           <div id="paymentBanner" class="payment-banner hidden"><span class="loader"></span><div><b>Проверяем оплату</b><p>Не закрывайте страницу — это обычно занимает несколько секунд.</p></div></div>
 
           <section id="account-overview" class="account-section active">
-            <div class="account-heading"><div><p class="eyebrow">Подписки</p><h2>Ваши подключения</h2></div><button class="button primary" data-open-plans>Купить подписку</button></div>
+            <div class="account-heading"><div><p class="eyebrow">Подписки</p><h2>Ваши подключения</h2></div></div>
             <div id="subscriptionsGrid" class="subscriptions-grid skeleton-grid"></div>
           </section>
 
           <section id="account-plans" class="account-section">
-            <div id="registrationSuccess" class="registration-success hidden"><b>✓ Аккаунт создан</b><span>Теперь выберите тип и срок подписки.</span></div>
             <div class="account-heading"><div><h2>Купить подписку</h2><p class="muted">Выберите тип и срок подписки.</p></div></div>
             <div class="plan-switch account-switch"><button class="active" data-account-kind="regular">Обычный</button><button data-account-kind="bypass">С антиглушилкой</button></div>
             <div id="accountPlans" class="plans-grid"></div>
@@ -86,6 +87,12 @@
       <p class="eyebrow">Оплата</p><h2 id="checkoutTitle">Подтвердите покупку</h2><div id="checkoutDetails"></div>
       <button id="confirmCheckout" class="button primary wide">Перейти к оплате</button><p class="secure-note">🔒 Безопасная оплата через ЮKassa</p>
     </dialog>
+    <dialog id="renewDialog" class="checkout-dialog renew-dialog">
+      <button id="closeRenew" class="dialog-close">×</button>
+      <p class="eyebrow">Продление</p><h2 id="renewTitle">Продлить подписку</h2>
+      <p class="muted">Выберите срок продления.</p>
+      <div id="renewPlans" class="renew-plans"></div>
+    </dialog>
     <dialog id="connectionDialog" class="checkout-dialog connection-dialog">
       <button id="closeConnection" class="dialog-close">×</button>
       <p class="eyebrow">Подключение</p><h2>Как включить SPN</h2>
@@ -99,6 +106,6 @@
       <button id="understoodConnection" class="button primary wide">Понятно</button>
     </dialog>
     <div id="toast" class="toast"></div>
-    <script src="/site/assets/site.js?v=20260620-05"></script>
+    <script src="/site/assets/site.js?v=20260620-07"></script>
   </body>
 </html>

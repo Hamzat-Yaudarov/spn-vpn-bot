@@ -1,4 +1,6 @@
 import asyncio
+import html
+import json
 import logging
 import re
 import time
@@ -7,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import database as db
@@ -200,6 +202,53 @@ async def website_index():
     if not path.exists():
         raise HTTPException(status_code=404, detail="Website is not built")
     return FileResponse(path)
+
+
+@router.get("/open-happ")
+async def website_open_happ(url: str):
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="Некорректная ссылка подписки")
+
+    happ_url = f"happ://add/{url}"
+    happ_url_attr = html.escape(happ_url, quote=True)
+    happ_url_json = (
+        json.dumps(happ_url)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    return HTMLResponse(f"""
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Открываем Happ</title>
+    <style>
+      * {{ box-sizing: border-box; }}
+      body {{ margin: 0; min-height: 100vh; padding: 20px; display: grid; place-items: center; background: #07111f; color: #f5f8fb; font-family: system-ui, sans-serif; }}
+      main {{ width: min(420px, 100%); padding: 28px; border: 1px solid rgba(167,194,220,.16); border-radius: 22px; background: #102036; text-align: center; }}
+      h1 {{ margin: 0 0 9px; font-size: 25px; }}
+      p {{ margin: 0 0 22px; color: #91a3b8; line-height: 1.5; }}
+      a {{ display: flex; min-height: 48px; align-items: center; justify-content: center; border-radius: 12px; color: #06271d; background: #6ee7b7; text-decoration: none; font-weight: 800; }}
+      a + a {{ margin-top: 10px; color: #f5f8fb; background: rgba(255,255,255,.07); }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Открываем Happ</h1>
+      <p>Если приложение не открылось автоматически, нажмите кнопку.</p>
+      <a href="{happ_url_attr}">Открыть Happ</a>
+      <a href="/account">Вернуться в кабинет</a>
+    </main>
+    <script>
+      const happUrl = {happ_url_json};
+      setTimeout(() => {{ window.location.href = happUrl; }}, 120);
+      setTimeout(() => {{ window.location.href = '/account'; }}, 2600);
+    </script>
+  </body>
+</html>
+""")
 
 
 @router.get("/site/api/config")

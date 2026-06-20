@@ -148,6 +148,9 @@ a { color: inherit; text-decoration: none; }
 .account-topbar { min-height: 106px; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line); }
 .account-topbar p, .account-topbar h1 { margin: 0; }
 .account-topbar h1 { margin-top: 4px; font-size: 22px; }
+.section-navigation { width: fit-content; margin-top: 22px; }
+.section-navigation.back-home { padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font-weight: 750; }
+.section-navigation.back-home:hover { color: #9af3d2; }
 .profile-pill { margin-left: auto; padding: 7px 13px 7px 7px; border: 1px solid var(--line); border-radius: 13px; display: flex; align-items: center; gap: 9px; font-size: 13px; }
 .profile-pill span { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 9px; background: rgba(110,231,183,.12); color: var(--accent); font-weight: 900; }
 .mobile-menu { display: none; margin-left: auto; border: 0; background: transparent; font-size: 22px; }
@@ -156,9 +159,6 @@ a { color: inherit; text-decoration: none; }
 .account-heading { margin-bottom: 28px; display: flex; align-items: end; justify-content: space-between; gap: 20px; }
 .account-heading h2 { margin: 6px 0; font-size: 31px; letter-spacing: -.035em; }
 .account-heading p { margin-bottom: 0; }
-.registration-success { margin-bottom: 18px; padding: 14px 17px; border: 1px solid rgba(110,231,183,.25); border-radius: 14px; background: rgba(110,231,183,.08); display: flex; align-items: center; gap: 10px; }
-.registration-success b { color: var(--accent); }
-.registration-success span { color: #c4d0db; font-size: 13px; }
 .subscriptions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; }
 .subscription-card { position: relative; padding: 25px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(145deg, rgba(18,39,62,.9), rgba(11,27,45,.85)); }
 .subscription-card .sub-head { display: flex; align-items: start; justify-content: space-between; gap: 15px; }
@@ -215,7 +215,13 @@ a { color: inherit; text-decoration: none; }
 .connection-steps div { padding: 12px; border-radius: 12px; background: rgba(255,255,255,.035); display: flex; align-items: center; gap: 11px; color: #c2ceda; font-size: 13px; }
 .connection-steps b { width: 25px; height: 25px; flex: 0 0 25px; display: grid; place-items: center; border-radius: 8px; color: #05271c; background: var(--accent); font-size: 11px; }
 .connection-fallback { margin: 0 0 20px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.toast { position: fixed; z-index: 100; left: 50%; bottom: 30px; transform: translate(-50%, 20px); max-width: calc(100% - 30px); padding: 13px 18px; border: 1px solid var(--line); border-radius: 12px; background: #142a43; opacity: 0; pointer-events: none; transition: .25s; box-shadow: var(--shadow); font-size: 13px; }
+.renew-plans { margin-top: 20px; display: grid; gap: 10px; }
+.renew-option { width: 100%; padding: 15px 16px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.035); color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 18px; text-align: left; cursor: pointer; transition: .2s ease; }
+.renew-option:hover { border-color: rgba(110,231,183,.38); background: rgba(110,231,183,.07); }
+.renew-option span { display: grid; gap: 4px; }
+.renew-option small { color: var(--muted); }
+.renew-option > strong { color: var(--accent); font-size: 18px; white-space: nowrap; }
+.toast { position: fixed; z-index: 100; left: 50%; top: 18px; transform: translate(-50%, -22px); min-width: 220px; max-width: calc(100% - 30px); padding: 13px 18px; border: 1px solid rgba(110,231,183,.3); border-radius: 12px; background: #142a43; opacity: 0; pointer-events: none; transition: .28s ease; box-shadow: var(--shadow); font-size: 13px; text-align: center; }
 .toast.show { transform: translate(-50%, 0); opacity: 1; }
 .toast.bad { border-color: rgba(255,126,139,.35); }
 .skeleton-grid:empty::before, .skeleton-grid:empty::after { content: ""; height: 290px; border-radius: 22px; background: linear-gradient(100deg, rgba(255,255,255,.025) 20%, rgba(255,255,255,.07) 40%, rgba(255,255,255,.025) 60%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
@@ -276,6 +282,7 @@ footer p { flex: 1; }
   .auth-switch { margin-top: 12px; }
   .account-main { padding-inline: 15px; }
   .account-topbar { min-height: 88px; }
+  .section-navigation { margin-top: 16px; }
   .account-topbar > div:first-child { display: none; }
   .profile-pill { order: 3; }
   .account-heading { align-items: flex-start; flex-direction: column; }
