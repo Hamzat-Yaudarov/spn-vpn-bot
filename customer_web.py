@@ -7,6 +7,7 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
@@ -209,7 +210,7 @@ async def website_open_happ(url: str):
     if not (url.startswith("https://") or url.startswith("http://")):
         raise HTTPException(status_code=400, detail="Некорректная ссылка подписки")
 
-    happ_url = f"happ://add/{url}"
+    happ_url = f"happ://add/{quote(url, safe='')}"
     happ_url_attr = html.escape(happ_url, quote=True)
     happ_url_json = (
         json.dumps(happ_url)

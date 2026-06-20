@@ -61,6 +61,7 @@ function priceHtml(item) {
   return `<b>${rub(item.price)}</b>`;
 }
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
+function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
 
 function daysLeft(value) {
@@ -598,12 +599,9 @@ async function copyText(encoded) {
 function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
   navigator.clipboard.writeText(text).catch(() => {});
-  const link = document.createElement("a");
-  link.href = happLink(text);
-  link.style.display = "none";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  const bridgeUrl = happBridgeLink(text);
+  if (tg?.openLink) tg.openLink(bridgeUrl);
+  else window.location.href = bridgeUrl;
   showToast("Открываем Happ. Ключ также скопирован.");
 }
 

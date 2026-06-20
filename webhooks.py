@@ -3,6 +3,7 @@ import asyncio
 import html
 import json
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -206,10 +207,10 @@ async def miniapp_open_happ(url: str):
     if not (url.startswith("https://") or url.startswith("http://")):
         raise HTTPException(status_code=400, detail="Invalid subscription URL")
 
-    happ_url = f"happ://add/{url}"
+    happ_url = f"happ://add/{quote(url, safe='')}"
     happ_url_attr = html.escape(happ_url, quote=True)
-    happ_url_json = json.dumps(happ_url)
-    url_json = json.dumps(url)
+    happ_url_json = json.dumps(happ_url).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    url_json = json.dumps(url).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     return HTMLResponse(f"""
 <!doctype html>
 <html lang="ru">
