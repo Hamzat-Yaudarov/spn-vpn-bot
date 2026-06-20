@@ -61,7 +61,6 @@ function priceHtml(item) {
   return `<b>${rub(item.price)}</b>`;
 }
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
-function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
 
 function daysLeft(value) {
@@ -142,7 +141,37 @@ document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
 
+el("topMenuButton").addEventListener("click", () => {
+  const menu = el("topMenu");
+  const opening = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !opening);
+  el("topMenuButton").setAttribute("aria-expanded", String(opening));
+});
+
+el("topBuyButton").addEventListener("click", () => {
+  el("topMenu").classList.add("hidden");
+  el("topMenuButton").setAttribute("aria-expanded", "false");
+  openNewPurchase();
+});
+
+el("topHomeButton").addEventListener("click", () => {
+  if (tg?.close) tg.close();
+  else switchView("home", { reset: true });
+});
+
+document.querySelectorAll("[data-top-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    el("topMenu").classList.add("hidden");
+    el("topMenuButton").setAttribute("aria-expanded", "false");
+    switchView(button.dataset.topView, { reset: true });
+  });
+});
+
 document.addEventListener("click", (event) => {
+  if (!event.target.closest(".top-actions") && !event.target.closest("#topMenu")) {
+    el("topMenu").classList.add("hidden");
+    el("topMenuButton").setAttribute("aria-expanded", "false");
+  }
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const subId = Number(target.dataset.subId);
@@ -568,14 +597,14 @@ async function copyText(encoded) {
 
 function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
-  const url = happBridgeLink(text);
-  if (tg?.openLink) {
-    tg.openLink(url);
-  } else {
-    window.open(url, "_blank");
-  }
   navigator.clipboard.writeText(text).catch(() => {});
-  showToast("Открываем Happ. Если не добавится, ключ уже скопирован.");
+  const link = document.createElement("a");
+  link.href = happLink(text);
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  showToast("Открываем Happ. Ключ также скопирован.");
 }
 
 load();

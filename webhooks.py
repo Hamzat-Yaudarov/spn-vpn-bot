@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import html
+import json
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse

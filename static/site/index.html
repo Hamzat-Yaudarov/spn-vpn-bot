@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07111f" />
     <meta name="description" content="SPN — стабильное интернет-соединение. Покупка и управление подпиской без Telegram." />
     <title>SPN — стабильный интернет</title>
-    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-07" />
+    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-08" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -51,9 +51,12 @@
           <button id="logoutButton" class="logout-button">Выйти из аккаунта</button>
         </aside>
         <div class="account-main">
-          <header class="account-topbar"><div><p class="muted">Добро пожаловать</p><h1 id="accountGreeting">Ваш аккаунт</h1></div><button id="mobileMenu" class="mobile-menu">☰</button><div class="profile-pill"><span id="profileLetter">S</span><b id="profileLogin">—</b></div></header>
-
-          <button id="sectionNavigationButton" class="button primary section-navigation">Купить подписку</button>
+          <header class="account-topbar">
+            <button id="mobileMenu" class="mobile-menu">☰</button>
+            <button id="sectionNavigationButton" class="button primary section-navigation">Купить подписку</button>
+            <div class="account-welcome"><p class="muted">Добро пожаловать</p><h1 id="accountGreeting">Ваш аккаунт</h1></div>
+            <div class="profile-pill"><span id="profileLetter">S</span><b id="profileLogin">—</b></div>
+          </header>
 
           <div id="paymentBanner" class="payment-banner hidden"><span class="loader"></span><div><b>Проверяем оплату</b><p>Не закрывайте страницу — это обычно занимает несколько секунд.</p></div></div>
 
@@ -106,6 +109,6 @@
       <button id="understoodConnection" class="button primary wide">Понятно</button>
     </dialog>
     <div id="toast" class="toast"></div>
-    <script src="/site/assets/site.js?v=20260620-07"></script>
+    <script src="/site/assets/site.js?v=20260620-09"></script>
   </body>
 </html>

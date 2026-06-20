@@ -12,6 +12,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
 const rubles = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
 const formatDate = (value, time = false) => value ? new Date(value).toLocaleString("ru-RU", time ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "long" }) : "—";
+const happLink = (url) => `happ://add/${encodeURIComponent(url)}`;
 
 async function api(path, options = {}) {
   const response = await fetch(`/site/api${path}`, {
@@ -351,7 +352,12 @@ document.addEventListener("click", async (event) => {
     const key = connect.dataset.connect;
     await navigator.clipboard.writeText(key).catch(() => {});
     toast("Ключ скопирован — открываем Happ");
-    window.location.href = `/open-happ?url=${encodeURIComponent(key)}`;
+    const link = document.createElement("a");
+    link.href = happLink(key);
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
   if (connectionHelp) $("connectionDialog").showModal();
 });
