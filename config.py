@@ -14,6 +14,9 @@ MINIAPP_URL = os.getenv("MINIAPP_URL", "https://wayspn.ru/app")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "WaySPN_robot").lstrip("@")
 _MINIAPP_URL_WITHOUT_SLASH = MINIAPP_URL.rstrip("/")
 ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", f"{_MINIAPP_URL_WITHOUT_SLASH.rsplit('/', 1)[0]}/admin")
+PUBLIC_SITE_URL = os.getenv("PUBLIC_SITE_URL", _MINIAPP_URL_WITHOUT_SLASH.rsplit("/", 1)[0]).rstrip("/")
+WEB_SESSION_DAYS = int(os.getenv("WEB_SESSION_DAYS", "30"))
+WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "True").lower() == "true"
 
 # ────────────────────────────────────────────────
 #           SUPPORT & NEWS CHANNELS

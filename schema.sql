@@ -25,6 +25,26 @@ CREATE TABLE IF NOT EXISTS users (
     last_payment_check TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS web_accounts (
+    id BIGSERIAL PRIMARY KEY,
+    login TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    service_user_id BIGINT UNIQUE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    last_login_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS web_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    account_id BIGINT NOT NULL REFERENCES web_accounts(id) ON DELETE CASCADE,
+    token_hash TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT now(),
+    last_seen_at TIMESTAMP DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS partnerships (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT UNIQUE NOT NULL,
@@ -221,6 +241,10 @@ CREATE TABLE IF NOT EXISTS tracking_link_clicks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
+CREATE INDEX IF NOT EXISTS idx_web_accounts_login ON web_accounts(login);
+CREATE INDEX IF NOT EXISTS idx_web_accounts_service_user ON web_accounts(service_user_id);
+CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);

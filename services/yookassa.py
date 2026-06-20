@@ -22,7 +22,9 @@ async def create_yookassa_payment(
     bot,
     amount: float,
     tariff_code: str,
-    tg_id: int
+    tg_id: int,
+    *,
+    return_url: str | None = None,
 ) -> dict | None:
     """
     Создать платёж через Yookassa API с retry логикой
@@ -38,7 +40,13 @@ async def create_yookassa_payment(
     """
     async def _create_payment():
         url = f"{YOOKASSA_API_URL}/payments"
-        bot_username = (await bot.get_me()).username
+        if return_url is None:
+            if bot is None:
+                raise RuntimeError("return_url is required without Telegram bot")
+            bot_username = (await bot.get_me()).username
+            confirmation_return_url = f"https://t.me/{bot_username}"
+        else:
+            confirmation_return_url = return_url
 
         # Базовая авторизация: base64(shop_id:secret_key)
         credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
@@ -58,7 +66,7 @@ async def create_yookassa_payment(
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": f"https://t.me/{bot_username}"
+                "return_url": confirmation_return_url
             },
             "capture": True,
             "description": f"Подписка SPN VPN — {tariff_code}",

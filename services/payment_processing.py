@@ -31,7 +31,8 @@ def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
 
 
 def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) -> str:
-    return f"tg_{tg_id}_{plan_kind}_{type_index}"
+    prefix = f"tg_{tg_id}" if tg_id > 0 else f"web_{abs(tg_id)}"
+    return f"{prefix}_{plan_kind}_{type_index}"
 
 
 def _subscription_display_name(subscription) -> str:
@@ -164,7 +165,7 @@ async def process_paid_payment(
                 traffic_limit_strategy=traffic_limit_strategy,
                 active_internal_squads=[squad_uuid],
                 hwid_device_limit=device_limit,
-                telegram_id=tg_id,
+                telegram_id=tg_id if tg_id > 0 else None,
             )
             if not uuid:
                 logger.error("Failed to create/get Remnawave user for %s", tg_id)
@@ -321,7 +322,11 @@ async def process_paid_payment(
                 [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}", style="primary")],
                 [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
             ])
-            await bot.send_message(tg_id, text, reply_markup=kb)
+            if bot is not None and tg_id > 0:
+                try:
+                    await bot.send_message(tg_id, text, reply_markup=kb)
+                except Exception as exc:
+                    logger.warning("Could not send payment notification to %s: %s", tg_id, exc)
 
             logger.info("Payment processing completed successfully for user %s", tg_id)
             return True
@@ -364,7 +369,7 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
             traffic_limit_strategy="NO_RESET",
             active_internal_squads=[BYPASS_SQUAD_UUID],
             hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
-            telegram_id=tg_id,
+            telegram_id=tg_id if tg_id > 0 else None,
         )
         if not updated:
             logger.error("Failed to update traffic limit for subscription %s", subscription_id)
@@ -378,11 +383,15 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
         [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
     ])
-    await bot.send_message(
-        tg_id,
-        f"✅ <b>Пакет {package['gb']} ГБ активирован!</b>\n\n"
-        f"Подписка: <b>{_subscription_display_name(subscription)}</b>\n"
-        f"Новый лимит периода: <b>{new_limit / GB_BYTES:.1f} ГБ</b>",
-        reply_markup=kb,
-    )
+    if bot is not None and tg_id > 0:
+        try:
+            await bot.send_message(
+                tg_id,
+                f"✅ <b>Пакет {package['gb']} ГБ активирован!</b>\n\n"
+                f"Подписка: <b>{_subscription_display_name(subscription)}</b>\n"
+                f"Новый лимит периода: <b>{new_limit / GB_BYTES:.1f} ГБ</b>",
+                reply_markup=kb,
+            )
+        except Exception as exc:
+            logger.warning("Could not send traffic notification to %s: %s", tg_id, exc)
     return True

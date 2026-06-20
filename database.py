@@ -349,6 +349,30 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'users' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS web_accounts (
+                    id BIGSERIAL PRIMARY KEY,
+                    login TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    service_user_id BIGINT UNIQUE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    last_login_at TIMESTAMP
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS web_sessions (
+                    id BIGSERIAL PRIMARY KEY,
+                    account_id BIGINT NOT NULL REFERENCES web_accounts(id) ON DELETE CASCADE,
+                    token_hash TEXT UNIQUE NOT NULL,
+                    expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    last_seen_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            logging.info("✅ Таблицы веб-аккаунтов созданы или уже существуют")
+
             # Таблица партнёрства
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS partnerships (
@@ -623,6 +647,10 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS idx_web_accounts_login ON web_accounts(login);",
+                "CREATE INDEX IF NOT EXISTS idx_web_accounts_service_user ON web_accounts(service_user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);",
 
                 # subscriptions индексы
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);",
@@ -912,6 +940,126 @@ async def db_execute(query, params=(), fetch_one=False, fetch_all=False):
         except Exception as e:
             logging.error(f"Database error: {e}")
             raise
+
+
+# ────────────────────────────────────────────────
+#                  WEB ACCOUNTS
+# ────────────────────────────────────────────────
+
+async def create_web_account(login: str, password_hash: str):
+    """Создать веб-аккаунт и совместимого внутреннего пользователя атомарно."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                account = await conn.fetchrow(
+                    """
+                    INSERT INTO web_accounts (login, password_hash)
+                    VALUES ($1, $2)
+                    RETURNING *
+                    """,
+                    login,
+                    password_hash,
+                )
+            except asyncpg.UniqueViolationError:
+                return None
+
+            service_user_id = -8_000_000_000_000_000_000 + int(account["id"])
+            await conn.execute(
+                "UPDATE web_accounts SET service_user_id = $1 WHERE id = $2",
+                service_user_id,
+                account["id"],
+            )
+            await conn.execute(
+                """
+                INSERT INTO users (tg_id, username, accepted_terms)
+                VALUES ($1, $2, TRUE)
+                """,
+                service_user_id,
+                f"web:{login}",
+            )
+            return await conn.fetchrow("SELECT * FROM web_accounts WHERE id = $1", account["id"])
+
+
+async def get_web_account_by_login(login: str):
+    return await db_execute(
+        "SELECT * FROM web_accounts WHERE login = $1 LIMIT 1",
+        (login,),
+        fetch_one=True,
+    )
+
+
+async def create_web_session(account_id: int, token_hash: str, expires_at):
+    await db_execute(
+        "DELETE FROM web_sessions WHERE expires_at <= now() AT TIME ZONE 'UTC'",
+    )
+    session = await db_execute(
+        """
+        INSERT INTO web_sessions (account_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+        RETURNING id
+        """,
+        (account_id, token_hash, expires_at),
+        fetch_one=True,
+    )
+    await db_execute(
+        """
+        DELETE FROM web_sessions
+        WHERE account_id = $1
+          AND id NOT IN (
+              SELECT id FROM web_sessions
+              WHERE account_id = $1
+              ORDER BY created_at DESC
+              LIMIT 10
+          )
+        """,
+        (account_id,),
+    )
+    return session
+
+
+async def get_web_account_by_session(token_hash: str):
+    return await db_execute(
+        """
+        UPDATE web_sessions AS session
+        SET last_seen_at = now()
+        FROM web_accounts AS account
+        WHERE session.token_hash = $1
+          AND session.expires_at > now() AT TIME ZONE 'UTC'
+          AND account.id = session.account_id
+          AND account.is_active = TRUE
+        RETURNING account.id, account.login, account.service_user_id,
+                  account.created_at, account.last_login_at
+        """,
+        (token_hash,),
+        fetch_one=True,
+    )
+
+
+async def mark_web_account_login(account_id: int):
+    await db_execute(
+        "UPDATE web_accounts SET last_login_at = now(), updated_at = now() WHERE id = $1",
+        (account_id,),
+    )
+
+
+async def delete_web_session(token_hash: str):
+    await db_execute("DELETE FROM web_sessions WHERE token_hash = $1", (token_hash,))
+
+
+async def list_web_account_payments(service_user_id: int, limit: int = 30):
+    return await db_execute(
+        """
+        SELECT invoice_id, tariff_code, amount, provider, status, payment_target,
+               payment_kind, traffic_package_code, subscription_id, created_at, updated_at
+        FROM payments
+        WHERE tg_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+        """,
+        (service_user_id, limit),
+        fetch_all=True,
+    )
 
 
 async def acquire_user_lock(tg_id: int) -> bool:
@@ -2160,7 +2308,8 @@ async def get_users_needing_notification():
         """
         SELECT tg_id, next_notification_time, subscription_until, notification_type
         FROM users
-        WHERE next_notification_time IS NOT NULL
+        WHERE tg_id > 0
+        AND next_notification_time IS NOT NULL
         AND subscription_until IS NOT NULL
         ORDER BY next_notification_time ASC
         """,
@@ -2177,7 +2326,8 @@ async def get_users_needing_notification():
         """
         SELECT tg_id, remnawave_uuid, subscription_until, notification_type
         FROM users
-        WHERE next_notification_time IS NOT NULL
+        WHERE tg_id > 0
+        AND next_notification_time IS NOT NULL
         AND next_notification_time <= $1
         AND subscription_until IS NOT NULL
         ORDER BY next_notification_time ASC

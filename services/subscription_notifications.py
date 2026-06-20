@@ -138,6 +138,7 @@ async def _send_notifications_for_expiring(bot):
         SELECT id, tg_id, slot_number, type_index, plan_kind, subscription_until
         FROM subscriptions
         WHERE remnawave_uuid IS NOT NULL
+          AND tg_id > 0
           AND subscription_until IS NOT NULL
           AND subscription_until > $1
           AND subscription_until <= $2
@@ -189,7 +190,7 @@ def _pick_expiring_stage(time_left: timedelta) -> dict | None:
 
 
 async def _send_notifications_for_expired(bot):
-    users = await db.db_execute("SELECT tg_id FROM users ORDER BY tg_id ASC", fetch_all=True)
+    users = await db.db_execute("SELECT tg_id FROM users WHERE tg_id > 0 ORDER BY tg_id ASC", fetch_all=True)
     now = datetime.utcnow()
     sent = 0
 
@@ -240,6 +241,7 @@ async def _send_notifications_for_low_traffic(bot):
                subscription_until, current_period_limit_bytes, traffic_reset_at
         FROM subscriptions
         WHERE plan_kind = 'bypass'
+          AND tg_id > 0
           AND remnawave_uuid IS NOT NULL
           AND subscription_until IS NOT NULL
           AND subscription_until > $1

@@ -26,11 +26,12 @@ from services.remnawave import (
     remnawave_get_subscription_url,
     remnawave_get_user_info,
 )
-from services.yookassa import create_yookassa_payment
+from services.yookassa import create_yookassa_payment, get_payment_status
 from services.subscription_sync import reconcile_subscription_expiry
 from services.discounts import calculate_discounted_price
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 from admin_web import router as admin_router
+from customer_web import router as customer_router
 
 
 logger = logging.getLogger(__name__)
@@ -38,19 +39,26 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="SPN VPN Bot Webhooks")
 STATIC_DIR = Path(__file__).parent / "static" / "miniapp"
 ADMIN_STATIC_DIR = Path(__file__).parent / "static" / "admin"
+SITE_STATIC_DIR = Path(__file__).parent / "static" / "site"
 
 if STATIC_DIR.exists():
     app.mount("/app/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="miniapp_assets")
 if ADMIN_STATIC_DIR.exists():
     app.mount("/admin/assets", StaticFiles(directory=ADMIN_STATIC_DIR / "assets"), name="admin_assets")
+if SITE_STATIC_DIR.exists():
+    app.mount("/site/assets", StaticFiles(directory=SITE_STATIC_DIR / "assets"), name="site_assets")
 
 app.include_router(admin_router)
+app.include_router(customer_router)
 
 
 @app.middleware("http")
 async def no_cache_miniapp(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path == "/app" or request.url.path.startswith("/app/") or request.url.path == "/admin" or request.url.path.startswith("/admin/"):
+    if (
+        request.url.path in {"/", "/account", "/login", "/register", "/app", "/admin"}
+        or request.url.path.startswith(("/app/", "/admin/", "/site/api/"))
+    ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -611,28 +619,15 @@ async def webhook_yookassa(request: Request):
 
         obj = payload.get("object", {})
         payment_id = obj.get("id")
-        metadata = obj.get("metadata", {})
-
-        tg_id_str = metadata.get("tg_id")
-        tariff_code = metadata.get("tariff_code")
-
-        if not all([payment_id, tg_id_str, tariff_code]):
+        if not payment_id:
             logger.warning(f"❌ Invalid Yookassa webhook payload (missing fields): {payload}")
             return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
-
-        try:
-            tg_id = int(tg_id_str)
-        except (ValueError, TypeError):
-            logger.warning(f"❌ Invalid tg_id format in Yookassa webhook: {tg_id_str}")
-            return JSONResponse({"ok": False, "error": "Invalid tg_id"}, status_code=400)
-
-        logger.info(f"📊 Yookassa payment {payment_id} succeeded: user {tg_id}, tariff {tariff_code}")
 
         # Получаем информацию о платеже из БД
         logger.info(f"🔍 Looking up payment for ID {payment_id} in database")
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code
+            SELECT tg_id, tariff_code, amount
             FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'yookassa'
             LIMIT 1
@@ -645,10 +640,24 @@ async def webhook_yookassa(request: Request):
             logger.warning(f"❌ Payment record not found for payment ID {payment_id} (may already be processed)")
             return JSONResponse({"ok": True})
 
+        verified_payment = await get_payment_status(payment_id)
+        verified_amount = ((verified_payment or {}).get("amount") or {}).get("value")
+        if (
+            not verified_payment
+            or verified_payment.get("status") != "succeeded"
+            or verified_amount is None
+            or abs(float(verified_amount) - float(result["amount"])) > 0.009
+        ):
+            logger.warning("Yookassa webhook verification failed for payment %s", payment_id)
+            return JSONResponse({"ok": False, "error": "Payment verification failed"}, status_code=400)
+
+        tg_id = int(result["tg_id"])
+        tariff_code = result["tariff_code"]
+
         logger.info(f"✅ Found payment in database: user {tg_id}, tariff {tariff_code}")
 
         # Проверяем доступность бота
-        if not _bot:
+        if not _bot and tg_id > 0:
             logger.error("❌ CRITICAL: Bot instance not available! Webhooks cannot process payments.")
             logger.error("⚠️ This usually means set_bot() was not called during initialization")
             return JSONResponse({"ok": False, "error": "Bot not available"}, status_code=500)
