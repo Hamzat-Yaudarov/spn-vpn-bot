@@ -20,6 +20,7 @@ from config import (
     DEFAULT_SQUAD_UUID,
     GB_BYTES,
     MINIAPP_URL,
+    PUBLIC_SITE_URL,
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
     SUPPORT_URL,
@@ -413,12 +414,14 @@ async def admin_new_tracking_link(message: Message):
 
     await db.create_tracking_link(code, title, admin_id)
     bot_username = (await message.bot.get_me()).username
-    link = f"https://t.me/{bot_username}?start={code}"
+    bot_link = f"https://t.me/{bot_username}?start={code}"
+    site_link = f"{PUBLIC_SITE_URL}/?t={code}"
     await message.answer(
         "✅ <b>Tracking-ссылка создана</b>\n\n"
         f"<b>Код:</b> <code>{code}</code>\n"
         f"<b>Название:</b> {html.escape(title) if title else 'не указано'}\n\n"
-        f"<b>Ссылка:</b>\n<code>{link}</code>\n\n"
+        f"<b>Telegram:</b>\n<code>{bot_link}</code>\n\n"
+        f"<b>Сайт:</b>\n<code>{site_link}</code>\n\n"
         f"Статистика: <code>/link_stats {code}</code>"
     )
 
@@ -470,12 +473,14 @@ async def admin_tracking_link_stats(message: Message):
 
     link = stats['link']
     bot_username = (await message.bot.get_me()).username
-    url = f"https://t.me/{bot_username}?start={code}"
+    bot_url = f"https://t.me/{bot_username}?start={code}"
+    site_url = f"{PUBLIC_SITE_URL}/?t={code}"
     await message.answer(
         f"📊 <b>Статистика ссылки <code>{code}</code></b>\n\n"
         f"<b>Название:</b> {html.escape(link['title']) if link.get('title') else 'не указано'}\n"
         f"<b>Статус:</b> {'активна' if link['is_active'] else 'выключена'}\n"
-        f"<b>Ссылка:</b> <code>{url}</code>\n\n"
+        f"<b>Telegram:</b> <code>{bot_url}</code>\n"
+        f"<b>Сайт:</b> <code>{site_url}</code>\n\n"
         f"👁 <b>Переходов всего:</b> {stats['total_clicks']}\n"
         f"👤 <b>Уникальных пользователей:</b> {stats['unique_clicks']}\n"
         f"🆕 <b>Новых пользователей по ссылке:</b> {stats['attributed_users']}\n\n"

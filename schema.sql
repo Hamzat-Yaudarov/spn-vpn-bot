@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS web_accounts (
     login TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     service_user_id BIGINT UNIQUE,
+    tracking_code TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now(),
@@ -243,6 +244,7 @@ CREATE TABLE IF NOT EXISTS tracking_link_clicks (
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_web_accounts_login ON web_accounts(login);
 CREATE INDEX IF NOT EXISTS idx_web_accounts_service_user ON web_accounts(service_user_id);
+CREATE INDEX IF NOT EXISTS idx_web_accounts_tracking_code ON web_accounts(tracking_code);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -53,6 +54,7 @@ class RegisterBody(BaseModel):
     password: str
     password_confirmation: str
     terms_accepted: bool = False
+    tracking_code: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -69,6 +71,11 @@ class SubscriptionPaymentBody(BaseModel):
 class TrafficPaymentBody(BaseModel):
     package_code: str
     subscription_id: int
+
+
+class TrackVisitBody(BaseModel):
+    code: str
+    client_id: str
 
 
 def _check_auth_rate(request: Request, action: str) -> None:
@@ -93,6 +100,18 @@ def _validate_credentials(login: str, password: str) -> str:
     if len(password) < 8 or len(password) > 128:
         raise HTTPException(status_code=400, detail="Пароль должен содержать от 8 до 128 символов")
     return normalized
+
+
+def _normalize_tracking_code(value: str | None) -> str | None:
+    if not value:
+        return None
+    code = value.strip().lower()
+    return code if re.fullmatch(r"[a-z0-9_-]{3,64}", code) else None
+
+
+def _tracking_client_id(value: str) -> int:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return -7_000_000_000_000_000_000 - (int(digest[:12], 16) % 1_000_000_000_000)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -262,6 +281,16 @@ async def website_catalog():
     return _catalog(await db.get_active_discounts())
 
 
+@router.post("/site/api/track")
+async def website_track_visit(body: TrackVisitBody):
+    code = _normalize_tracking_code(body.code)
+    client_id = body.client_id.strip()
+    if not code or not re.fullmatch(r"[a-zA-Z0-9_-]{12,96}", client_id):
+        raise HTTPException(status_code=400, detail="Некорректная tracking-ссылка")
+    recorded = await db.record_tracking_link_click(code, _tracking_client_id(client_id), is_new_user=False)
+    return {"ok": recorded}
+
+
 @router.post("/site/api/auth/register", status_code=201)
 async def website_register(body: RegisterBody, request: Request, response: Response):
     _check_auth_rate(request, "register")
@@ -270,8 +299,14 @@ async def website_register(body: RegisterBody, request: Request, response: Respo
         raise HTTPException(status_code=400, detail="Пароли не совпадают")
     if not body.terms_accepted:
         raise HTTPException(status_code=400, detail="Необходимо принять пользовательское соглашение")
+    tracking_code = _normalize_tracking_code(body.tracking_code)
+    if tracking_code:
+        link = await db.get_tracking_link(tracking_code)
+        if not link or not link.get("is_active"):
+            tracking_code = None
+
     password_hash = await asyncio.to_thread(hash_password, body.password)
-    account = await db.create_web_account(login, password_hash)
+    account = await db.create_web_account(login, password_hash, tracking_code=tracking_code)
     if not account:
         raise HTTPException(status_code=409, detail="Такой логин уже занят")
     await _new_session(account, response)

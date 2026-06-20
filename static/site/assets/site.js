@@ -13,6 +13,21 @@ const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "
 const rubles = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
 const formatDate = (value, time = false) => value ? new Date(value).toLocaleString("ru-RU", time ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "long" }) : "—";
 const happBridgeLink = (url) => `${window.location.origin}/open-happ?url=${encodeURIComponent(url)}`;
+const TRACKING_STORAGE_KEY = "wayspnTrackingCode";
+const TRACKING_CLIENT_KEY = "wayspnTrackingClientId";
+
+function captureTrackingCode() {
+  const params = new URLSearchParams(location.search);
+  const code = (params.get("t") || params.get("ref") || params.get("utm_campaign") || "").trim().toLowerCase();
+  if (!/^[a-z0-9_-]{3,64}$/.test(code)) return;
+  localStorage.setItem(TRACKING_STORAGE_KEY, code);
+  let clientId = localStorage.getItem(TRACKING_CLIENT_KEY);
+  if (!clientId) {
+    clientId = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(TRACKING_CLIENT_KEY, clientId);
+  }
+  api("/track", { method: "POST", body: JSON.stringify({ code, client_id: clientId }) }).catch(() => {});
+}
 
 async function api(path, options = {}) {
   const response = await fetch(`/site/api${path}`, {
@@ -251,6 +266,10 @@ async function pollPendingPayment() {
 async function submitAuth(form, type) {
   const data = Object.fromEntries(new FormData(form));
   if (type === "register") data.terms_accepted = form.elements.terms_accepted.checked;
+  if (type === "register") {
+    const trackingCode = localStorage.getItem(TRACKING_STORAGE_KEY);
+    if (trackingCode) data.tracking_code = trackingCode;
+  }
   const errorNode = form.querySelector("[data-error]");
   const button = form.querySelector("button[type=submit]");
   const originalButtonText = button.textContent;
@@ -264,6 +283,7 @@ async function submitAuth(form, type) {
   button.textContent = type === "register" ? "Создаём аккаунт…" : "Входим…";
   try {
     await api(`/auth/${type}`, { method: "POST", body: JSON.stringify(data) });
+    if (type === "register") localStorage.removeItem(TRACKING_STORAGE_KEY);
     state.account = await api("/me");
     form.reset();
     await showAccount(type === "register" ? "plans" : "overview", true);
@@ -371,6 +391,7 @@ async function routeFromLocation(push = false) {
 }
 
 async function boot() {
+  captureTrackingCode();
   try {
     const [catalog, config] = await Promise.all([api("/catalog"), api("/config")]);
     state.catalog = catalog;

@@ -355,12 +355,14 @@ async def run_migrations():
                     login TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     service_user_id BIGINT UNIQUE,
+                    tracking_code TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT now(),
                     updated_at TIMESTAMP DEFAULT now(),
                     last_login_at TIMESTAMP
                 )
             """)
+            await conn.execute("ALTER TABLE web_accounts ADD COLUMN IF NOT EXISTS tracking_code TEXT")
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS web_sessions (
                     id BIGSERIAL PRIMARY KEY,
@@ -649,6 +651,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;",
                 "CREATE INDEX IF NOT EXISTS idx_web_accounts_login ON web_accounts(login);",
                 "CREATE INDEX IF NOT EXISTS idx_web_accounts_service_user ON web_accounts(service_user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_web_accounts_tracking_code ON web_accounts(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);",
                 "CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);",
 
@@ -946,7 +949,7 @@ async def db_execute(query, params=(), fetch_one=False, fetch_all=False):
 #                  WEB ACCOUNTS
 # ────────────────────────────────────────────────
 
-async def create_web_account(login: str, password_hash: str):
+async def create_web_account(login: str, password_hash: str, tracking_code: str | None = None):
     """Создать веб-аккаунт и совместимого внутреннего пользователя атомарно."""
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -954,12 +957,13 @@ async def create_web_account(login: str, password_hash: str):
             try:
                 account = await conn.fetchrow(
                     """
-                    INSERT INTO web_accounts (login, password_hash)
-                    VALUES ($1, $2)
+                    INSERT INTO web_accounts (login, password_hash, tracking_code)
+                    VALUES ($1, $2, $3)
                     RETURNING *
                     """,
                     login,
                     password_hash,
+                    tracking_code,
                 )
             except asyncpg.UniqueViolationError:
                 return None
@@ -972,11 +976,12 @@ async def create_web_account(login: str, password_hash: str):
             )
             await conn.execute(
                 """
-                INSERT INTO users (tg_id, username, accepted_terms)
-                VALUES ($1, $2, TRUE)
+                INSERT INTO users (tg_id, username, accepted_terms, tracking_code)
+                VALUES ($1, $2, TRUE, $3)
                 """,
                 service_user_id,
                 f"web:{login}",
+                tracking_code,
             )
             return await conn.fetchrow("SELECT * FROM web_accounts WHERE id = $1", account["id"])
 

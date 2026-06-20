@@ -13,6 +13,7 @@ from config import (
     BYPASS_TRAFFIC_PACKAGES,
     BOT_TOKEN,
     BOT_USERNAME,
+    PUBLIC_SITE_URL,
     TARIFFS,
 )
 from services.remnawave import remnawave_set_subscription_expiry
@@ -188,7 +189,11 @@ async def admin_toggle_promo(code: str, body: ToggleBody, _: int = Depends(requi
 
 @router.get("/admin/api/links")
 async def admin_links(_: int = Depends(require_admin)):
-    return {"items": _plain(await db.list_tracking_links_with_stats()), "bot_username": BOT_USERNAME}
+    items = _plain(await db.list_tracking_links_with_stats())
+    for item in items:
+        item["bot_url"] = f"https://t.me/{BOT_USERNAME}?start={item['code']}"
+        item["site_url"] = f"{PUBLIC_SITE_URL}/?t={item['code']}"
+    return {"items": items, "bot_username": BOT_USERNAME, "site_url": PUBLIC_SITE_URL}
 
 
 @router.post("/admin/api/links")
@@ -198,7 +203,12 @@ async def admin_create_link(body: LinkBody, _: int = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Некорректный или зарезервированный код ссылки")
     await db.create_tracking_link(code, body.title.strip() if body.title else None, ADMIN_ID)
     logger.info("Web admin created tracking link %s", code)
-    return {"ok": True, "url": f"https://t.me/{BOT_USERNAME}?start={code}"}
+    return {
+        "ok": True,
+        "url": f"https://t.me/{BOT_USERNAME}?start={code}",
+        "bot_url": f"https://t.me/{BOT_USERNAME}?start={code}",
+        "site_url": f"{PUBLIC_SITE_URL}/?t={code}",
+    }
 
 
 @router.post("/admin/api/links/{code}/toggle")
