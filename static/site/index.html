@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07111f" />
     <meta name="description" content="SPN — стабильное интернет-соединение. Покупка и управление подпиской без Telegram." />
     <title>SPN — стабильный интернет</title>
-    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-03" />
+    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-05" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -17,20 +17,12 @@
         <div class="auth-shell">
           <aside class="auth-guide">
             <div class="auth-logo"><span class="logo-mark">S</span><b>SPN</b></div>
-            <p id="authStepLabel" class="eyebrow">Первый шаг</p>
             <h1 id="authGuideTitle">Создайте аккаунт</h1>
             <p id="authGuideDescription" class="muted">Придумайте данные для входа. После регистрации сразу откроется выбор подписки.</p>
-            <div id="registerSteps" class="auth-steps">
-              <div><b>1</b><span>Введите логин</span></div>
-              <div><b>2</b><span>Придумайте пароль</span></div>
-              <div><b>3</b><span>Повторите пароль</span></div>
-            </div>
-            <div id="authNext" class="auth-next"><b>Дальше</b><span>Выберете тариф и перейдёте к оплате.</span></div>
           </aside>
 
           <div class="auth-card">
             <div id="loginPanel" class="hidden">
-              <p class="eyebrow centered-text">Вход</p><h2>Войдите в аккаунт</h2>
               <form id="loginForm" class="auth-form">
                 <label>Логин<input name="login" placeholder="Например: ivan123" autocomplete="username" minlength="3" maxlength="32" required /></label>
                 <label>Пароль<div class="password-field"><input name="password" placeholder="Ваш пароль" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
@@ -39,7 +31,6 @@
               <p class="auth-switch">Нет аккаунта? <button id="toRegister">Создать</button></p>
             </div>
             <div id="registerPanel">
-              <p class="eyebrow centered-text">Регистрация</p><h2>Данные для входа</h2>
               <form id="registerForm" class="auth-form">
                 <label>Логин<input name="login" placeholder="Например: ivan123" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]+" required /><small>Латинские буквы и цифры. Он понадобится для входа.</small></label>
                 <label>Пароль<div class="password-field"><input name="password" placeholder="Минимум 8 символов" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
@@ -71,8 +62,7 @@
 
           <section id="account-plans" class="account-section">
             <div id="registrationSuccess" class="registration-success hidden"><b>✓ Аккаунт создан</b><span>Теперь выберите тип и срок подписки.</span></div>
-            <div class="account-heading"><div><p class="eyebrow">Шаг 2</p><h2>Выберите подписку</h2><p class="muted">Нажмите «Купить подписку» и оплатите через ЮKassa.</p></div></div>
-            <div class="purchase-guide"><span><b>1</b> Выберите тип</span><span><b>2</b> Выберите срок</span><span><b>3</b> Оплатите</span><span><b>✓</b> Ключ появится в «Обзоре»</span></div>
+            <div class="account-heading"><div><h2>Купить подписку</h2><p class="muted">Выберите тип и срок подписки.</p></div></div>
             <div class="plan-switch account-switch"><button class="active" data-account-kind="regular">Обычный</button><button data-account-kind="bypass">С антиглушилкой</button></div>
             <div id="accountPlans" class="plans-grid"></div>
           </section>
@@ -109,6 +99,6 @@
       <button id="understoodConnection" class="button primary wide">Понятно</button>
     </dialog>
     <div id="toast" class="toast"></div>
-    <script src="/site/assets/site.js?v=20260620-04"></script>
+    <script src="/site/assets/site.js?v=20260620-05"></script>
   </body>
 </html>

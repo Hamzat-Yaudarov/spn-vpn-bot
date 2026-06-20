@@ -48,9 +48,6 @@ function showAuth(mode = "login", push = true) {
   $("accountView").classList.add("hidden");
   $("loginPanel").classList.toggle("hidden", mode !== "login");
   $("registerPanel").classList.toggle("hidden", mode !== "register");
-  $("registerSteps").classList.toggle("hidden", mode !== "register");
-  $("authNext").classList.toggle("hidden", mode !== "register");
-  $("authStepLabel").textContent = mode === "register" ? "Первый шаг" : "Личный кабинет";
   $("authGuideTitle").textContent = mode === "register" ? "Создайте аккаунт" : "Войдите в аккаунт";
   $("authGuideDescription").textContent = mode === "register"
     ? "Придумайте данные для входа. После регистрации сразу откроется выбор подписки."
