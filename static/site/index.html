@@ -6,102 +6,49 @@
     <meta name="theme-color" content="#07111f" />
     <meta name="description" content="SPN — стабильное интернет-соединение. Покупка и управление подпиской без Telegram." />
     <title>SPN — стабильный интернет</title>
-    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-01" />
+    <link rel="stylesheet" href="/site/assets/site.css?v=20260620-03" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
 
-    <header class="site-header">
-      <a class="logo" href="/" data-route="home"><span class="logo-mark">S</span><span>SPN</span></a>
-      <nav id="publicNav" class="header-nav">
-        <a href="#advantages">Возможности</a>
-        <a href="#pricing">Тарифы</a>
-        <a href="#how">Как подключиться</a>
-      </nav>
-      <div class="header-actions">
-        <button id="loginButton" class="button ghost">Войти</button>
-        <button id="registerButton" class="button primary">Создать аккаунт</button>
-        <button id="accountButton" class="button primary hidden">Личный кабинет</button>
-      </div>
-    </header>
-
     <main>
-      <div id="landingView">
-        <section class="hero shell">
-          <div class="hero-copy">
-            <div class="eyebrow"><span></span> Работает без Telegram</div>
-            <h1>Свободный интернет.<br /><em>Простое подключение.</em></h1>
-            <p>Создайте аккаунт, выберите подписку и получите персональный ключ сразу после оплаты.</p>
-            <div class="hero-actions">
-              <button class="button primary large" data-register>Начать пользоваться</button>
-              <a class="button glass large" href="#pricing">Посмотреть тарифы</a>
+      <section id="authView" class="auth-view">
+        <div class="auth-shell">
+          <aside class="auth-guide">
+            <div class="auth-logo"><span class="logo-mark">S</span><b>SPN</b></div>
+            <p id="authStepLabel" class="eyebrow">Первый шаг</p>
+            <h1 id="authGuideTitle">Создайте аккаунт</h1>
+            <p id="authGuideDescription" class="muted">Придумайте данные для входа. После регистрации сразу откроется выбор подписки.</p>
+            <div id="registerSteps" class="auth-steps">
+              <div><b>1</b><span>Введите логин</span></div>
+              <div><b>2</b><span>Придумайте пароль</span></div>
+              <div><b>3</b><span>Повторите пароль</span></div>
             </div>
-            <div class="trust-row"><span>✓ Оплата через ЮKassa</span><span>✓ До 5 устройств</span><span>✓ Поддержка 24/7</span></div>
-          </div>
-          <div class="hero-visual" aria-hidden="true">
-            <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-            <div class="connection-card">
-              <div class="connection-head"><span class="status-dot"></span><span>SPN подключён</span><b>ON</b></div>
-              <div class="speed"><strong>84</strong><span>Мбит/с</span></div>
-              <div class="speed-line"><i></i></div>
-              <div class="connection-meta"><span><small>Сервер</small>Автовыбор</span><span><small>Задержка</small>42 мс</span></div>
+            <div id="authNext" class="auth-next"><b>Дальше</b><span>Выберете тариф и перейдёте к оплате.</span></div>
+          </aside>
+
+          <div class="auth-card">
+            <div id="loginPanel" class="hidden">
+              <p class="eyebrow centered-text">Вход</p><h2>Войдите в аккаунт</h2>
+              <form id="loginForm" class="auth-form">
+                <label>Логин<input name="login" placeholder="Например: ivan123" autocomplete="username" minlength="3" maxlength="32" required /></label>
+                <label>Пароль<div class="password-field"><input name="password" placeholder="Ваш пароль" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
+                <p class="form-error" data-error></p><button class="button primary wide" type="submit">Войти</button>
+              </form>
+              <p class="auth-switch">Нет аккаунта? <button id="toRegister">Создать</button></p>
             </div>
-            <div class="floating-chip chip-one">5 устройств</div>
-            <div class="floating-chip chip-two">Защищено</div>
-          </div>
-        </section>
-
-        <section id="advantages" class="advantages shell section-space">
-          <div class="section-title"><div class="eyebrow"><span></span> Всё необходимое</div><h2>Понятно с первого экрана</h2></div>
-          <div class="feature-grid">
-            <article><div class="feature-icon">↯</div><h3>Быстрое подключение</h3><p>Персональный ключ появляется в кабинете сразу после оплаты.</p></article>
-            <article><div class="feature-icon">◇</div><h3>Все устройства</h3><p>Android, iOS, Windows, macOS и Linux — до пяти устройств.</p></article>
-            <article><div class="feature-icon">∞</div><h3>Удобное продление</h3><p>Срок, ключи, трафик и покупки всегда сохраняются в аккаунте.</p></article>
-          </div>
-        </section>
-
-        <section id="pricing" class="pricing shell section-space">
-          <div class="section-title centered"><div class="eyebrow"><span></span> Тарифы</div><h2>Выберите подходящий режим</h2><p>Обычная подписка для повседневных задач или вариант с антиглушилкой.</p></div>
-          <div class="plan-switch"><button class="active" data-public-kind="regular">Обычный</button><button data-public-kind="bypass">С антиглушилкой</button></div>
-          <div id="publicPlans" class="plans-grid skeleton-grid"></div>
-        </section>
-
-        <section id="how" class="how shell section-space">
-          <div class="section-title centered"><div class="eyebrow"><span></span> Три шага</div><h2>От регистрации до подключения</h2></div>
-          <div class="steps">
-            <article><b>01</b><h3>Создайте аккаунт</h3><p>Придумайте логин и надёжный пароль.</p></article>
-            <article><b>02</b><h3>Оплатите подписку</h3><p>Выберите тариф и оплатите через ЮKassa.</p></article>
-            <article><b>03</b><h3>Скопируйте ключ</h3><p>Ключ появится в личном кабинете автоматически.</p></article>
-          </div>
-        </section>
-
-        <section class="cta shell"><div><div class="eyebrow"><span></span> Готовы начать?</div><h2>Ваш интернет — ваши правила</h2><p>Регистрация займёт меньше минуты.</p></div><button class="button primary large" data-register>Создать аккаунт</button></section>
-      </div>
-
-      <section id="authView" class="auth-view hidden">
-        <div class="auth-card">
-          <button id="authBack" class="back-button">← На главную</button>
-          <div class="auth-brand"><span class="logo-mark">S</span></div>
-          <div id="loginPanel">
-            <p class="eyebrow centered-text">Личный кабинет</p><h1>С возвращением</h1><p class="muted">Введите логин и пароль от аккаунта.</p>
-            <form id="loginForm" class="auth-form">
-              <label>Логин<input name="login" autocomplete="username" minlength="3" maxlength="32" required /></label>
-              <label>Пароль<div class="password-field"><input name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
-              <p class="form-error" data-error></p><button class="button primary wide" type="submit">Войти</button>
-            </form>
-            <p class="auth-switch">Нет аккаунта? <button id="toRegister">Создать</button></p>
-          </div>
-          <div id="registerPanel" class="hidden">
-            <p class="eyebrow centered-text">Новый аккаунт</p><h1>Начнём</h1><p class="muted">Все подписки и покупки будут храниться здесь.</p>
-            <form id="registerForm" class="auth-form">
-              <label>Логин<input name="login" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]+" required /><small>Латинские буквы, цифры, точка, дефис или _</small></label>
-              <label>Пароль<div class="password-field"><input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
-              <label>Повторите пароль<input name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
-              <label class="check-label"><input name="terms_accepted" type="checkbox" required /><span>Я принимаю <a id="agreementLink" href="#" target="_blank">пользовательское соглашение</a></span></label>
-              <p class="form-error" data-error></p><button class="button primary wide" type="submit">Создать аккаунт</button>
-            </form>
-            <p class="auth-switch">Уже есть аккаунт? <button id="toLogin">Войти</button></p>
+            <div id="registerPanel">
+              <p class="eyebrow centered-text">Регистрация</p><h2>Данные для входа</h2>
+              <form id="registerForm" class="auth-form">
+                <label>Логин<input name="login" placeholder="Например: ivan123" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]+" required /><small>Латинские буквы и цифры. Он понадобится для входа.</small></label>
+                <label>Пароль<div class="password-field"><input name="password" placeholder="Минимум 8 символов" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /><button type="button" data-password-toggle>Показать</button></div></label>
+                <label>Повторите пароль<input name="password_confirmation" placeholder="Введите тот же пароль ещё раз" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+                <label class="check-label"><input name="terms_accepted" type="checkbox" required /><span>Я принимаю <a id="agreementLink" href="#" target="_blank">пользовательское соглашение</a></span></label>
+                <p class="form-error" data-error></p><button class="button primary wide" type="submit">Создать аккаунт</button>
+              </form>
+              <p class="auth-switch">Уже есть аккаунт? <button id="toLogin">Войти</button></p>
+            </div>
           </div>
         </div>
       </section>
@@ -123,7 +70,9 @@
           </section>
 
           <section id="account-plans" class="account-section">
-            <div class="account-heading"><div><p class="eyebrow">Новая подписка</p><h2>Выберите тариф</h2><p class="muted">После оплаты ключ появится в разделе «Обзор».</p></div></div>
+            <div id="registrationSuccess" class="registration-success hidden"><b>✓ Аккаунт создан</b><span>Теперь выберите тип и срок подписки.</span></div>
+            <div class="account-heading"><div><p class="eyebrow">Шаг 2</p><h2>Выберите подписку</h2><p class="muted">Нажмите «Купить подписку» и оплатите через ЮKassa.</p></div></div>
+            <div class="purchase-guide"><span><b>1</b> Выберите тип</span><span><b>2</b> Выберите срок</span><span><b>3</b> Оплатите</span><span><b>✓</b> Ключ появится в «Обзоре»</span></div>
             <div class="plan-switch account-switch"><button class="active" data-account-kind="regular">Обычный</button><button data-account-kind="bypass">С антиглушилкой</button></div>
             <div id="accountPlans" class="plans-grid"></div>
           </section>
@@ -142,14 +91,24 @@
       </section>
     </main>
 
-    <footer id="siteFooter"><div class="shell"><div class="logo"><span class="logo-mark">S</span><span>SPN</span></div><p>Стабильное интернет-соединение на ваших устройствах.</p><span>© 2026 SPN</span></div></footer>
-
     <dialog id="checkoutDialog" class="checkout-dialog">
       <button id="closeCheckout" class="dialog-close">×</button>
       <p class="eyebrow">Оплата</p><h2 id="checkoutTitle">Подтвердите покупку</h2><div id="checkoutDetails"></div>
       <button id="confirmCheckout" class="button primary wide">Перейти к оплате</button><p class="secure-note">🔒 Безопасная оплата через ЮKassa</p>
     </dialog>
+    <dialog id="connectionDialog" class="checkout-dialog connection-dialog">
+      <button id="closeConnection" class="dialog-close">×</button>
+      <p class="eyebrow">Подключение</p><h2>Как включить SPN</h2>
+      <div class="connection-steps">
+        <div><b>1</b><span>Установите приложение <strong>Happ Plus</strong>.</span></div>
+        <div><b>2</b><span>В кабинете нажмите <strong>«Подключить»</strong>.</span></div>
+        <div><b>3</b><span>Подтвердите добавление ключа в Happ.</span></div>
+        <div><b>4</b><span>Включите подключение в приложении.</span></div>
+      </div>
+      <p class="connection-fallback">Если Happ не открылся: нажмите «Копировать», откройте Happ вручную, нажмите «+» и вставьте ключ.</p>
+      <button id="understoodConnection" class="button primary wide">Понятно</button>
+    </dialog>
     <div id="toast" class="toast"></div>
-    <script src="/site/assets/site.js?v=20260620-01"></script>
+    <script src="/site/assets/site.js?v=20260620-04"></script>
   </body>
 </html>

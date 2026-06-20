@@ -2996,7 +2996,7 @@ async def admin_dashboard_stats():
 
 async def admin_list_users(search: str = "", limit: int = 50, offset: int = 0):
     pattern = f"%{search.strip()}%"
-    where = "WHERE CAST(u.tg_id AS TEXT) ILIKE $1 OR COALESCE(u.username, '') ILIKE $1" if search.strip() else ""
+    where = "WHERE CAST(u.tg_id AS TEXT) ILIKE $1 OR COALESCE(u.username, '') ILIKE $1 OR COALESCE(wa.login, '') ILIKE $1" if search.strip() else ""
     params = (pattern, limit, offset) if search.strip() else (limit, offset)
     limit_param = "$2" if search.strip() else "$1"
     offset_param = "$3" if search.strip() else "$2"
@@ -3006,6 +3006,8 @@ async def admin_list_users(search: str = "", limit: int = 50, offset: int = 0):
         SELECT
             u.tg_id,
             u.username,
+            wa.login AS web_login,
+            CASE WHEN wa.id IS NULL THEN 'telegram' ELSE 'web' END AS account_type,
             u.created_at,
             u.tracking_code,
             u.first_payment,
@@ -3014,6 +3016,7 @@ async def admin_list_users(search: str = "", limit: int = 50, offset: int = 0):
             (SELECT MAX(s.subscription_until) FROM subscriptions s WHERE s.tg_id = u.tg_id AND s.is_visible = TRUE) AS latest_expiry,
             (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.tg_id = u.tg_id AND p.status = 'paid') AS revenue
         FROM users u
+        LEFT JOIN web_accounts wa ON wa.service_user_id = u.tg_id
         {where}
         ORDER BY u.created_at DESC, u.tg_id DESC
         LIMIT {limit_param} OFFSET {offset_param}
@@ -3024,7 +3027,7 @@ async def admin_list_users(search: str = "", limit: int = 50, offset: int = 0):
 
     count_params = (pattern,) if search.strip() else ()
     total = await db_execute(
-        f"SELECT COUNT(*) AS count FROM users u {where}",
+        f"SELECT COUNT(*) AS count FROM users u LEFT JOIN web_accounts wa ON wa.service_user_id = u.tg_id {where}",
         count_params,
         fetch_one=True,
     )
@@ -3047,7 +3050,12 @@ async def admin_get_user_bundle(tg_id: int):
         (tg_id,),
         fetch_all=True,
     )
-    return {"user": user, "subscriptions": subscriptions or [], "payments": payments or []}
+    web_account = await db_execute(
+        "SELECT id, login, is_active, created_at, last_login_at FROM web_accounts WHERE service_user_id = $1 LIMIT 1",
+        (tg_id,),
+        fetch_one=True,
+    )
+    return {"user": user, "web_account": web_account, "subscriptions": subscriptions or [], "payments": payments or []}
 
 
 async def list_promo_codes():

@@ -2,11 +2,11 @@ const state = {
   catalog: { regular: [], bypass: [], traffic_packages: [] },
   account: null,
   subscriptions: [],
-  publicKind: "regular",
   accountKind: "regular",
   accountSection: "overview",
   renewSubscription: null,
   checkout: null,
+  justRegistered: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -43,35 +43,23 @@ function setRoute(path, replace = false) {
   if (location.pathname !== path) history[replace ? "replaceState" : "pushState"]({}, "", path);
 }
 
-function setChrome(accountMode) {
-  document.querySelector(".site-header").classList.toggle("hidden", accountMode);
-  $("siteFooter").classList.toggle("hidden", accountMode);
-}
-
-function showLanding(push = true) {
-  setChrome(false);
-  $("landingView").classList.remove("hidden");
-  $("authView").classList.add("hidden");
-  $("accountView").classList.add("hidden");
-  if (push) setRoute("/");
-  updateHeader();
-}
-
 function showAuth(mode = "login", push = true) {
-  setChrome(false);
-  $("landingView").classList.add("hidden");
   $("authView").classList.remove("hidden");
   $("accountView").classList.add("hidden");
   $("loginPanel").classList.toggle("hidden", mode !== "login");
   $("registerPanel").classList.toggle("hidden", mode !== "register");
-  if (push) setRoute(mode === "register" ? "/register" : "/login");
-  updateHeader();
+  $("registerSteps").classList.toggle("hidden", mode !== "register");
+  $("authNext").classList.toggle("hidden", mode !== "register");
+  $("authStepLabel").textContent = mode === "register" ? "Первый шаг" : "Личный кабинет";
+  $("authGuideTitle").textContent = mode === "register" ? "Создайте аккаунт" : "Войдите в аккаунт";
+  $("authGuideDescription").textContent = mode === "register"
+    ? "Придумайте данные для входа. После регистрации сразу откроется выбор подписки."
+    : "Введите логин и пароль. Все ваши подписки и покупки уже сохранены в кабинете.";
+  if (push) setRoute(mode === "register" ? "/" : "/login");
 }
 
 async function showAccount(section = "overview", push = true) {
   if (!state.account) { showAuth("login", true); return; }
-  setChrome(true);
-  $("landingView").classList.add("hidden");
   $("authView").classList.add("hidden");
   $("accountView").classList.remove("hidden");
   if (push) setRoute("/account");
@@ -79,14 +67,9 @@ async function showAccount(section = "overview", push = true) {
   $("profileLogin").textContent = state.account.login;
   $("profileLetter").textContent = state.account.login.slice(0, 1).toUpperCase();
   $("accountGreeting").textContent = `Здравствуйте, ${state.account.login}`;
+  $("registrationSuccess").classList.toggle("hidden", !state.justRegistered || section !== "plans");
+  window.scrollTo(0, 0);
   await loadAccountData();
-}
-
-function updateHeader() {
-  const loggedIn = Boolean(state.account);
-  $("loginButton").classList.toggle("hidden", loggedIn);
-  $("registerButton").classList.toggle("hidden", loggedIn);
-  $("accountButton").classList.toggle("hidden", !loggedIn);
 }
 
 function priceMarkup(item) {
@@ -94,26 +77,21 @@ function priceMarkup(item) {
   return `<div class="plan-price"><strong>${rubles(item.price)}</strong>${discounted ? `<span class="old-price">${rubles(item.original_price)}</span>` : ""}</div>${discounted ? `<div class="discount-label">Экономия ${rubles(Number(item.original_price) - Number(item.price))}</div>` : ""}`;
 }
 
-function planCard(item, context = "public") {
+function planCard(item) {
   const bypass = item.kind === "bypass";
-  const action = context === "account" ? (state.renewSubscription ? "Продлить подписку" : "Купить подписку") : "Выбрать тариф";
+  const action = state.renewSubscription ? "Продлить подписку" : "Купить подписку";
   return `<article class="plan-card ${item.days >= 90 ? "featured" : ""}">
     ${item.days >= 90 ? `<span class="tag">Выгоднее</span>` : ""}
     <h3>${item.days} дней</h3><p class="plan-subtitle">${bypass ? "С антиглушилкой" : "Обычная подписка"}</p>
     ${priceMarkup(item)}
-    <ul class="plan-features"><li>${bypass ? "150 ГБ включено" : "Без лимита трафика"}</li><li>${bypass ? "До 3 устройств" : "До 5 устройств"}</li><li>Все основные платформы</li><li>Поддержка в чате</li></ul>
-    <button class="button ${item.days >= 90 ? "primary" : "glass"}" data-plan="${esc(item.code)}" data-context="${context}">${action}</button>
+    <ul class="plan-features"><li>${bypass ? "150 ГБ включено" : "Без лимита трафика"}</li><li>${bypass ? "До 3 устройств" : "До 5 устройств"}</li></ul>
+    <button class="button ${item.days >= 90 ? "primary" : "glass"}" data-plan="${esc(item.code)}">${action}</button>
   </article>`;
-}
-
-function renderPublicPlans() {
-  $("publicPlans").classList.remove("skeleton-grid");
-  $("publicPlans").innerHTML = state.catalog[state.publicKind].map((item) => planCard(item, "public")).join("");
 }
 
 function renderAccountPlans() {
   const plans = state.catalog[state.accountKind] || [];
-  $("accountPlans").innerHTML = plans.map((item) => planCard(item, "account")).join("");
+  $("accountPlans").innerHTML = plans.map((item) => planCard(item)).join("");
 }
 
 function subscriptionName(subscription) {
@@ -136,7 +114,8 @@ function renderSubscriptions() {
       <div class="sub-date"><small>Действует до</small><strong>${formatDate(sub.subscription_until)}</strong></div>
       ${sub.traffic?.enabled ? `<div class="traffic-bar"><div class="traffic-meta"><span>Трафик</span><span>${used} из ${limit} ГБ</span></div><div class="bar"><i style="width:${percent}%"></i></div></div>` : ""}
       ${sub.subscription_url ? `<div class="key-box"><input readonly value="${esc(sub.subscription_url)}" /><button data-copy-key="${esc(sub.subscription_url)}">Копировать</button></div>` : `<p class="muted">Ключ появится после активации платежа.</p>`}
-      <div class="sub-actions"><button class="button primary" data-renew="${sub.id}">Продлить</button>${sub.subscription_url ? `<a class="button glass" href="${esc(sub.subscription_url)}" target="_blank" rel="noopener">Открыть ключ</a>` : ""}${sub.traffic?.enabled && active ? `<button class="button glass" data-buy-traffic="${sub.id}">Купить ГБ</button>` : ""}</div>
+      <div class="sub-actions">${sub.subscription_url ? `<button class="button primary" data-connect="${esc(sub.subscription_url)}">Подключить</button>` : ""}<button class="button glass" data-renew="${sub.id}">Продлить</button>${sub.traffic?.enabled && active ? `<button class="button glass" data-buy-traffic="${sub.id}">Купить ГБ</button>` : ""}</div>
+      ${sub.subscription_url ? `<button class="instruction-link" data-connection-help>Как подключить на телефон или компьютер?</button>` : ""}
     </article>`;
   }).join("");
 }
@@ -170,6 +149,10 @@ async function loadAccountData() {
     renderSubscriptions();
     renderTraffic();
     renderAccountPlans();
+    if (!state.subscriptions.length && state.accountSection === "overview") {
+      state.renewSubscription = null;
+      switchAccountSection("plans");
+    }
     if (state.accountSection === "history") loadPayments();
   } catch (error) { toast(error.message, true); }
 }
@@ -234,6 +217,7 @@ async function pollPendingPayment() {
         localStorage.removeItem("spnPendingPayment");
         banner.className = "payment-banner success";
         banner.innerHTML = `<div><b>✓ Оплата прошла</b><p>Подписка или пакет уже активированы.</p></div>`;
+        switchAccountSection("overview");
         await loadAccountData();
         setTimeout(() => banner.classList.add("hidden"), 7000);
         return;
@@ -257,16 +241,28 @@ async function submitAuth(form, type) {
   if (type === "register") data.terms_accepted = form.elements.terms_accepted.checked;
   const errorNode = form.querySelector("[data-error]");
   const button = form.querySelector("button[type=submit]");
+  const originalButtonText = button.textContent;
   errorNode.textContent = "";
+  if (type === "register" && data.password !== data.password_confirmation) {
+    errorNode.textContent = "Пароли не совпадают";
+    form.elements.password_confirmation.focus();
+    return;
+  }
   button.disabled = true;
+  button.textContent = type === "register" ? "Создаём аккаунт…" : "Входим…";
   try {
     await api(`/auth/${type}`, { method: "POST", body: JSON.stringify(data) });
     state.account = await api("/me");
+    state.justRegistered = type === "register";
     form.reset();
-    await showAccount("overview", true);
+    await showAccount(type === "register" ? "plans" : "overview", true);
+    if (type === "register") toast("Аккаунт создан — выберите подписку");
   } catch (error) {
     errorNode.textContent = error.message;
-  } finally { button.disabled = false; }
+  } finally {
+    button.disabled = false;
+    button.textContent = originalButtonText;
+  }
 }
 
 document.querySelectorAll("[data-password-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -274,22 +270,28 @@ document.querySelectorAll("[data-password-toggle]").forEach((button) => button.a
   input.type = input.type === "password" ? "text" : "password";
   button.textContent = input.type === "password" ? "Показать" : "Скрыть";
 }));
-document.querySelectorAll("[data-register]").forEach((button) => button.addEventListener("click", () => showAuth("register")));
-$("loginButton").addEventListener("click", () => showAuth("login"));
-$("registerButton").addEventListener("click", () => showAuth("register"));
-$("accountButton").addEventListener("click", () => showAccount());
-$("authBack").addEventListener("click", () => showLanding());
 $("toRegister").addEventListener("click", () => showAuth("register"));
 $("toLogin").addEventListener("click", () => showAuth("login"));
 $("loginForm").addEventListener("submit", (event) => { event.preventDefault(); submitAuth(event.currentTarget, "login"); });
 $("registerForm").addEventListener("submit", (event) => { event.preventDefault(); submitAuth(event.currentTarget, "register"); });
-$("logoutButton").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); localStorage.removeItem("spnPendingPayment"); state.account = null; state.subscriptions = []; showLanding(); });
+$("logoutButton").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); localStorage.removeItem("spnPendingPayment"); state.account = null; state.subscriptions = []; showAuth("login"); });
 $("mobileMenu").addEventListener("click", () => $("accountView").querySelector(".account-sidebar").classList.toggle("open"));
-document.querySelectorAll("[data-public-kind]").forEach((button) => button.addEventListener("click", () => { state.publicKind = button.dataset.publicKind; document.querySelectorAll("[data-public-kind]").forEach((node) => node.classList.toggle("active", node === button)); renderPublicPlans(); }));
 document.querySelectorAll("[data-account-kind]").forEach((button) => button.addEventListener("click", () => { state.accountKind = button.dataset.accountKind; document.querySelectorAll("[data-account-kind]").forEach((node) => node.classList.toggle("active", node === button)); renderAccountPlans(); }));
 document.querySelectorAll("[data-account-section]").forEach((button) => button.addEventListener("click", () => { state.renewSubscription = null; switchAccountSection(button.dataset.accountSection); }));
 $("closeCheckout").addEventListener("click", () => $("checkoutDialog").close());
 $("confirmCheckout").addEventListener("click", confirmCheckout);
+$("closeConnection").addEventListener("click", () => $("connectionDialog").close());
+$("understoodConnection").addEventListener("click", () => $("connectionDialog").close());
+
+const registerPassword = $("registerForm").elements.password;
+const registerConfirmation = $("registerForm").elements.password_confirmation;
+function validatePasswordConfirmation() {
+  registerConfirmation.setCustomValidity(
+    registerConfirmation.value && registerConfirmation.value !== registerPassword.value ? "Пароли не совпадают" : ""
+  );
+}
+registerPassword.addEventListener("input", validatePasswordConfirmation);
+registerConfirmation.addEventListener("input", validatePasswordConfirmation);
 
 document.addEventListener("click", async (event) => {
   const planButton = event.target.closest("[data-plan]");
@@ -298,9 +300,13 @@ document.addEventListener("click", async (event) => {
   const buyTraffic = event.target.closest("[data-buy-traffic]");
   const trafficPlan = event.target.closest("[data-traffic-plan]");
   const copy = event.target.closest("[data-copy-key]");
+  const connect = event.target.closest("[data-connect]");
+  const connectionHelp = event.target.closest("[data-connection-help]");
   if (openPlans) { state.renewSubscription = null; switchAccountSection("plans"); }
   if (planButton) {
     if (!state.account) { showAuth("register"); return; }
+    state.justRegistered = false;
+    $("registrationSuccess").classList.add("hidden");
     const plan = findPlan(planButton.dataset.plan);
     const renewal = state.renewSubscription;
     openCheckout({ type: "subscription", code: plan.code, target: renewal ? "renew" : "new", subscriptionId: renewal?.id || null });
@@ -324,6 +330,13 @@ document.addEventListener("click", async (event) => {
     await navigator.clipboard.writeText(copy.dataset.copyKey).catch(() => {});
     toast("Ключ скопирован");
   }
+  if (connect) {
+    const key = connect.dataset.connect;
+    await navigator.clipboard.writeText(key).catch(() => {});
+    toast("Ключ скопирован — открываем Happ");
+    window.location.href = `happ://add/${encodeURIComponent(key)}`;
+  }
+  if (connectionHelp) $("connectionDialog").showModal();
 });
 
 window.addEventListener("popstate", () => routeFromLocation(false));
@@ -331,9 +344,12 @@ window.addEventListener("popstate", () => routeFromLocation(false));
 async function routeFromLocation(push = false) {
   if (location.pathname === "/account") {
     if (state.account) await showAccount("overview", push); else showAuth("login", push);
-  } else if (location.pathname === "/register") showAuth("register", push);
+  } else if (location.pathname === "/register") {
+    if (state.account) await showAccount("overview", push); else showAuth("register", push);
+  }
   else if (location.pathname === "/login") showAuth("login", push);
-  else showLanding(push);
+  else if (state.account) await showAccount("overview", push);
+  else showAuth("register", push);
 }
 
 async function boot() {
@@ -341,10 +357,9 @@ async function boot() {
     const [catalog, config] = await Promise.all([api("/catalog"), api("/config")]);
     state.catalog = catalog;
     if (config.agreement_url) $("agreementLink").href = config.agreement_url;
-    renderPublicPlans(); renderAccountPlans(); renderTraffic();
+    renderAccountPlans(); renderTraffic();
   } catch (error) { toast("Не удалось загрузить тарифы", true); }
   try { state.account = await api("/me"); } catch { state.account = null; }
-  updateHeader();
   await routeFromLocation(false);
   if (state.account) pollPendingPayment();
 }
