@@ -142,37 +142,7 @@ document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
 
-el("topMenuButton").addEventListener("click", () => {
-  const menu = el("topMenu");
-  const opening = menu.classList.contains("hidden");
-  menu.classList.toggle("hidden", !opening);
-  el("topMenuButton").setAttribute("aria-expanded", String(opening));
-});
-
-el("topBuyButton").addEventListener("click", () => {
-  el("topMenu").classList.add("hidden");
-  el("topMenuButton").setAttribute("aria-expanded", "false");
-  openNewPurchase();
-});
-
-el("topHomeButton").addEventListener("click", () => {
-  if (tg?.close) tg.close();
-  else switchView("home", { reset: true });
-});
-
-document.querySelectorAll("[data-top-view]").forEach((button) => {
-  button.addEventListener("click", () => {
-    el("topMenu").classList.add("hidden");
-    el("topMenuButton").setAttribute("aria-expanded", "false");
-    switchView(button.dataset.topView, { reset: true });
-  });
-});
-
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".top-actions") && !event.target.closest("#topMenu")) {
-    el("topMenu").classList.add("hidden");
-    el("topMenuButton").setAttribute("aria-expanded", "false");
-  }
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const subId = Number(target.dataset.subId);
@@ -306,7 +276,7 @@ function renderHome() {
   const nearest = nearestActiveSub();
   const hasBypass = active.some((s) => s.plan_kind === "bypass");
   const nearestTone = statusTone(nearest);
-  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Управление" } : { text: "Купить подписку", action: "openNewPurchase", hint: "Выбрать тариф" };
+  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Управление" } : { text: "Выбрать тариф", action: "openNewPurchase", hint: "Оформить доступ" };
   const secondary = active.length ? { text: "Продлить", action: "openRenewList", hint: "Выбрать ключ" } : { text: "Помощь", action: "switchView('help', { preserve: true })", hint: "Инструкции" };
   const primaryAction = primary.action.includes("(") ? primary.action : `${primary.action}()`;
   const secondaryAction = secondary.action.includes("(") ? secondary.action : `${secondary.action}()`;
@@ -337,7 +307,7 @@ function renderHome() {
 function renderKeys() {
   const container = el("view-subs");
   if (!state.subs.length) {
-    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Купите первую подписку, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Купить подписку</button></div>`;
+    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
     return;
   }
 
