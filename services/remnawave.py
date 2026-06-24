@@ -29,6 +29,26 @@ def normalize_subscription_url(sub_url: str | None) -> str | None:
         return sub_url
 
 
+def _build_subscription_url_from_short_uuid(short_uuid: str | None) -> str | None:
+    if not short_uuid or not SUBSCRIPTION_PUBLIC_BASE_URL:
+        return None
+    return f"{SUBSCRIPTION_PUBLIC_BASE_URL}/sub/{short_uuid}"
+
+
+def _extract_subscription_url(user_data: dict) -> str | None:
+    sub_url = user_data.get("subscriptionUrl") or user_data.get("subscription_url")
+    if sub_url:
+        return normalize_subscription_url(sub_url)
+
+    short_uuid = (
+        user_data.get("shortUuid")
+        or user_data.get("short_uuid")
+        or user_data.get("subscriptionShortUuid")
+        or user_data.get("subscription_short_uuid")
+    )
+    return _build_subscription_url_from_short_uuid(short_uuid)
+
+
 async def remnawave_get_or_create_user(
     session: aiohttp.ClientSession,
     tg_id: int,
@@ -545,11 +565,13 @@ async def remnawave_get_subscription_url(
             async with temp_session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    sub_url = data.get("response", {}).get("subscriptionUrl")
+                    user_data = data.get("response", {})
+                    sub_url = _extract_subscription_url(user_data)
                     if sub_url:
-                        return normalize_subscription_url(sub_url)
+                        return sub_url
                     else:
-                        raise RuntimeError("subscriptionUrl not found in response")
+                        available_keys = ", ".join(sorted(user_data.keys()))
+                        raise RuntimeError(f"subscriptionUrl not found in response. Keys: {available_keys}")
                 else:
                     error_text = await resp.text()
                     raise RuntimeError(f"Get subscription URL failed ({resp.status}): {error_text}")
