@@ -1205,6 +1205,21 @@ async def get_user_subscriptions(tg_id: int):
     )
 
 
+async def get_subscriptions_with_remnawave_uuid(active_only: bool = False):
+    """Получить подписки, для которых можно перевыпустить ссылку в Remnawave."""
+    where_active = "AND subscription_until IS NOT NULL AND subscription_until > now() AT TIME ZONE 'UTC'" if active_only else ""
+    return await db_execute(
+        f"""
+        SELECT id, tg_id, slot_number, type_index, plan_kind, remnawave_uuid, remnawave_username, subscription_until
+        FROM subscriptions
+        WHERE remnawave_uuid IS NOT NULL
+          {where_active}
+        ORDER BY tg_id ASC, id ASC
+        """,
+        fetch_all=True,
+    )
+
+
 async def get_visible_subscriptions(tg_id: int):
     """Получить видимые пользователю подписки новой модели."""
     return await db_execute(

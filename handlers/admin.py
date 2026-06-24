@@ -23,6 +23,7 @@ from config import (
     PUBLIC_SITE_URL,
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
+    SUBSCRIPTION_PUBLIC_BASE_URL,
     SUPPORT_URL,
 )
 import database as db
@@ -32,6 +33,7 @@ from services.remnawave import (
     remnawave_set_subscription_expiry,
     remnawave_get_user_info,
     remnawave_get_subscription_url,
+    remnawave_revoke_subscription,
 )
 
 logger = logging.getLogger(__name__)
@@ -523,6 +525,87 @@ async def admin_enable_tracking_link(message: Message):
         await message.answer(f"✅ Ссылка <code>{code}</code> включена")
     else:
         await message.answer("❌ Tracking-ссылка не найдена")
+
+
+@router.message(Command("reissue_sub_links"))
+async def admin_reissue_subscription_links(message: Message):
+    """Массово перевыпустить подписочные ссылки Remnawave."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    mode = parts[1].strip().lower() if len(parts) > 1 else "all"
+    if mode not in {"all", "active"}:
+        await message.answer(
+            "❌ <b>Неверный формат</b>\n\n"
+            "Использование:\n"
+            "<code>/reissue_sub_links</code> — все подписки с Remnawave UUID\n"
+            "<code>/reissue_sub_links active</code> — только активные подписки"
+        )
+        return
+
+    active_only = mode == "active"
+    subscriptions = await db.get_subscriptions_with_remnawave_uuid(active_only=active_only)
+    if not subscriptions:
+        await message.answer("Подписок для перевыпуска не найдено")
+        return
+
+    total = len(subscriptions)
+    status_message = await message.answer(
+        f"🔁 <b>Перевыпуск подписочных ссылок запущен</b>\n\n"
+        f"Режим: <b>{'только активные' if active_only else 'все'}</b>\n"
+        f"Найдено: <b>{total}</b>\n"
+        "Готово: <b>0</b>"
+    )
+
+    success_count = 0
+    error_count = 0
+    failed_ids = []
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        for index, subscription in enumerate(subscriptions, start=1):
+            try:
+                ok = await remnawave_revoke_subscription(session, subscription["remnawave_uuid"])
+                if ok:
+                    success_count += 1
+                else:
+                    error_count += 1
+                    failed_ids.append(subscription["id"])
+            except Exception as e:
+                error_count += 1
+                failed_ids.append(subscription["id"])
+                logger.warning("Failed to reissue subscription link for subscription %s: %s", subscription["id"], e)
+
+            if index == total or index % 10 == 0:
+                try:
+                    await status_message.edit_text(
+                        f"🔁 <b>Перевыпуск подписочных ссылок идёт</b>\n\n"
+                        f"Прогресс: <b>{index}/{total}</b>\n"
+                        f"Успешно: <b>{success_count}</b>\n"
+                        f"Ошибок: <b>{error_count}</b>"
+                    )
+                except Exception:
+                    pass
+            await asyncio.sleep(0.2)
+
+    failed_text = ""
+    if failed_ids:
+        failed_preview = ", ".join(str(item) for item in failed_ids[:20])
+        suffix = "..." if len(failed_ids) > 20 else ""
+        failed_text = f"\n\nНе удалось для subscription id: <code>{failed_preview}{suffix}</code>"
+
+    await status_message.edit_text(
+        "✅ <b>Перевыпуск подписочных ссылок завершён</b>\n\n"
+        f"Всего: <b>{total}</b>\n"
+        f"Успешно: <b>{success_count}</b>\n"
+        f"Ошибок: <b>{error_count}</b>"
+        f"{failed_text}\n\n"
+        f"После этого бот и MiniApp будут показывать ссылки на <code>{SUBSCRIPTION_PUBLIC_BASE_URL}</code>."
+    )
 
 
 @router.message(Command("new_code"))

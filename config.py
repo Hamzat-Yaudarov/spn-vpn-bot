@@ -41,8 +41,9 @@ PARTNERSHIP_AGREEMENTS = {
 #              REMNAWAVE API CONFIG
 # ────────────────────────────────────────────────
 
-REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "")
+REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "https://panel.wayspn.online/api")
 REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
+SUBSCRIPTION_PUBLIC_BASE_URL = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "https://sub.wayspn.online").rstrip("/")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")
 REGULAR_SQUAD_UUID = os.getenv("REGULAR_SQUAD_UUID", "89902b23-6765-425c-ae27-9bb43c121a70")
 BYPASS_SQUAD_UUID = os.getenv("BYPASS_SQUAD_UUID", "3766e220-ebe1-4a0c-b53f-a4731f805d7e")

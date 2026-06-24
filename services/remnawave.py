@@ -3,13 +3,30 @@ import logging
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 from config import (
     REMNAWAVE_BASE_URL,
     REMNAWAVE_API_TOKEN,
     DEFAULT_SQUAD_UUID,
-    API_REQUEST_TIMEOUT
+    API_REQUEST_TIMEOUT,
+    SUBSCRIPTION_PUBLIC_BASE_URL,
 )
 from utils import retry_with_backoff, safe_api_call
+
+
+def normalize_subscription_url(sub_url: str | None) -> str | None:
+    """Показать пользователям подписочную ссылку на публичном sub-домене."""
+    if not sub_url or not SUBSCRIPTION_PUBLIC_BASE_URL:
+        return sub_url
+
+    try:
+        public = urlsplit(SUBSCRIPTION_PUBLIC_BASE_URL)
+        original = urlsplit(sub_url)
+        if not public.scheme or not public.netloc or not original.scheme or not original.netloc:
+            return sub_url
+        return urlunsplit((public.scheme, public.netloc, original.path, original.query, original.fragment))
+    except Exception:
+        return sub_url
 
 
 async def remnawave_get_or_create_user(
@@ -211,6 +228,38 @@ async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid
         return result is not None
     except Exception as e:
         logging.error(f"Reset traffic error: {e}")
+        return False
+
+
+async def remnawave_revoke_subscription(session: aiohttp.ClientSession, user_uuid: str) -> bool:
+    """Перевыпустить подписочную ссылку пользователя в Remnawave."""
+    async def _revoke():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        endpoints = [
+            f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/revoke-subscription",
+            f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-subscription",
+            f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/revoke-subscription-url",
+        ]
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            errors = []
+            for endpoint in endpoints:
+                async with temp_session.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
+                ) as resp:
+                    if resp.status in (200, 201, 204):
+                        return True
+                    error_text = await resp.text()
+                    errors.append(f"{endpoint} -> {resp.status}: {error_text[:300]}")
+                    if resp.status not in (404, 405):
+                        break
+            raise RuntimeError("Revoke subscription failed: " + " | ".join(errors))
+
+    try:
+        result = await safe_api_call(_revoke, error_message=f"Failed to revoke subscription for {user_uuid}")
+        return result is not None
+    except Exception as e:
+        logging.error(f"Revoke subscription error: {e}")
         return False
 
 
@@ -498,7 +547,7 @@ async def remnawave_get_subscription_url(
                     data = await resp.json()
                     sub_url = data.get("response", {}).get("subscriptionUrl")
                     if sub_url:
-                        return sub_url
+                        return normalize_subscription_url(sub_url)
                     else:
                         raise RuntimeError("subscriptionUrl not found in response")
                 else:
