@@ -155,6 +155,7 @@ async def _get_miniapp_subscription_or_404(subscription_id: int, tg_id: int):
 
 
 async def _serialize_subscription(subscription) -> dict:
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
     sub_url = None
     user_info = None
     used_bytes = subscription.get("last_known_used_traffic_bytes") or 0
@@ -169,19 +170,19 @@ async def _serialize_subscription(subscription) -> dict:
             effective_until = await reconcile_subscription_expiry(subscription, user_info)
         except Exception as e:
             logger.warning("MiniApp failed to fetch subscription expiry for %s: %s", subscription.get("id"), e)
-        if subscription.get("plan_kind") == "bypass" and user_info:
+        if plan_kind == "bypass" and user_info:
             used_bytes = (user_info.get("userTraffic") or {}).get("usedTrafficBytes") or used_bytes
 
     return {
         "id": subscription["id"],
-        "plan_kind": subscription.get("plan_kind") or "regular",
+        "plan_kind": plan_kind,
         "type_index": subscription.get("type_index") or subscription.get("slot_number"),
         "status": "active" if effective_until and effective_until > datetime.utcnow() else "expired",
         "subscription_until": _format_dt(effective_until),
         "remnawave_uuid": str(subscription.get("remnawave_uuid")) if subscription.get("remnawave_uuid") else None,
         "subscription_url": sub_url,
         "traffic": {
-            "enabled": subscription.get("plan_kind") == "bypass",
+            "enabled": plan_kind == "bypass",
             "used_gb": _format_gb(used_bytes),
             "limit_gb": _format_gb(subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes")),
             "reset_at": _format_dt(subscription.get("traffic_reset_at")),

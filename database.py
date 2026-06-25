@@ -824,6 +824,71 @@ async def run_migrations():
                 """
             )
 
+            bypass_base_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES
+            migrated_legacy = await conn.fetchval(
+                """
+                WITH existing_bypass AS (
+                    SELECT
+                        tg_id,
+                        COALESCE(MAX(type_index) FILTER (
+                            WHERE plan_kind = 'bypass' AND type_index IS NOT NULL
+                        ), 0) AS max_type_index
+                    FROM subscriptions
+                    GROUP BY tg_id
+                ),
+                legacy_without_type AS (
+                    SELECT
+                        s.id,
+                        COALESCE(existing_bypass.max_type_index, 0)
+                            + (ROW_NUMBER() OVER (
+                                PARTITION BY s.tg_id
+                                ORDER BY s.slot_number ASC, s.id ASC
+                            ))::INT AS new_type_index
+                    FROM subscriptions AS s
+                    LEFT JOIN existing_bypass ON existing_bypass.tg_id = s.tg_id
+                    WHERE LOWER(TRIM(COALESCE(s.plan_kind, ''))) NOT IN ('regular', 'bypass')
+                ),
+                migrated AS (
+                    UPDATE subscriptions AS subscription
+                    SET plan_kind = 'bypass',
+                        generation = 'v2',
+                        is_visible = TRUE,
+                        is_renewable = TRUE,
+                        type_index = legacy_without_type.new_type_index,
+                        traffic_enabled = TRUE,
+                        base_traffic_bytes = $1,
+                        current_period_limit_bytes = GREATEST(
+                            COALESCE(subscription.current_period_limit_bytes, 0),
+                            $1
+                                + COALESCE(subscription.carried_traffic_bytes, 0)
+                                + COALESCE(subscription.current_paid_traffic_bytes, 0)
+                        ),
+                        traffic_reset_at = COALESCE(
+                            subscription.traffic_reset_at,
+                            CASE
+                                WHEN subscription.subscription_until IS NOT NULL
+                                 AND subscription.subscription_until > now() AT TIME ZONE 'UTC'
+                                THEN now() AT TIME ZONE 'UTC' + interval '30 days'
+                                ELSE NULL
+                            END
+                        ),
+                        hwid_device_limit = $2,
+                        updated_at = now()
+                    FROM legacy_without_type
+                    WHERE subscription.id = legacy_without_type.id
+                    RETURNING subscription.id
+                )
+                SELECT COUNT(*) FROM migrated
+                """,
+                bypass_base_bytes,
+                BYPASS_HWID_DEVICE_LIMIT,
+            )
+            if migrated_legacy:
+                logging.info(
+                    "✅ Старые подписки без типа преобразованы в bypass и показаны пользователям: %s",
+                    migrated_legacy,
+                )
+
             await conn.execute(
                 """
                 UPDATE subscriptions
@@ -849,7 +914,6 @@ async def run_migrations():
                 REGULAR_HWID_DEVICE_LIMIT,
             )
 
-            bypass_base_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES
             await conn.execute(
                 """
                 UPDATE subscriptions

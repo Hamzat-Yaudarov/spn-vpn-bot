@@ -71,7 +71,7 @@ def _format_time_left(delta: timedelta) -> str:
 
 
 def _subscription_name(subscription) -> str:
-    plan_kind = subscription.get("plan_kind") or "regular"
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
     type_index = subscription.get("type_index") or subscription.get("slot_number")
     title = "С антиглушилкой" if plan_kind == "bypass" else "Обычная"
     return f"{title} #{type_index}"

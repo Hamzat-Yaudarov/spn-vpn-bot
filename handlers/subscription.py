@@ -43,7 +43,7 @@ router = Router()
 
 
 def _subscription_name(subscription) -> str:
-    plan_kind = subscription.get('plan_kind') or 'regular'
+    plan_kind = subscription.get('plan_kind') if subscription.get('plan_kind') in {'regular', 'bypass'} else 'bypass'
     type_index = subscription.get('type_index') or subscription.get('slot_number')
     label = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
     return f"{label} #{type_index}"

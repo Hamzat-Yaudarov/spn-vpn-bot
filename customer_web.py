@@ -153,6 +153,7 @@ def _format_dt(value) -> str | None:
 
 
 async def _serialize_subscription(subscription) -> dict:
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
     effective_until = subscription.get("subscription_until")
     subscription_url = None
     used_bytes = subscription.get("last_known_used_traffic_bytes") or 0
@@ -161,20 +162,20 @@ async def _serialize_subscription(subscription) -> dict:
             subscription_url = await remnawave_get_subscription_url(None, subscription["remnawave_uuid"])
             user_info = await remnawave_get_user_info(None, subscription["remnawave_uuid"])
             effective_until = await reconcile_subscription_expiry(subscription, user_info)
-            if subscription.get("plan_kind") == "bypass" and user_info:
+            if plan_kind == "bypass" and user_info:
                 used_bytes = (user_info.get("userTraffic") or {}).get("usedTrafficBytes") or used_bytes
         except Exception as exc:
             logger.warning("Website subscription refresh failed for %s: %s", subscription.get("id"), exc)
 
     return {
         "id": subscription["id"],
-        "plan_kind": subscription.get("plan_kind") or "regular",
+        "plan_kind": plan_kind,
         "type_index": subscription.get("type_index") or subscription.get("slot_number"),
         "status": "active" if effective_until and effective_until > datetime.utcnow() else "expired",
         "subscription_until": _format_dt(effective_until),
         "subscription_url": subscription_url,
         "traffic": {
-            "enabled": subscription.get("plan_kind") == "bypass",
+            "enabled": plan_kind == "bypass",
             "used_gb": round(used_bytes / GB_BYTES, 1),
             "limit_gb": round((subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes") or 0) / GB_BYTES, 1),
             "reset_at": _format_dt(subscription.get("traffic_reset_at")),
