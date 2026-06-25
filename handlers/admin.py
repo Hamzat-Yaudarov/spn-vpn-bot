@@ -52,6 +52,11 @@ class BroadcastStates(StatesGroup):
     choosing_broadcast_buttons = State()
 
 
+class DirectMessageStates(StatesGroup):
+    """Ожидание сообщения для отправки конкретному пользователю."""
+    waiting_for_message = State()
+
+
 def is_admin(user_id: int) -> bool:
     """Проверить является ли пользователь администратором"""
     return user_id == ADMIN_ID
@@ -114,6 +119,34 @@ def _classify_broadcast_exception(exc: Exception) -> tuple[str, float | None]:
         return "unreachable", None
 
     return "error", None
+
+
+async def _send_direct_message(
+    message: Message,
+    target_id: int,
+    text: str | None = None,
+    source_message: Message | None = None,
+) -> None:
+    """Отправить текст или копию сообщения конкретному пользователю."""
+    try:
+        if source_message:
+            await message.bot.copy_message(
+                chat_id=target_id,
+                from_chat_id=source_message.chat.id,
+                message_id=source_message.message_id,
+            )
+        else:
+            await message.bot.send_message(target_id, text or "", parse_mode=None)
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(float(exc.retry_after) + 0.2)
+        if source_message:
+            await message.bot.copy_message(
+                chat_id=target_id,
+                from_chat_id=source_message.chat.id,
+                message_id=source_message.message_id,
+            )
+        else:
+            await message.bot.send_message(target_id, text or "", parse_mode=None)
 
 
 BROADCAST_BUTTONS = {
@@ -1296,6 +1329,110 @@ async def admin_stats(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при получении статистики: {str(e)[:100]}")
         logger.error(f"Error getting stats for admin {admin_id}: {e}")
+
+
+@router.message(Command("send", "sms"))
+async def admin_send_direct_message(message: Message, state: FSMContext):
+    """Отправить сообщение одному пользователю по Telegram ID."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer(
+            "❌ <b>Укажите Telegram ID</b>\n\n"
+            "<b>Текстом:</b>\n"
+            "<code>/send 123456789 Ваше сообщение</code>\n\n"
+            "<b>Фото, видео или оформленное сообщение:</b>\n"
+            "ответьте на него командой <code>/send 123456789</code>."
+        )
+        return
+
+    try:
+        target_id = int(parts[1])
+        if target_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Telegram ID должен быть положительным числом")
+        return
+
+    text = parts[2].strip() if len(parts) > 2 else None
+    source_message = message.reply_to_message
+
+    if source_message or text:
+        try:
+            await _send_direct_message(
+                message,
+                target_id,
+                text=text,
+                source_message=source_message,
+            )
+            await state.clear()
+            await message.answer(f"✅ Сообщение отправлено пользователю <code>{target_id}</code>")
+            logger.info("Admin %s sent a direct message to %s", admin_id, target_id)
+        except Exception as exc:
+            status, _ = _classify_broadcast_exception(exc)
+            if status == "blocked":
+                error_text = "Пользователь заблокировал бота"
+            elif status == "unreachable":
+                error_text = "Пользователь не запускал бота или Telegram ID неверный"
+            else:
+                error_text = f"Не удалось отправить сообщение: {html.escape(str(exc)[:150])}"
+            await message.answer(f"❌ {error_text}")
+            logger.warning("Direct message to %s failed: %s", target_id, exc)
+        return
+
+    await state.set_state(DirectMessageStates.waiting_for_message)
+    await state.update_data(direct_message_target_id=target_id)
+    await message.answer(
+        f"✉️ Отправьте следующим сообщением то, что нужно переслать пользователю "
+        f"<code>{target_id}</code>.\n\n"
+        "Можно отправить текст, фото, видео, документ или голосовое.\n"
+        "Для отмены: /cancel"
+    )
+
+
+@router.message(DirectMessageStates.waiting_for_message, Command("cancel"))
+async def cancel_direct_message(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    await state.clear()
+    await message.answer("Отправка отменена")
+
+
+@router.message(DirectMessageStates.waiting_for_message)
+async def handle_direct_message(message: Message, state: FSMContext):
+    """Скопировать следующее сообщение администратора выбранному пользователю."""
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    target_id = data.get("direct_message_target_id")
+    if not target_id:
+        await state.clear()
+        await message.answer("❌ ID получателя потерян. Запустите команду заново")
+        return
+
+    try:
+        await _send_direct_message(message, int(target_id), source_message=message)
+        await state.clear()
+        await message.answer(f"✅ Сообщение отправлено пользователю <code>{target_id}</code>")
+        logger.info("Admin %s sent a direct message to %s", message.from_user.id, target_id)
+    except Exception as exc:
+        status, _ = _classify_broadcast_exception(exc)
+        if status == "blocked":
+            error_text = "Пользователь заблокировал бота"
+        elif status == "unreachable":
+            error_text = "Пользователь не запускал бота или Telegram ID неверный"
+        else:
+            error_text = f"Не удалось отправить сообщение: {html.escape(str(exc)[:150])}"
+        await state.clear()
+        await message.answer(f"❌ {error_text}")
+        logger.warning("Direct message to %s failed: %s", target_id, exc)
 
 
 @router.message(Command("all_sms"))

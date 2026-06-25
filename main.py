@@ -5,9 +5,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, MenuButtonCommands
+from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonCommands
 
-from config import BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
+from config import ADMIN_ID, BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
 
 # Импортируем все роутеры обработчиков
@@ -69,6 +69,16 @@ async def setup_menu_button():
             BotCommand(command="start", description="Главное меню"),
         ]
         await bot.set_my_commands(commands)
+        if ADMIN_ID:
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="start", description="Главное меню"),
+                    BotCommand(command="send", description="Сообщение пользователю по ID"),
+                    BotCommand(command="all_sms", description="Рассылка всем"),
+                    BotCommand(command="not_sub_sms", description="Рассылка без подписки"),
+                ],
+                scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+            )
 
         # Устанавливаем кнопку меню которая показывает команды
         menu_button = MenuButtonCommands()
