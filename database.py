@@ -1825,7 +1825,7 @@ async def get_pending_payments():
 async def get_pending_payments_by_provider(provider: str):
     """Получить все ожидающие платежи по конкретному провайдеру"""
     return await db_execute(
-        "SELECT id, tg_id, invoice_id, tariff_code, subscription_id, payment_target, target_slot_number, payment_kind, traffic_package_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
+        "SELECT id, tg_id, invoice_id, tariff_code, amount, subscription_id, payment_target, target_slot_number, payment_kind, traffic_package_code FROM payments WHERE status = 'pending' AND provider = $1 ORDER BY id",
         (provider,),
         fetch_all=True
     )

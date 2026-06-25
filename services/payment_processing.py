@@ -178,7 +178,11 @@ async def process_paid_payment(
 
             sub_url = await remnawave_get_subscription_url(session, uuid)
             if not sub_url:
-                logger.warning("Failed to get subscription URL for %s", uuid)
+                logger.error(
+                    "Subscription URL is not ready for payment %s; payment will remain pending for retry",
+                    invoice_id,
+                )
+                return False
 
             try:
                 referrer = await db.get_referrer(tg_id)
@@ -320,7 +324,7 @@ async def process_paid_payment(
             text = (
                 f"✅ <b>{_subscription_display_name(subscription)} {action_text}!</b>\n\n"
                 f"Тариф: {tariff.get('title', tariff_code)} ({days} дней)\n"
-                f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
+                f"<b>Ваш ключ:</b>\n{sub_url}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],

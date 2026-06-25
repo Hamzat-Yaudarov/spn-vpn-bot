@@ -145,13 +145,16 @@ async def main():
     # Список активных задач
     tasks = []
 
-    # Запускаем фоновые задачи проверки платежей (если polling включен)
+    # YooKassa проверяется всегда: webhook даёт мгновенную активацию,
+    # а фоновая задача подхватывает платёж, если webhook не дошёл.
+    tasks.append(asyncio.create_task(check_yookassa_payments(bot)))
+
+    # Для CryptoBot polling запускается только в соответствующем режиме.
     if WEBHOOK_USE_POLLING:
         logger.info("Polling mode enabled for payment checks")
         tasks.append(asyncio.create_task(check_cryptobot_invoices(bot)))
-        tasks.append(asyncio.create_task(check_yookassa_payments(bot)))
     else:
-        logger.info("Webhook mode enabled for payment checks (polling disabled)")
+        logger.info("Webhook mode enabled; YooKassa fallback checker is active")
 
     # Запускаем задачу очистки истёкших платежей
     tasks.append(asyncio.create_task(cleanup_expired_payments()))

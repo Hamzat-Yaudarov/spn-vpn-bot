@@ -69,7 +69,7 @@ async def create_yookassa_payment(
                 "return_url": confirmation_return_url
             },
             "capture": True,
-            "description": f"Подписка SPN VPN — {tariff_code}",
+            "description": "Way SPN",
             "metadata": {
                 "tg_id": str(tg_id),
                 "tariff_code": tariff_code
@@ -152,17 +152,14 @@ async def check_yookassa_payments(bot):
     """
     Фоновая задача для проверки статусов платежей в Yookassa
 
-    Примечание: Если настроен WEBHOOK_HOST, платежи будут обработаны
-    через webhook'и мгновенно. Polling используется как fallback.
+    Webhook обрабатывает платёж мгновенно, а эта задача служит резервной
+    проверкой на случай, если уведомление YooKassa не дошло.
 
     Args:
         bot: Экземпляр Bot
     """
-    if not WEBHOOK_USE_POLLING:
-        logging.info("Yookassa polling disabled (webhook mode enabled)")
-        return
-
-    logging.info("Yookassa polling mode enabled")
+    mode = "primary" if WEBHOOK_USE_POLLING else "webhook fallback"
+    logging.info("Yookassa payment status checker enabled (%s)", mode)
 
     while True:
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
@@ -173,7 +170,6 @@ async def check_yookassa_payments(bot):
             continue
 
         for payment_record in pending:
-            payment_id = payment_record['id']
             tg_id = payment_record['tg_id']
             invoice_id = payment_record['invoice_id']
             tariff_code = payment_record['tariff_code']
@@ -185,9 +181,24 @@ async def check_yookassa_payments(bot):
                 payment = await get_payment_status(invoice_id)
 
                 if payment and payment.get("status") == "succeeded":
+                    paid_amount = (payment.get("amount") or {}).get("value")
+                    if (
+                        paid_amount is None
+                        or abs(float(paid_amount) - float(payment_record["amount"])) > 0.009
+                    ):
+                        logging.error(
+                            "Yookassa amount mismatch for payment %s: expected=%s, received=%s",
+                            invoice_id,
+                            payment_record["amount"],
+                            paid_amount,
+                        )
+                        continue
+
                     success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code)
                     if success:
                         logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")
+                elif payment and payment.get("status") == "canceled":
+                    await db.update_payment_status_by_invoice(invoice_id, "canceled")
 
             except Exception as e:
                 logging.error(f"Check Yookassa payment error for {tg_id}: {e}")
