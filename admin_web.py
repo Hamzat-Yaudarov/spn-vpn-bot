@@ -17,7 +17,7 @@ from config import (
     TARIFFS,
 )
 from services.remnawave import remnawave_set_subscription_expiry
-from services.subscription_sync import refresh_subscription_expiry
+from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 
 
@@ -126,18 +126,10 @@ async def admin_adjust_subscription(subscription_id: int, body: AdjustDaysBody, 
     if not await db.acquire_user_lock(tg_id):
         raise HTTPException(status_code=409, detail="Пользователь сейчас занят другой операцией")
     try:
-        current_until = await refresh_subscription_expiry(subscription)
-        now = datetime.utcnow()
-        if body.days > 0:
-            base = current_until if current_until and current_until > now else now
-        else:
-            base = current_until or now
-        new_until = base + timedelta(days=body.days)
-        if subscription.get("remnawave_uuid"):
-            updated = await remnawave_set_subscription_expiry(None, subscription["remnawave_uuid"], new_until)
-            if not updated:
-                raise HTTPException(status_code=502, detail="Remnawave не принял новую дату")
-        await db.sync_subscription_expiry(subscription_id, new_until)
+        try:
+            new_until = await adjust_subscription_days(subscription, body.days)
+        except SubscriptionAdjustmentError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         logger.info("Web admin adjusted subscription %s by %s days", subscription_id, body.days)
         return {"ok": True, "subscription_until": new_until, "days": body.days}
     finally:

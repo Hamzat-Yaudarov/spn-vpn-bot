@@ -35,6 +35,7 @@ from services.remnawave import (
     remnawave_get_subscription_url,
     remnawave_revoke_subscription,
 )
+from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
 
 logger = logging.getLogger(__name__)
 
@@ -903,6 +904,84 @@ async def admin_give_sub(message: Message):
         logger.error(f"Give subscription error: {e}")
         await message.answer(f"❌ Ошибка: {str(e)[:100]}")
 
+    finally:
+        await db.release_user_lock(tg_id)
+
+
+@router.message(Command("sub_days", "days"))
+async def admin_adjust_subscription_days(message: Message):
+    """Изменить срок конкретной подписки на произвольное число дней."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning("Unauthorized /sub_days attempt from user %s", admin_id)
+        return
+
+    parts = message.text.split()
+    if len(parts) != 4:
+        await message.answer(
+            "❌ <b>Неверный формат</b>\n\n"
+            "<b>Использование:</b>\n"
+            "<code>/sub_days ID_ПОЛЬЗОВАТЕЛЯ ID_ПОДПИСКИ +/-ДНИ</code>\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/sub_days 123456789 42 -15</code> — убрать 15 дней\n"
+            "<code>/sub_days 123456789 42 30</code> — добавить 30 дней\n\n"
+            "ID подписки отображается в веб-админке рядом с датой."
+        )
+        return
+
+    try:
+        tg_id = int(parts[1])
+        subscription_id = int(parts[2])
+        days = int(parts[3])
+        if tg_id == 0 or subscription_id <= 0 or days == 0:
+            raise ValueError
+        if abs(days) > 3650:
+            await message.answer("❌ За один раз можно изменить срок максимум на 3650 дней")
+            return
+    except ValueError:
+        await message.answer(
+            "❌ ID пользователя, ID подписки и дни должны быть целыми числами.\n\n"
+            "Пример: <code>/sub_days 123456789 42 -15</code>"
+        )
+        return
+
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+    if not subscription:
+        await message.answer(
+            f"❌ Подписка <code>{subscription_id}</code> пользователя <code>{tg_id}</code> не найдена"
+        )
+        return
+
+    if not await db.acquire_user_lock(tg_id):
+        await message.answer("❌ Пользователь занят другой операцией. Попробуйте позже")
+        return
+
+    try:
+        try:
+            new_until = await adjust_subscription_days(subscription, days)
+        except SubscriptionAdjustmentError as exc:
+            await message.answer(f"❌ {html.escape(str(exc))}")
+            return
+
+        action = "Добавлено" if days > 0 else "Убрано"
+        await message.answer(
+            "✅ <b>Срок подписки изменён</b>\n\n"
+            f"👤 Пользователь: <code>{tg_id}</code>\n"
+            f"🔐 ID подписки: <code>{subscription_id}</code>\n"
+            f"📅 {action}: <b>{abs(days)} дней</b>\n"
+            f"⏳ Новая дата: <b>{new_until.strftime('%d.%m.%Y %H:%M')}</b>"
+        )
+        logger.info(
+            "Admin %s adjusted subscription %s for user %s by %s days",
+            admin_id,
+            subscription_id,
+            tg_id,
+            days,
+        )
+    except Exception as exc:
+        logger.error("Admin /sub_days failed: %s", exc, exc_info=True)
+        await message.answer(f"❌ Ошибка: {html.escape(str(exc)[:100])}")
     finally:
         await db.release_user_lock(tg_id)
 
