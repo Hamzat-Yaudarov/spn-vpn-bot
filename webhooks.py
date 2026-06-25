@@ -155,7 +155,7 @@ async def _get_miniapp_subscription_or_404(subscription_id: int, tg_id: int):
 
 
 async def _serialize_subscription(subscription) -> dict:
-    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "regular"
     sub_url = None
     user_info = None
     used_bytes = subscription.get("last_known_used_traffic_bytes") or 0
@@ -387,7 +387,13 @@ async def miniapp_create_subscription_payment(request: Request):
         if not subscription_id:
             raise HTTPException(status_code=400, detail="subscription_id is required")
         subscription = await db.get_subscription_by_id(int(subscription_id), tg_id)
-        if not subscription or subscription.get("plan_kind") != tariff.get("kind"):
+        if (
+            not subscription
+            or subscription.get("generation") != "v2"
+            or not subscription.get("is_visible")
+            or not subscription.get("is_renewable")
+            or subscription.get("plan_kind") != tariff.get("kind")
+        ):
             raise HTTPException(status_code=400, detail="Invalid subscription")
         target_slot_number = subscription.get("type_index")
     else:
@@ -444,7 +450,13 @@ async def miniapp_create_traffic_payment(request: Request):
         raise HTTPException(status_code=400, detail="Invalid traffic payment")
 
     subscription = await db.get_subscription_by_id(int(subscription_id), tg_id)
-    if not subscription or subscription.get("plan_kind") != "bypass":
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or subscription.get("plan_kind") != "bypass"
+    ):
         raise HTTPException(status_code=400, detail="Invalid bypass subscription")
 
     discounts = await db.get_active_discounts()

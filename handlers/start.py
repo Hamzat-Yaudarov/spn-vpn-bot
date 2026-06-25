@@ -95,7 +95,7 @@ async def show_main_menu(message: Message, user_id: int | None = None):
     ]
     if tg_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
-    visible_subscriptions = await db.get_visible_subscriptions(tg_id)
+    visible_subscriptions = await db.get_bot_visible_subscriptions(tg_id)
     if visible_subscriptions:
         keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
 

@@ -52,8 +52,13 @@ async def _get_or_create_target_subscription(tg_id: int, payment_record, tariff:
             return None, "Платёж не привязан к подписке"
 
         subscription = await db.get_subscription_by_id(subscription_id, tg_id)
-        if not subscription:
-            return None, "Подписка для продления не найдена"
+        if (
+            not subscription
+            or subscription.get("generation") != "v2"
+            or not subscription.get("is_visible")
+            or not subscription.get("is_renewable")
+        ):
+            return None, "Эту подписку нельзя продлить"
 
         return subscription, None
 
@@ -348,7 +353,13 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
 
     subscription_id = payment_record.get("subscription_id")
     subscription = await db.get_subscription_by_id(subscription_id, tg_id) if subscription_id else None
-    if not subscription or subscription.get("plan_kind") != "bypass":
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or subscription.get("plan_kind") != "bypass"
+    ):
         logger.error("Traffic package target subscription is invalid: %s", subscription_id)
         return False
 

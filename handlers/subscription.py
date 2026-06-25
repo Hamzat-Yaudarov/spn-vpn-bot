@@ -50,9 +50,7 @@ def _subscription_name(subscription) -> str:
 
 
 def _subscription_short_status(subscription) -> str:
-    if subscription.get('generation') != 'v2':
-        return "архивная"
-    if not subscription.get('is_visible'):
+    if subscription.get('generation') == 'v2' and not subscription.get('is_visible'):
         return "скрытая"
     until = subscription.get('subscription_until')
     if not until:
@@ -60,6 +58,19 @@ def _subscription_short_status(subscription) -> str:
     if until > datetime.utcnow():
         return "активна"
     return "истекла"
+
+
+def _is_bot_viewable_subscription(subscription) -> bool:
+    if not subscription:
+        return False
+    if subscription.get('generation') == 'v2' and subscription.get('is_visible'):
+        return True
+    until = subscription.get('subscription_until')
+    return bool(
+        subscription.get('legacy_readonly')
+        and until
+        and until > datetime.utcnow()
+    )
 
 
 def _format_traffic_gb(bytes_value: int | None) -> str:
@@ -221,7 +232,7 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
 
 async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
-    subscriptions = await db.get_visible_subscriptions(tg_id)
+    subscriptions = await db.get_bot_visible_subscriptions(tg_id)
 
     if not subscriptions:
         await callback.answer("У тебя пока нет подписок", show_alert=True)
@@ -250,7 +261,7 @@ async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str
     tg_id = callback.from_user.id
     subscriptions = [
         subscription
-        for subscription in await db.get_visible_subscriptions(tg_id)
+        for subscription in await db.get_bot_visible_subscriptions(tg_id)
         if (subscription.get('plan_kind') or 'regular') == plan_kind
     ]
 
@@ -277,7 +288,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription or subscription.get('generation') != 'v2' or not subscription.get('is_visible'):
+    if not _is_bot_viewable_subscription(subscription):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -289,7 +300,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
     limit_text = _device_limit_text(subscription)
     traffic_text = ""
 
-    if subscription.get('plan_kind') == 'bypass':
+    if subscription.get('plan_kind') == 'bypass' and not subscription.get('legacy_readonly'):
         used_bytes = subscription.get('last_known_used_traffic_bytes') or 0
         try:
             if subscription.get('remnawave_uuid'):
@@ -313,9 +324,14 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
         [InlineKeyboardButton(text="📱 Устройства", callback_data=f"subscription_devices_{subscription_id}", style="primary")],
     ]
-    if subscription.get('is_renewable'):
+    if subscription.get('generation') == 'v2' and subscription.get('is_renewable'):
         keyboard.append([InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")])
-    if subscription.get('plan_kind') == 'bypass' and status_text == 'активна':
+    if (
+        subscription.get('generation') == 'v2'
+        and subscription.get('is_renewable')
+        and subscription.get('plan_kind') == 'bypass'
+        and status_text == 'активна'
+    ):
         keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -340,7 +356,7 @@ async def _show_subscription_devices(callback: CallbackQuery, subscription_id: i
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription or subscription.get('generation') != 'v2' or not subscription.get('is_visible'):
+    if not _is_bot_viewable_subscription(subscription):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -394,7 +410,7 @@ async def _delete_subscription_device(callback: CallbackQuery, subscription_id: 
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription or not subscription.get('remnawave_uuid'):
+    if not _is_bot_viewable_subscription(subscription) or not subscription.get('remnawave_uuid'):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -420,7 +436,7 @@ async def _delete_all_subscription_devices(callback: CallbackQuery, subscription
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription or not subscription.get('remnawave_uuid'):
+    if not _is_bot_viewable_subscription(subscription) or not subscription.get('remnawave_uuid'):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -441,7 +457,7 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
     tg_id = callback.from_user.id
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription:
+    if not _is_bot_viewable_subscription(subscription):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -475,6 +491,13 @@ async def _get_or_create_target_subscription_for_direct_flow(tg_id: int, state_d
 
     if purchase_mode == "renew":
         subscription = await db.get_subscription_by_id(target_subscription_id, tg_id)
+        if (
+            not subscription
+            or subscription.get("generation") != "v2"
+            or not subscription.get("is_visible")
+            or not subscription.get("is_renewable")
+        ):
+            return None, purchase_mode
         return subscription, purchase_mode
 
     if type_index is None:
@@ -632,8 +655,13 @@ async def process_subscription_renew(callback: CallbackQuery, state: FSMContext)
     subscription_id = int(callback.data.split("_")[-1])
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription:
-        await callback.answer("Подписка не найдена", show_alert=True)
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+    ):
+        await callback.answer("Эту подписку нельзя продлить", show_alert=True)
         return
 
     await state.update_data(
@@ -675,7 +703,13 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
     subscription_id = int(callback.data.split("_")[-1])
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
-    if not subscription or subscription.get('plan_kind') != 'bypass':
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+        or subscription.get('plan_kind') != 'bypass'
+    ):
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
@@ -739,7 +773,13 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
         return
 
     subscription = await db.get_subscription_by_id(subscription_id, tg_id)
-    if not subscription or subscription.get('plan_kind') != 'bypass':
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+        or subscription.get('plan_kind') != 'bypass'
+    ):
         await callback.answer("Подписка не найдена", show_alert=True)
         await state.clear()
         return

@@ -71,7 +71,7 @@ def _format_time_left(delta: timedelta) -> str:
 
 
 def _subscription_name(subscription) -> str:
-    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "regular"
     type_index = subscription.get("type_index") or subscription.get("slot_number")
     title = "С антиглушилкой" if plan_kind == "bypass" else "Обычная"
     return f"{title} #{type_index}"
@@ -139,6 +139,9 @@ async def _send_notifications_for_expiring(bot):
         FROM subscriptions
         WHERE remnawave_uuid IS NOT NULL
           AND tg_id > 0
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
           AND subscription_until IS NOT NULL
           AND subscription_until > $1
           AND subscription_until <= $2
@@ -190,19 +193,47 @@ def _pick_expiring_stage(time_left: timedelta) -> dict | None:
 
 
 async def _send_notifications_for_expired(bot):
-    users = await db.db_execute("SELECT tg_id FROM users WHERE tg_id > 0 ORDER BY tg_id ASC", fetch_all=True)
+    users = await db.db_execute(
+        """
+        SELECT DISTINCT tg_id
+        FROM subscriptions
+        WHERE tg_id > 0
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
+        ORDER BY tg_id ASC
+        """,
+        fetch_all=True,
+    )
     now = datetime.utcnow()
     sent = 0
 
     for i, user in enumerate(users or []):
         tg_id = user["tg_id"]
-        subscriptions = await db.get_user_subscriptions(tg_id)
+        all_subscriptions = await db.get_user_subscriptions(tg_id)
         has_active = any(
-            sub.get("subscription_until") and sub["subscription_until"] > now
-            for sub in subscriptions
+            sub.get("subscription_until")
+            and sub["subscription_until"] > now
+            and (
+                (
+                    sub.get("generation") == "v2"
+                    and sub.get("is_visible")
+                    and sub.get("is_renewable")
+                )
+                or sub.get("legacy_readonly")
+            )
+            for sub in all_subscriptions
         )
         if has_active:
             continue
+
+        subscriptions = [
+            subscription
+            for subscription in all_subscriptions
+            if subscription.get("generation") == "v2"
+            and subscription.get("is_visible")
+            and subscription.get("is_renewable")
+        ]
         if not await db.can_send_notification(tg_id, EXPIRED_NOTIFICATION_TYPE, EXPIRED_COOLDOWN_HOURS):
             continue
 
@@ -242,6 +273,10 @@ async def _send_notifications_for_low_traffic(bot):
         FROM subscriptions
         WHERE plan_kind = 'bypass'
           AND tg_id > 0
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
+          AND traffic_enabled = TRUE
           AND remnawave_uuid IS NOT NULL
           AND subscription_until IS NOT NULL
           AND subscription_until > $1

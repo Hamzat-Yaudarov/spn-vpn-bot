@@ -49,7 +49,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     ]
     if tg_id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
-    visible_subscriptions = await db.get_visible_subscriptions(tg_id)
+    visible_subscriptions = await db.get_bot_visible_subscriptions(tg_id)
     if visible_subscriptions:
         keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
 

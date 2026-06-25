@@ -153,7 +153,7 @@ def _format_dt(value) -> str | None:
 
 
 async def _serialize_subscription(subscription) -> dict:
-    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "bypass"
+    plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "regular"
     effective_until = subscription.get("subscription_until")
     subscription_url = None
     used_bytes = subscription.get("last_known_used_traffic_bytes") or 0

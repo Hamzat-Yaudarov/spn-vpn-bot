@@ -10,7 +10,6 @@ from config import (
     PAYMENT_CHECK_COOLDOWN,
     BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
-    BYPASS_SQUAD_UUID,
     GB_BYTES,
     REGULAR_HWID_DEVICE_LIMIT,
 )
@@ -184,7 +183,8 @@ async def run_migrations():
                 'traffic_reset_at': {'type': 'TIMESTAMP', 'nullable': True},
                 'last_known_used_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
                 'last_traffic_sync_at': {'type': 'TIMESTAMP', 'nullable': True},
-                'legacy_traffic_reset_pending': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'legacy_readonly': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'legacy_limit_removal_pending': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'hwid_device_limit': {'type': 'INT', 'nullable': False, 'default': '5'},
                 'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
                 'notification_type': {'type': 'TEXT', 'nullable': True},
@@ -415,7 +415,8 @@ async def run_migrations():
                     traffic_reset_at TIMESTAMP,
                     last_known_used_traffic_bytes BIGINT DEFAULT 0,
                     last_traffic_sync_at TIMESTAMP,
-                    legacy_traffic_reset_pending BOOLEAN DEFAULT FALSE,
+                    legacy_readonly BOOLEAN DEFAULT FALSE,
+                    legacy_limit_removal_pending BOOLEAN DEFAULT FALSE,
                     hwid_device_limit INT DEFAULT 5,
                     next_notification_time TIMESTAMP,
                     notification_type TEXT,
@@ -827,103 +828,48 @@ async def run_migrations():
                 """
             )
 
-            bypass_base_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES
             migrated_legacy = await conn.fetchval(
                 """
-                WITH existing_bypass AS (
-                    SELECT
-                        tg_id,
-                        COALESCE(MAX(type_index) FILTER (
-                            WHERE plan_kind = 'bypass' AND type_index IS NOT NULL
-                        ), 0) AS max_type_index
-                    FROM subscriptions
-                    GROUP BY tg_id
-                ),
-                legacy_without_type AS (
-                    SELECT
-                        s.id,
-                        COALESCE(existing_bypass.max_type_index, 0)
-                            + (ROW_NUMBER() OVER (
-                                PARTITION BY s.tg_id
-                                ORDER BY s.slot_number ASC, s.id ASC
-                            ))::INT AS new_type_index
-                    FROM subscriptions AS s
-                    LEFT JOIN existing_bypass ON existing_bypass.tg_id = s.tg_id
-                    WHERE LOWER(TRIM(COALESCE(s.plan_kind, ''))) NOT IN ('regular', 'bypass')
-                ),
+                WITH
                 migrated AS (
                     UPDATE subscriptions AS subscription
                     SET plan_kind = 'bypass',
-                        generation = 'v2',
-                        is_visible = TRUE,
-                        is_renewable = TRUE,
-                        type_index = legacy_without_type.new_type_index,
-                        traffic_enabled = TRUE,
-                        base_traffic_bytes = $1,
-                        current_period_limit_bytes = GREATEST(
-                            COALESCE(subscription.current_period_limit_bytes, 0),
-                            $1
-                                + COALESCE(subscription.carried_traffic_bytes, 0)
-                                + COALESCE(subscription.current_paid_traffic_bytes, 0)
-                        ),
-                        traffic_reset_at = COALESCE(
-                            subscription.traffic_reset_at,
-                            CASE
-                                WHEN subscription.subscription_until IS NOT NULL
-                                 AND subscription.subscription_until > now() AT TIME ZONE 'UTC'
-                                THEN now() AT TIME ZONE 'UTC' + interval '30 days'
-                                ELSE NULL
-                            END
-                        ),
-                        squad_uuid = $3::UUID,
-                        last_known_used_traffic_bytes = 0,
+                        generation = 'legacy',
+                        is_visible = FALSE,
+                        is_renewable = FALSE,
+                        legacy_readonly = TRUE,
+                        legacy_limit_removal_pending = subscription.remnawave_uuid IS NOT NULL,
+                        traffic_enabled = FALSE,
+                        base_traffic_bytes = 0,
+                        current_paid_traffic_bytes = 0,
+                        carried_traffic_bytes = 0,
+                        current_period_limit_bytes = 0,
+                        traffic_reset_at = NULL,
                         last_traffic_sync_at = NULL,
-                        legacy_traffic_reset_pending = TRUE,
-                        hwid_device_limit = $2,
+                        next_notification_time = NULL,
+                        notification_type = NULL,
                         updated_at = now()
-                    FROM legacy_without_type
-                    WHERE subscription.id = legacy_without_type.id
+                    WHERE subscription.remnawave_uuid IS NOT NULL
+                      AND (
+                            LOWER(TRIM(COALESCE(subscription.plan_kind, ''))) NOT IN ('regular', 'bypass')
+                         OR (
+                                subscription.plan_kind = 'bypass'
+                            AND subscription.generation = 'v2'
+                            AND subscription.is_visible = TRUE
+                            AND COALESCE(subscription.remnawave_username, '') !~
+                                '^(tg_[0-9]+|web_[0-9]+)_bypass_[0-9]+$'
+                         )
+                      )
                     RETURNING subscription.id
                 )
                 SELECT COUNT(*) FROM migrated
-                """,
-                bypass_base_bytes,
-                BYPASS_HWID_DEVICE_LIMIT,
-                BYPASS_SQUAD_UUID,
+                """
             )
             if migrated_legacy:
                 logging.info(
-                    "✅ Старые подписки без типа преобразованы в bypass и показаны пользователям: %s",
+                    "✅ Старые подписки переведены в режим только для просмотра в боте: %s",
                     migrated_legacy,
                 )
-
-            # Если предыдущая версия миграции уже успела поменять тип на bypass,
-            # но ещё не сбросила трафик в Remnawave, ставим её в очередь здесь.
-            await conn.execute(
-                """
-                UPDATE subscriptions
-                SET legacy_traffic_reset_pending = TRUE,
-                    squad_uuid = $1::UUID,
-                    base_traffic_bytes = $2,
-                    current_period_limit_bytes = GREATEST(
-                        COALESCE(current_period_limit_bytes, 0),
-                        $2
-                            + COALESCE(carried_traffic_bytes, 0)
-                            + COALESCE(current_paid_traffic_bytes, 0)
-                    ),
-                    updated_at = now()
-                WHERE plan_kind = 'bypass'
-                  AND generation = 'v2'
-                  AND is_visible = TRUE
-                  AND remnawave_uuid IS NOT NULL
-                  AND legacy_traffic_reset_pending = FALSE
-                  AND last_traffic_sync_at IS NULL
-                  AND COALESCE(remnawave_username, '') !~
-                      '^(tg_[0-9]+|web_[0-9]+)_bypass_[0-9]+$'
-                """,
-                BYPASS_SQUAD_UUID,
-                bypass_base_bytes,
-            )
 
             await conn.execute(
                 """
@@ -965,7 +911,7 @@ async def run_migrations():
                   AND is_visible = TRUE
                   AND COALESCE(base_traffic_bytes, 0) < $1
                 """,
-                bypass_base_bytes,
+                BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
             )
 
             logging.info("✅ Синхронизация схемы завершена")
@@ -1330,6 +1276,27 @@ async def get_visible_subscriptions(tg_id: int):
         """,
         (tg_id,),
         fetch_all=True
+    )
+
+
+async def get_bot_visible_subscriptions(tg_id: int):
+    """Получить подписки для бота, включая активные старые подписки только для просмотра."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE tg_id = $1
+          AND (
+                (generation = 'v2' AND is_visible = TRUE)
+             OR (
+                    legacy_readonly = TRUE
+                AND subscription_until IS NOT NULL
+                AND subscription_until > now() AT TIME ZONE 'UTC'
+             )
+          )
+        ORDER BY plan_kind ASC, type_index ASC NULLS LAST, slot_number ASC, id ASC
+        """,
+        (tg_id,),
+        fetch_all=True,
     )
 
 
@@ -2015,16 +1982,13 @@ async def add_traffic_to_subscription(subscription_id: int, traffic_bytes: int) 
     )
 
 
-async def get_legacy_bypass_subscriptions_pending_reset():
-    """Получить мигрированные legacy-подписки, которым ещё не сбросили трафик в Remnawave."""
+async def get_legacy_subscriptions_pending_limit_removal():
+    """Получить старые подписки, с которых надо убрать ранее установленный лимит."""
     return await db_execute(
         """
         SELECT * FROM subscriptions
-        WHERE legacy_traffic_reset_pending = TRUE
-          AND generation = 'v2'
-          AND plan_kind = 'bypass'
-          AND is_visible = TRUE
-          AND traffic_enabled = TRUE
+        WHERE legacy_readonly = TRUE
+          AND legacy_limit_removal_pending = TRUE
           AND remnawave_uuid IS NOT NULL
         ORDER BY id ASC
         """,
@@ -2032,24 +1996,23 @@ async def get_legacy_bypass_subscriptions_pending_reset():
     )
 
 
-async def mark_legacy_bypass_traffic_reset_complete(
-    subscription_id: int,
-    limit_bytes: int,
-    next_reset_at,
-) -> None:
-    """Зафиксировать успешный первичный сброс трафика старой подписки."""
+async def mark_legacy_subscription_limit_removed(subscription_id: int) -> None:
+    """Зафиксировать снятие лимита со старой подписки без сброса её трафика."""
     await db_execute(
         """
         UPDATE subscriptions
-        SET legacy_traffic_reset_pending = FALSE,
-            last_known_used_traffic_bytes = 0,
-            current_period_limit_bytes = $1,
-            traffic_reset_at = $2,
+        SET legacy_limit_removal_pending = FALSE,
+            traffic_enabled = FALSE,
+            base_traffic_bytes = 0,
+            current_paid_traffic_bytes = 0,
+            carried_traffic_bytes = 0,
+            current_period_limit_bytes = 0,
+            traffic_reset_at = NULL,
             last_traffic_sync_at = now(),
             updated_at = now()
-        WHERE id = $3
+        WHERE id = $1
         """,
-        (limit_bytes, next_reset_at, subscription_id),
+        (subscription_id,),
     )
 
 
