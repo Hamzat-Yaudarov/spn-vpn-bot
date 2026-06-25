@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     traffic_reset_at TIMESTAMP,
     last_known_used_traffic_bytes BIGINT DEFAULT 0,
     last_traffic_sync_at TIMESTAMP,
+    legacy_traffic_reset_pending BOOLEAN DEFAULT FALSE,
     hwid_device_limit INT DEFAULT 5,
     next_notification_time TIMESTAMP,
     notification_type TEXT,

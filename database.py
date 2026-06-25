@@ -10,6 +10,7 @@ from config import (
     PAYMENT_CHECK_COOLDOWN,
     BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
+    BYPASS_SQUAD_UUID,
     GB_BYTES,
     REGULAR_HWID_DEVICE_LIMIT,
 )
@@ -183,6 +184,7 @@ async def run_migrations():
                 'traffic_reset_at': {'type': 'TIMESTAMP', 'nullable': True},
                 'last_known_used_traffic_bytes': {'type': 'BIGINT', 'nullable': False, 'default': '0'},
                 'last_traffic_sync_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'legacy_traffic_reset_pending': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'hwid_device_limit': {'type': 'INT', 'nullable': False, 'default': '5'},
                 'next_notification_time': {'type': 'TIMESTAMP', 'nullable': True},
                 'notification_type': {'type': 'TEXT', 'nullable': True},
@@ -413,6 +415,7 @@ async def run_migrations():
                     traffic_reset_at TIMESTAMP,
                     last_known_used_traffic_bytes BIGINT DEFAULT 0,
                     last_traffic_sync_at TIMESTAMP,
+                    legacy_traffic_reset_pending BOOLEAN DEFAULT FALSE,
                     hwid_device_limit INT DEFAULT 5,
                     next_notification_time TIMESTAMP,
                     notification_type TEXT,
@@ -872,6 +875,10 @@ async def run_migrations():
                                 ELSE NULL
                             END
                         ),
+                        squad_uuid = $3::UUID,
+                        last_known_used_traffic_bytes = 0,
+                        last_traffic_sync_at = NULL,
+                        legacy_traffic_reset_pending = TRUE,
                         hwid_device_limit = $2,
                         updated_at = now()
                     FROM legacy_without_type
@@ -882,12 +889,41 @@ async def run_migrations():
                 """,
                 bypass_base_bytes,
                 BYPASS_HWID_DEVICE_LIMIT,
+                BYPASS_SQUAD_UUID,
             )
             if migrated_legacy:
                 logging.info(
                     "✅ Старые подписки без типа преобразованы в bypass и показаны пользователям: %s",
                     migrated_legacy,
                 )
+
+            # Если предыдущая версия миграции уже успела поменять тип на bypass,
+            # но ещё не сбросила трафик в Remnawave, ставим её в очередь здесь.
+            await conn.execute(
+                """
+                UPDATE subscriptions
+                SET legacy_traffic_reset_pending = TRUE,
+                    squad_uuid = $1::UUID,
+                    base_traffic_bytes = $2,
+                    current_period_limit_bytes = GREATEST(
+                        COALESCE(current_period_limit_bytes, 0),
+                        $2
+                            + COALESCE(carried_traffic_bytes, 0)
+                            + COALESCE(current_paid_traffic_bytes, 0)
+                    ),
+                    updated_at = now()
+                WHERE plan_kind = 'bypass'
+                  AND generation = 'v2'
+                  AND is_visible = TRUE
+                  AND remnawave_uuid IS NOT NULL
+                  AND legacy_traffic_reset_pending = FALSE
+                  AND last_traffic_sync_at IS NULL
+                  AND COALESCE(remnawave_username, '') !~
+                      '^(tg_[0-9]+|web_[0-9]+)_bypass_[0-9]+$'
+                """,
+                BYPASS_SQUAD_UUID,
+                bypass_base_bytes,
+            )
 
             await conn.execute(
                 """
@@ -1976,6 +2012,44 @@ async def add_traffic_to_subscription(subscription_id: int, traffic_bytes: int) 
         WHERE id = $2
         """,
         (traffic_bytes, subscription_id)
+    )
+
+
+async def get_legacy_bypass_subscriptions_pending_reset():
+    """Получить мигрированные legacy-подписки, которым ещё не сбросили трафик в Remnawave."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE legacy_traffic_reset_pending = TRUE
+          AND generation = 'v2'
+          AND plan_kind = 'bypass'
+          AND is_visible = TRUE
+          AND traffic_enabled = TRUE
+          AND remnawave_uuid IS NOT NULL
+        ORDER BY id ASC
+        """,
+        fetch_all=True,
+    )
+
+
+async def mark_legacy_bypass_traffic_reset_complete(
+    subscription_id: int,
+    limit_bytes: int,
+    next_reset_at,
+) -> None:
+    """Зафиксировать успешный первичный сброс трафика старой подписки."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET legacy_traffic_reset_pending = FALSE,
+            last_known_used_traffic_bytes = 0,
+            current_period_limit_bytes = $1,
+            traffic_reset_at = $2,
+            last_traffic_sync_at = now(),
+            updated_at = now()
+        WHERE id = $3
+        """,
+        (limit_bytes, next_reset_at, subscription_id),
     )
 
 

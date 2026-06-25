@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import aiohttp
 
@@ -19,6 +19,7 @@ TRAFFIC_RESET_CHECK_INTERVAL = 900
 
 
 async def process_due_traffic_resets():
+    await process_pending_legacy_bypass_resets()
     await process_pending_traffic_limit_sync()
 
     subscriptions = await db.get_bypass_subscriptions_for_traffic_reset()
@@ -81,6 +82,69 @@ async def process_due_traffic_resets():
                 )
             except Exception as e:
                 logger.error("Traffic reset error for subscription %s: %s", subscription.get('id'), e, exc_info=True)
+
+
+async def process_pending_legacy_bypass_resets():
+    """Сбросить трафик и установить лимит у подписок, преобразованных из legacy."""
+    subscriptions = await db.get_legacy_bypass_subscriptions_pending_reset()
+    if not subscriptions:
+        return
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        for subscription in subscriptions:
+            try:
+                base_bytes = subscription.get("base_traffic_bytes") or BYPASS_BASE_TRAFFIC_GB * GB_BYTES
+                paid_bytes = subscription.get("current_paid_traffic_bytes") or 0
+                carried_bytes = subscription.get("carried_traffic_bytes") or 0
+                limit_bytes = base_bytes + paid_bytes + carried_bytes
+
+                reset_ok = await remnawave_reset_user_traffic(
+                    session,
+                    subscription["remnawave_uuid"],
+                )
+                if not reset_ok:
+                    logger.warning(
+                        "Initial legacy traffic reset failed for subscription %s; will retry",
+                        subscription["id"],
+                    )
+                    continue
+
+                updated = await remnawave_update_user_profile(
+                    session,
+                    subscription["remnawave_uuid"],
+                    traffic_limit_bytes=limit_bytes,
+                    traffic_limit_strategy="NO_RESET",
+                    active_internal_squads=[BYPASS_SQUAD_UUID],
+                    hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
+                    telegram_id=subscription["tg_id"] if subscription["tg_id"] > 0 else None,
+                )
+                if not updated:
+                    logger.warning(
+                        "Initial legacy traffic limit update failed for subscription %s; will retry",
+                        subscription["id"],
+                    )
+                    continue
+
+                next_reset_at = datetime.utcnow() + timedelta(days=30)
+                await db.mark_legacy_bypass_traffic_reset_complete(
+                    subscription["id"],
+                    limit_bytes,
+                    next_reset_at,
+                )
+                logger.info(
+                    "Legacy subscription %s migrated in Remnawave: traffic reset, limit=%s",
+                    subscription["id"],
+                    limit_bytes,
+                )
+            except Exception as e:
+                logger.error(
+                    "Initial legacy bypass sync failed for subscription %s; will retry: %s",
+                    subscription.get("id"),
+                    e,
+                    exc_info=True,
+                )
 
 
 async def process_pending_traffic_limit_sync():
