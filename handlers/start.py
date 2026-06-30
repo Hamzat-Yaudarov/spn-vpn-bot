@@ -24,9 +24,20 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     # Проверяем наличие реферальной ссылки или партнёрской ссылки
     args = message.text.split()
+    start_payload = args[1].strip() if len(args) > 1 else None
+    normalized_payload = start_payload.lower() if start_payload else None
     referrer_id = None
     partner_id = None
     tracking_code = None
+
+    logger.info(
+        "Start command received: user=%s username=%s is_new=%s payload=%s normalized_payload=%s",
+        tg_id,
+        username or "",
+        not user_already_exists,
+        start_payload or "",
+        normalized_payload or "",
+    )
 
     if len(args) > 1:
         if args[1].startswith("ref_"):
@@ -55,16 +66,33 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             except (ValueError, IndexError):
                 partner_id = None
         else:
-            code = args[1].strip().lower()
+            code = normalized_payload
             if await db.record_tracking_link_click(code, tg_id, is_new_user=not user_already_exists):
                 if not user_already_exists:
                     tracking_code = code
                     logging.info(f"New user {tg_id} joined via tracking link {code}")
                 else:
                     logging.info(f"Existing user {tg_id} clicked tracking link {code}")
+            else:
+                logger.warning(
+                    "Unknown or inactive tracking link payload: user=%s username=%s is_new=%s payload=%s normalized_payload=%s",
+                    tg_id,
+                    username or "",
+                    not user_already_exists,
+                    start_payload or "",
+                    code or "",
+                )
 
     # Создаём пользователя если его нет
     await db.create_user(tg_id, username, referrer_id, tracking_code)
+    logger.info(
+        "User ensured in database after /start: user=%s username=%s was_new=%s tracking_code=%s referrer_id=%s",
+        tg_id,
+        username or "",
+        not user_already_exists,
+        tracking_code or "",
+        referrer_id or "",
+    )
 
     if referrer_id is not None and not user_already_exists:
         await db.update_referral_count(referrer_id)
