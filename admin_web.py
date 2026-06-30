@@ -24,7 +24,7 @@ from services.telegram_auth import TelegramAuthError, validate_telegram_init_dat
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ADMIN_STATIC_DIR = Path(__file__).parent / "static" / "admin"
-TRACKING_CODE_RE = re.compile(r"^[a-zA-Z0-9_-]{3,64}$")
+TRACKING_CODE_RE = re.compile(r"^[a-z0-9_-]{3,64}$")
 PROMO_CODE_RE = re.compile(r"^[A-Z0-9]{2,32}$")
 
 
@@ -190,7 +190,7 @@ async def admin_links(_: int = Depends(require_admin)):
 
 @router.post("/admin/api/links")
 async def admin_create_link(body: LinkBody, _: int = Depends(require_admin)):
-    code = body.code.strip()
+    code = body.code.strip().lower()
     if not TRACKING_CODE_RE.fullmatch(code) or code.startswith(("ref_", "partner_")):
         raise HTTPException(status_code=400, detail="Некорректный или зарезервированный код ссылки")
     await db.create_tracking_link(code, body.title.strip() if body.title else None, ADMIN_ID)

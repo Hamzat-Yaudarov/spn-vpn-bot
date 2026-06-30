@@ -790,6 +790,98 @@ async def run_migrations():
             await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
             await sync_table_schema(conn, 'notification_state', expected_notification_state_columns)
 
+            normalized_links = await conn.fetchval(
+                """
+                WITH candidates AS (
+                    SELECT id, code, LOWER(TRIM(code)) AS normalized_code
+                    FROM tracking_links
+                    WHERE code <> LOWER(TRIM(code))
+                ),
+                safe_candidates AS (
+                    SELECT candidates.*
+                    FROM candidates
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM tracking_links existing
+                        WHERE existing.code = candidates.normalized_code
+                          AND existing.id <> candidates.id
+                    )
+                ),
+                updated AS (
+                    UPDATE tracking_links link
+                    SET code = safe_candidates.normalized_code,
+                        updated_at = now()
+                    FROM safe_candidates
+                    WHERE link.id = safe_candidates.id
+                    RETURNING link.id
+                )
+                SELECT COUNT(*) FROM updated
+                """
+            )
+            if normalized_links:
+                logging.info("✅ Tracking-ссылки приведены к нижнему регистру: %s", normalized_links)
+
+            await conn.execute(
+                """
+                UPDATE tracking_link_clicks
+                SET code = LOWER(TRIM(code))
+                WHERE code <> LOWER(TRIM(code))
+                """
+            )
+            await conn.execute(
+                """
+                UPDATE users
+                SET tracking_code = LOWER(TRIM(tracking_code))
+                WHERE tracking_code IS NOT NULL
+                  AND tracking_code <> LOWER(TRIM(tracking_code))
+                """
+            )
+            await conn.execute(
+                """
+                UPDATE web_accounts
+                SET tracking_code = LOWER(TRIM(tracking_code))
+                WHERE tracking_code IS NOT NULL
+                  AND tracking_code <> LOWER(TRIM(tracking_code))
+                """
+            )
+            await conn.execute(
+                """
+                UPDATE payments
+                SET tracking_code = LOWER(TRIM(tracking_code))
+                WHERE tracking_code IS NOT NULL
+                  AND tracking_code <> LOWER(TRIM(tracking_code))
+                """
+            )
+
+            restored_tracking_users = await conn.fetchval(
+                """
+                WITH first_click AS (
+                    SELECT DISTINCT ON (click.tg_id)
+                        click.tg_id,
+                        click.code
+                    FROM tracking_link_clicks click
+                    JOIN tracking_links link ON link.code = click.code
+                    WHERE click.tg_id > 0
+                      AND link.is_active = TRUE
+                    ORDER BY click.tg_id, click.clicked_at ASC, click.id ASC
+                ),
+                restored AS (
+                    UPDATE users user_row
+                    SET tracking_code = first_click.code
+                    FROM first_click
+                    WHERE user_row.tg_id = first_click.tg_id
+                      AND user_row.tracking_code IS NULL
+                    RETURNING user_row.tg_id
+                )
+                SELECT COUNT(*) FROM restored
+                """
+            )
+            if restored_tracking_users:
+                logging.info(
+                    "✅ Восстановлены tracking-коды пользователей по старым кликам: %s",
+                    restored_tracking_users,
+                )
+
             await conn.execute(
                 """
                 INSERT INTO subscriptions (
@@ -997,6 +1089,7 @@ async def db_execute(query, params=(), fetch_one=False, fetch_all=False):
 
 async def create_web_account(login: str, password_hash: str, tracking_code: str | None = None):
     """Создать веб-аккаунт и совместимого внутреннего пользователя атомарно."""
+    tracking_code = tracking_code.strip().lower() if tracking_code else None
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1181,11 +1274,18 @@ async def user_exists(tg_id: int) -> bool:
 
 async def create_user(tg_id: int, username: str, referrer_id=None, tracking_code: str | None = None):
     """Создать или обновить пользователя"""
+    tracking_code = tracking_code.strip().lower() if tracking_code else None
     await db_execute(
         """
         INSERT INTO users (tg_id, username, referrer_id, tracking_code)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT (tg_id) DO NOTHING
+        ON CONFLICT (tg_id) DO UPDATE
+        SET username = COALESCE(EXCLUDED.username, users.username),
+            tracking_code = CASE
+                WHEN users.tracking_code IS NULL AND EXCLUDED.tracking_code IS NOT NULL
+                THEN EXCLUDED.tracking_code
+                ELSE users.tracking_code
+            END
         """,
         (tg_id, username, referrer_id, tracking_code)
     )
@@ -1619,6 +1719,7 @@ async def has_subscription(tg_id: int) -> bool:
 
 async def create_tracking_link(code: str, title: str | None, created_by: int):
     """Создать или включить tracking-ссылку."""
+    code = code.strip().lower()
     return await db_execute(
         """
         INSERT INTO tracking_links (code, title, created_by, is_active)
@@ -1636,6 +1737,7 @@ async def create_tracking_link(code: str, title: str | None, created_by: int):
 
 async def get_tracking_link(code: str):
     """Получить tracking-ссылку по коду."""
+    code = code.strip().lower()
     return await db_execute(
         "SELECT * FROM tracking_links WHERE code = $1 LIMIT 1",
         (code,),
@@ -1657,6 +1759,7 @@ async def list_tracking_links():
 
 async def set_tracking_link_active(code: str, is_active: bool) -> bool:
     """Включить или отключить tracking-ссылку."""
+    code = code.strip().lower()
     result = await db_execute(
         """
         UPDATE tracking_links
@@ -1672,6 +1775,7 @@ async def set_tracking_link_active(code: str, is_active: bool) -> bool:
 
 async def record_tracking_link_click(code: str, tg_id: int, is_new_user: bool) -> bool:
     """Записать переход по активной tracking-ссылке."""
+    code = code.strip().lower()
     link = await get_tracking_link(code)
     if not link or not link['is_active']:
         return False
@@ -1698,6 +1802,7 @@ async def get_user_tracking_code(tg_id: int) -> str | None:
 
 async def get_tracking_link_stats(code: str):
     """Получить статистику tracking-ссылки."""
+    code = code.strip().lower()
     link = await get_tracking_link(code)
     if not link:
         return None
