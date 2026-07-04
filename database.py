@@ -158,6 +158,8 @@ async def run_migrations():
                 'payment_kind': {'type': 'TEXT', 'nullable': False, 'default': "'subscription'"},
                 'traffic_package_code': {'type': 'TEXT', 'nullable': True},
                 'tracking_code': {'type': 'TEXT', 'nullable': True},
+                'refund_requested_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'refund_status': {'type': 'TEXT', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
@@ -593,6 +595,8 @@ async def run_migrations():
                     payment_kind TEXT DEFAULT 'subscription',
                     traffic_package_code TEXT,
                     tracking_code TEXT,
+                    refund_requested_at TIMESTAMP,
+                    refund_status TEXT,
                     status TEXT DEFAULT 'pending'
                 )
             """)
@@ -724,6 +728,9 @@ async def run_migrations():
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS target_slot_number INT;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_kind TEXT DEFAULT 'subscription';",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS traffic_package_code TEXT;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tracking_code TEXT;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_requested_at TIMESTAMP;",
+                "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_status TEXT;",
             ]
 
             for query in alter_queries:
@@ -2046,6 +2053,96 @@ async def get_payment_by_invoice(invoice_id: str):
     )
 
 
+async def list_subscription_payments_for_refund(tg_id: int, limit: int = 30):
+    """Получить оплаченные покупки/продления подписок для выбора возврата."""
+    return await db_execute(
+        """
+        SELECT
+            p.id,
+            p.tg_id,
+            p.tariff_code,
+            p.amount,
+            p.provider,
+            p.invoice_id,
+            p.subscription_id,
+            p.payment_target,
+            p.target_slot_number,
+            p.status,
+            p.refund_requested_at,
+            p.refund_status,
+            p.created_at,
+            p.updated_at,
+            s.plan_kind,
+            s.type_index,
+            s.slot_number
+        FROM payments p
+        LEFT JOIN subscriptions s ON s.id = p.subscription_id
+        WHERE p.tg_id = $1
+          AND p.payment_kind = 'subscription'
+          AND p.status = 'paid'
+        ORDER BY p.updated_at DESC, p.created_at DESC, p.id DESC
+        LIMIT $2
+        """,
+        (tg_id, limit),
+        fetch_all=True,
+    )
+
+
+async def get_subscription_payment_for_refund(payment_id: int, tg_id: int):
+    """Получить конкретный оплаченный платёж подписки пользователя."""
+    return await db_execute(
+        """
+        SELECT
+            p.id,
+            p.tg_id,
+            p.tariff_code,
+            p.amount,
+            p.provider,
+            p.invoice_id,
+            p.subscription_id,
+            p.payment_target,
+            p.target_slot_number,
+            p.status,
+            p.refund_requested_at,
+            p.refund_status,
+            p.created_at,
+            p.updated_at,
+            s.plan_kind,
+            s.type_index,
+            s.slot_number
+        FROM payments p
+        LEFT JOIN subscriptions s ON s.id = p.subscription_id
+        WHERE p.id = $1
+          AND p.tg_id = $2
+          AND p.payment_kind = 'subscription'
+          AND p.status = 'paid'
+        LIMIT 1
+        """,
+        (payment_id, tg_id),
+        fetch_one=True,
+    )
+
+
+async def request_payment_refund(payment_id: int, tg_id: int) -> bool:
+    """Зафиксировать заявку на возврат по оплаченному платежу."""
+    result = await db_execute(
+        """
+        UPDATE payments
+        SET refund_requested_at = now(),
+            refund_status = 'requested',
+            updated_at = now()
+        WHERE id = $1
+          AND tg_id = $2
+          AND status = 'paid'
+          AND refund_requested_at IS NULL
+        RETURNING id
+        """,
+        (payment_id, tg_id),
+        fetch_one=True,
+    )
+    return result is not None
+
+
 async def create_traffic_purchase(subscription_id: int, package_code: str, traffic_bytes: int, amount: float, provider: str, invoice_id: str):
     """Создать запись покупки трафика."""
     return await db_execute(
@@ -2236,7 +2333,7 @@ async def apply_traffic_reset(subscription_id: int, remaining_paid_traffic_bytes
 async def update_payment_status(payment_id: int, status: str):
     """Обновить статус платежа"""
     await db_execute(
-        "UPDATE payments SET status = $1 WHERE id = $2",
+        "UPDATE payments SET status = $1, updated_at = now() WHERE id = $2",
         (status, payment_id)
     )
 
@@ -2244,7 +2341,7 @@ async def update_payment_status(payment_id: int, status: str):
 async def update_payment_status_by_invoice(invoice_id: str, status: str):
     """Обновить статус платежа по invoice_id"""
     await db_execute(
-        "UPDATE payments SET status = $1 WHERE invoice_id = $2",
+        "UPDATE payments SET status = $1, updated_at = now() WHERE invoice_id = $2",
         (status, invoice_id)
     )
 

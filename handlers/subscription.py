@@ -4,11 +4,13 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import database as db
 from config import (
+    ADMIN_ID,
     BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
@@ -21,7 +23,7 @@ from config import (
     TARIFFS,
 )
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
-from services.image_handler import edit_text_with_photo
+from services.image_handler import edit_text_with_photo, send_text_with_photo
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
     remnawave_delete_hwid_device,
@@ -40,6 +42,7 @@ from states import UserStates
 logger = logging.getLogger(__name__)
 
 router = Router()
+REFUND_WINDOW = timedelta(days=3)
 
 
 def _subscription_name(subscription) -> str:
@@ -81,6 +84,56 @@ def _format_traffic_gb(bytes_value: int | None) -> str:
 
 def _format_date(dt) -> str:
     return dt.strftime('%d.%m.%Y') if dt else 'неизвестно'
+
+
+def _format_datetime(dt) -> str:
+    return dt.strftime('%d.%m.%Y %H:%M') if dt else 'неизвестно'
+
+
+def _payment_action_text(payment) -> str:
+    return "Продление" if (payment.get("payment_target") or "new") == "renew" else "Покупка"
+
+
+def _payment_subscription_name(payment) -> str:
+    plan_kind = payment.get("plan_kind") or (TARIFFS.get(payment.get("tariff_code")) or {}).get("kind") or "regular"
+    type_index = payment.get("type_index") or payment.get("target_slot_number") or payment.get("slot_number")
+    label = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
+    return f"{label} #{type_index or '—'}"
+
+
+def _payment_paid_at(payment) -> datetime | None:
+    return payment.get("updated_at") or payment.get("created_at")
+
+
+def _refund_deadline(payment) -> datetime | None:
+    paid_at = _payment_paid_at(payment)
+    return paid_at + REFUND_WINDOW if paid_at else None
+
+
+def _refund_is_available(payment) -> bool:
+    deadline = _refund_deadline(payment)
+    return bool(deadline and datetime.utcnow() <= deadline and not payment.get("refund_requested_at"))
+
+
+def _refund_payment_button_text(payment) -> str:
+    tariff = TARIFFS.get(payment.get("tariff_code")) or {}
+    days = tariff.get("days")
+    date_text = _format_date(_payment_paid_at(payment))
+    status = "⏳ заявка отправлена" if payment.get("refund_requested_at") else ("✅ доступен" if _refund_is_available(payment) else "❌ поздно")
+    days_text = f" · {days} дн." if days else ""
+    return f"{_payment_action_text(payment)} · {_payment_subscription_name(payment)}{days_text} · {date_text} · {status}"
+
+
+def _refund_payment_details(payment) -> str:
+    tariff = TARIFFS.get(payment.get("tariff_code")) or {}
+    deadline = _refund_deadline(payment)
+    return (
+        f"{_payment_action_text(payment)}: <b>{_html(_payment_subscription_name(payment))}</b>\n"
+        f"Тариф: <b>{_html(tariff.get('title') or payment.get('tariff_code'))}</b>\n"
+        f"Сумма: <b>{float(payment.get('amount') or 0):.2f} ₽</b>\n"
+        f"Оплачено: <b>{_format_datetime(_payment_paid_at(payment))}</b>\n"
+        f"Возврат доступен до: <b>{_format_datetime(deadline)}</b>"
+    )
 
 
 def _format_device_date(value: str | None) -> str:
@@ -246,6 +299,7 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
         keyboard.append([InlineKeyboardButton(text="Обычные подписки", callback_data="my_subscriptions_regular", style="primary")])
     if has_bypass:
         keyboard.append([InlineKeyboardButton(text="Подписки с антиглушилкой", callback_data="my_subscriptions_bypass", style="primary")])
+    keyboard.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")])
     keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
 
     await state.clear()
@@ -281,6 +335,40 @@ async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str
         f"🔐 <b>{title}</b>\n\nВыбери подписку:",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
+    )
+
+
+async def _send_refund_payment_choice(message: Message):
+    tg_id = message.from_user.id
+    payments = await db.list_subscription_payments_for_refund(tg_id)
+
+    if not payments:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        ])
+        await send_text_with_photo(
+            message,
+            "↩️ <b>Оформить возврат</b>\n\n"
+            "У тебя пока нет оплаченных покупок или продлений подписки, по которым можно выбрать возврат.",
+            kb,
+            "Возврат",
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(text=_refund_payment_button_text(payment), callback_data=f"refund_payment_{payment['id']}", style="primary")]
+        for payment in payments
+    ]
+    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+
+    await send_text_with_photo(
+        message,
+        "↩️ <b>Оформить возврат</b>\n\n"
+        "Выбери покупку или продление подписки, по которому хочешь оформить возврат.\n\n"
+        "Возврат можно оформить только в течение <b>3 суток</b> после покупки или последнего продления.",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Возврат",
     )
 
 
@@ -536,6 +624,68 @@ async def process_buy_subscription(callback: CallbackQuery, state: FSMContext):
 async def process_my_subscriptions(callback: CallbackQuery, state: FSMContext):
     """Показать выбор типа подписок пользователя."""
     await _show_my_subscriptions_type_choice(callback, state)
+
+
+@router.message(Command("refund"))
+async def process_refund_command(message: Message, state: FSMContext):
+    """Показать покупки, по которым пользователь может запросить возврат."""
+    tg_id = message.from_user.id
+    logging.info(f"User {tg_id} opened refund flow")
+    await state.clear()
+    await _send_refund_payment_choice(message)
+
+
+@router.callback_query(F.data.startswith("refund_payment_"))
+async def process_refund_payment(callback: CallbackQuery):
+    """Оформить заявку на возврат по выбранному платежу."""
+    tg_id = callback.from_user.id
+    payment_id = int(callback.data.split("_")[-1])
+    payment = await db.get_subscription_payment_for_refund(payment_id, tg_id)
+
+    if not payment:
+        await callback.answer("Покупка не найдена", show_alert=True)
+        return
+
+    if payment.get("refund_requested_at"):
+        await callback.answer("Заявка на возврат по этой покупке уже отправлена.", show_alert=True)
+        return
+
+    if not _refund_is_available(payment):
+        await callback.answer(
+            "Возврат за эту подписку сделать нельзя, так как после покупки / продления прошло 3 суток.",
+            show_alert=True,
+        )
+        return
+
+    if not await db.request_payment_refund(payment_id, tg_id):
+        await callback.answer("Не удалось оформить заявку. Попробуй ещё раз.", show_alert=True)
+        return
+
+    details = _refund_payment_details(payment)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        "✅ <b>Заявка на возврат отправлена</b>\n\n"
+        f"{details}\n\n"
+        "Мы проверим покупку и свяжемся с тобой по результату.",
+        kb,
+        "Возврат",
+    )
+
+    if ADMIN_ID:
+        try:
+            await callback.bot.send_message(
+                ADMIN_ID,
+                "↩️ <b>Новая заявка на возврат</b>\n\n"
+                f"Пользователь: <code>{tg_id}</code>\n"
+                f"{details}\n"
+                f"Платёж: <code>{_html(payment.get('invoice_id'))}</code>",
+            )
+        except Exception as exc:
+            logger.warning("Failed to notify admin about refund request %s: %s", payment_id, exc)
 
 
 @router.callback_query(F.data.in_({"my_subscriptions_regular", "my_subscriptions_bypass"}))

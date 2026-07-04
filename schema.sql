@@ -162,6 +162,8 @@ CREATE TABLE IF NOT EXISTS payments (
     payment_kind TEXT DEFAULT 'subscription',
     traffic_package_code TEXT,
     tracking_code TEXT,
+    refund_requested_at TIMESTAMP,
+    refund_status TEXT,
     status TEXT DEFAULT 'pending'
 );
 

@@ -11,7 +11,7 @@ from config import ADMIN_ID, BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
 
 # Импортируем все роутеры обработчиков
-from handlers import start, callbacks, subscription, gift, referral, promo, admin, partnership
+from handlers import start, callbacks, subscription, gift, referral, promo, admin, partnership, smart_assistant
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 from services.subscription_notifications import check_and_send_notifications
@@ -58,6 +58,7 @@ def setup_handlers():
     dp.include_router(promo.router)
     dp.include_router(partnership.router)
     dp.include_router(admin.router)
+    dp.include_router(smart_assistant.router)
     logger.info("All handlers registered")
 
 
@@ -67,12 +68,14 @@ async def setup_menu_button():
         # Устанавливаем команду
         commands = [
             BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="refund", description="Оформить возврат"),
         ]
         await bot.set_my_commands(commands)
         if ADMIN_ID:
             await bot.set_my_commands(
                 [
                     BotCommand(command="start", description="Главное меню"),
+                    BotCommand(command="refund", description="Оформить возврат"),
                     BotCommand(command="send", description="Сообщение пользователю по ID"),
                     BotCommand(command="all_sms", description="Рассылка всем"),
                     BotCommand(command="not_sub_sms", description="Рассылка без подписки"),
