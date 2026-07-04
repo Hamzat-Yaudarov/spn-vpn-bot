@@ -2053,72 +2053,55 @@ async def get_payment_by_invoice(invoice_id: str):
     )
 
 
-async def list_subscription_payments_for_refund(tg_id: int, limit: int = 30):
-    """Получить оплаченные покупки/продления подписок для выбора возврата."""
+async def list_active_subscriptions_for_refund(tg_id: int):
+    """Получить активные подписки, по которым пользователь может выбрать возврат."""
     return await db_execute(
         """
-        SELECT
-            p.id,
-            p.tg_id,
-            p.tariff_code,
-            p.amount,
-            p.provider,
-            p.invoice_id,
-            p.subscription_id,
-            p.payment_target,
-            p.target_slot_number,
-            p.status,
-            p.refund_requested_at,
-            p.refund_status,
-            p.created_at,
-            p.updated_at,
-            s.plan_kind,
-            s.type_index,
-            s.slot_number
-        FROM payments p
-        LEFT JOIN subscriptions s ON s.id = p.subscription_id
-        WHERE p.tg_id = $1
-          AND p.payment_kind = 'subscription'
-          AND p.status = 'paid'
-        ORDER BY p.updated_at DESC, p.created_at DESC, p.id DESC
-        LIMIT $2
+        SELECT *
+        FROM subscriptions
+        WHERE tg_id = $1
+          AND generation = 'v2'
+          AND is_visible = TRUE
+          AND is_renewable = TRUE
+          AND subscription_until IS NOT NULL
+          AND subscription_until > now() AT TIME ZONE 'UTC'
+        ORDER BY plan_kind ASC, type_index ASC, id ASC
         """,
-        (tg_id, limit),
+        (tg_id,),
         fetch_all=True,
     )
 
 
-async def get_subscription_payment_for_refund(payment_id: int, tg_id: int):
-    """Получить конкретный оплаченный платёж подписки пользователя."""
+async def get_latest_subscription_payment_for_refund(subscription_id: int, tg_id: int):
+    """Получить последнюю оплату/продление конкретной подписки."""
+    subscription = await get_subscription_by_id(subscription_id, tg_id)
+    if not subscription:
+        return None
+
+    plan_kind = subscription.get("plan_kind") or "regular"
+    type_index = subscription.get("type_index") or subscription.get("slot_number")
+    tariff_like = f"{plan_kind}_%"
+
     return await db_execute(
         """
-        SELECT
-            p.id,
-            p.tg_id,
-            p.tariff_code,
-            p.amount,
-            p.provider,
-            p.invoice_id,
-            p.subscription_id,
-            p.payment_target,
-            p.target_slot_number,
-            p.status,
-            p.refund_requested_at,
-            p.refund_status,
-            p.created_at,
-            p.updated_at,
-            s.plan_kind,
-            s.type_index,
-            s.slot_number
-        FROM payments p
-        LEFT JOIN subscriptions s ON s.id = p.subscription_id
-        WHERE p.id = $1
-          AND p.tg_id = $2
-          AND p.payment_kind = 'subscription'
-          AND p.status = 'paid'
+        SELECT *
+        FROM payments
+        WHERE tg_id = $1
+          AND payment_kind = 'subscription'
+          AND status = 'paid'
+          AND (
+                subscription_id = $2
+             OR (
+                    subscription_id IS NULL
+                AND payment_target = 'new'
+                AND target_slot_number = $3
+                AND tariff_code LIKE $4
+             )
+          )
+        ORDER BY updated_at DESC, created_at DESC, id DESC
         LIMIT 1
         """,
-        (payment_id, tg_id),
+        (tg_id, subscription_id, type_index, tariff_like),
         fetch_one=True,
     )
 
@@ -2140,6 +2123,48 @@ async def request_payment_refund(payment_id: int, tg_id: int) -> bool:
         (payment_id, tg_id),
         fetch_one=True,
     )
+    return result is not None
+
+
+async def link_payment_to_subscription(invoice_id: str, subscription_id: int) -> None:
+    """Привязать платёж к фактически созданной подписке."""
+    await db_execute(
+        """
+        UPDATE payments
+        SET subscription_id = $2,
+            updated_at = now()
+        WHERE invoice_id = $1
+          AND subscription_id IS NULL
+        """,
+        (invoice_id, subscription_id),
+    )
+
+
+async def deactivate_subscription_for_refund(subscription_id: int, tg_id: int, expired_at) -> bool:
+    """Деактивировать подписку после подтверждения заявки на возврат."""
+    result = await db_execute(
+        """
+        UPDATE subscriptions
+        SET subscription_until = $3,
+            is_active = FALSE,
+            is_visible = FALSE,
+            is_renewable = FALSE,
+            next_notification_time = NULL,
+            notification_type = NULL,
+            updated_at = now()
+        WHERE id = $1
+          AND tg_id = $2
+          AND generation = 'v2'
+        RETURNING id
+        """,
+        (subscription_id, tg_id, expired_at),
+        fetch_one=True,
+    )
+    if result:
+        await db_execute(
+            "DELETE FROM notification_state WHERE tg_id = $1 AND subscription_id = $2",
+            (tg_id, subscription_id),
+        )
     return result is not None
 
 

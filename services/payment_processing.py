@@ -291,6 +291,7 @@ async def process_paid_payment(
                 new_until,
                 squad_uuid,
             )
+            await db.link_payment_to_subscription(invoice_id, subscription["id"])
             await db.db_execute(
                 """
                 UPDATE subscriptions

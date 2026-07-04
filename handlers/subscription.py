@@ -115,13 +115,8 @@ def _refund_is_available(payment) -> bool:
     return bool(deadline and datetime.utcnow() <= deadline and not payment.get("refund_requested_at"))
 
 
-def _refund_payment_button_text(payment) -> str:
-    tariff = TARIFFS.get(payment.get("tariff_code")) or {}
-    days = tariff.get("days")
-    date_text = _format_date(_payment_paid_at(payment))
-    status = "⏳ заявка отправлена" if payment.get("refund_requested_at") else ("✅ доступен" if _refund_is_available(payment) else "❌ поздно")
-    days_text = f" · {days} дн." if days else ""
-    return f"{_payment_action_text(payment)} · {_payment_subscription_name(payment)}{days_text} · {date_text} · {status}"
+def _refund_subscription_button_text(subscription) -> str:
+    return f"{_subscription_name(subscription)} · до {_format_date(subscription.get('subscription_until'))}"
 
 
 def _refund_payment_details(payment) -> str:
@@ -338,11 +333,11 @@ async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str
     )
 
 
-async def _send_refund_payment_choice(message: Message):
+async def _send_refund_subscription_choice(message: Message):
     tg_id = message.from_user.id
-    payments = await db.list_subscription_payments_for_refund(tg_id)
+    subscriptions = await db.list_active_subscriptions_for_refund(tg_id)
 
-    if not payments:
+    if not subscriptions:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
@@ -350,22 +345,22 @@ async def _send_refund_payment_choice(message: Message):
         await send_text_with_photo(
             message,
             "↩️ <b>Оформить возврат</b>\n\n"
-            "У тебя пока нет оплаченных покупок или продлений подписки, по которым можно выбрать возврат.",
+            "У тебя пока нет активных подписок, по которым можно оформить возврат.",
             kb,
             "Возврат",
         )
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=_refund_payment_button_text(payment), callback_data=f"refund_payment_{payment['id']}", style="primary")]
-        for payment in payments
+        [InlineKeyboardButton(text=_refund_subscription_button_text(subscription), callback_data=f"refund_subscription_{subscription['id']}", style="primary")]
+        for subscription in subscriptions
     ]
     keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
 
     await send_text_with_photo(
         message,
         "↩️ <b>Оформить возврат</b>\n\n"
-        "Выбери покупку или продление подписки, по которому хочешь оформить возврат.\n\n"
+        "Выбери подписку, за которую хочешь оформить возврат.\n\n"
         "Возврат можно оформить только в течение <b>3 суток</b> после покупки или последнего продления.",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Возврат",
@@ -628,26 +623,38 @@ async def process_my_subscriptions(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Command("refund"))
 async def process_refund_command(message: Message, state: FSMContext):
-    """Показать покупки, по которым пользователь может запросить возврат."""
+    """Показать подписки, по которым пользователь может запросить возврат."""
     tg_id = message.from_user.id
     logging.info(f"User {tg_id} opened refund flow")
     await state.clear()
-    await _send_refund_payment_choice(message)
+    await _send_refund_subscription_choice(message)
 
 
-@router.callback_query(F.data.startswith("refund_payment_"))
-async def process_refund_payment(callback: CallbackQuery):
-    """Оформить заявку на возврат по выбранному платежу."""
+@router.callback_query(F.data.startswith("refund_subscription_"))
+async def process_refund_subscription(callback: CallbackQuery):
+    """Показать подтверждение возврата по выбранной подписке."""
     tg_id = callback.from_user.id
-    payment_id = int(callback.data.split("_")[-1])
-    payment = await db.get_subscription_payment_for_refund(payment_id, tg_id)
+    subscription_id = int(callback.data.split("_")[-1])
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
 
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or not subscription.get("subscription_until")
+        or subscription["subscription_until"] <= datetime.utcnow()
+    ):
+        await callback.answer("Подписка не найдена или уже не активна", show_alert=True)
+        return
+
+    payment = await db.get_latest_subscription_payment_for_refund(subscription_id, tg_id)
     if not payment:
-        await callback.answer("Покупка не найдена", show_alert=True)
+        await callback.answer("По этой подписке не найдена последняя оплата", show_alert=True)
         return
 
     if payment.get("refund_requested_at"):
-        await callback.answer("Заявка на возврат по этой покупке уже отправлена.", show_alert=True)
+        await callback.answer("Заявка на возврат по этой подписке уже отправлена.", show_alert=True)
         return
 
     if not _refund_is_available(payment):
@@ -657,35 +664,131 @@ async def process_refund_payment(callback: CallbackQuery):
         )
         return
 
-    if not await db.request_payment_refund(payment_id, tg_id):
-        await callback.answer("Не удалось оформить заявку. Попробуй ещё раз.", show_alert=True)
-        return
-
-    details = _refund_payment_details(payment)
+    details = _refund_payment_details({
+        **payment,
+        "plan_kind": subscription.get("plan_kind"),
+        "type_index": subscription.get("type_index"),
+        "slot_number": subscription.get("slot_number"),
+    })
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="✅ Оформить возврат", callback_data=f"refund_confirm_{subscription_id}_{payment['id']}", style="danger")],
+        [InlineKeyboardButton(text="Отмена", callback_data="back_to_menu", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
-        "✅ <b>Заявка на возврат отправлена</b>\n\n"
+        "↩️ <b>Подтверждение возврата</b>\n\n"
+        f"Ты точно хочешь оформить возврат за <b>{_html(_subscription_name(subscription))}</b> "
+        f"на сумму <b>{float(payment.get('amount') or 0):.2f} ₽</b>?\n\n"
         f"{details}\n\n"
-        "Мы проверим покупку и свяжемся с тобой по результату.",
+        "После подтверждения подписка будет деактивирована.",
         kb,
         "Возврат",
     )
 
-    if ADMIN_ID:
-        try:
-            await callback.bot.send_message(
-                ADMIN_ID,
-                "↩️ <b>Новая заявка на возврат</b>\n\n"
-                f"Пользователь: <code>{tg_id}</code>\n"
-                f"{details}\n"
-                f"Платёж: <code>{_html(payment.get('invoice_id'))}</code>",
+
+@router.callback_query(F.data.startswith("refund_confirm_"))
+async def process_refund_confirm(callback: CallbackQuery):
+    """Подтвердить возврат и деактивировать подписку."""
+    tg_id = callback.from_user.id
+    parts = callback.data.split("_")
+    subscription_id = int(parts[-2])
+    payment_id = int(parts[-1])
+
+    if not await db.acquire_user_lock(tg_id):
+        await callback.answer("Подписка сейчас обрабатывается, попробуй позже", show_alert=True)
+        return
+
+    try:
+        subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+        if (
+            not subscription
+            or subscription.get("generation") != "v2"
+            or not subscription.get("is_visible")
+            or not subscription.get("is_renewable")
+            or not subscription.get("subscription_until")
+            or subscription["subscription_until"] <= datetime.utcnow()
+        ):
+            await callback.answer("Подписка не найдена или уже не активна", show_alert=True)
+            return
+
+        payment = await db.get_latest_subscription_payment_for_refund(subscription_id, tg_id)
+        if not payment or int(payment["id"]) != payment_id:
+            await callback.answer("Последняя оплата подписки изменилась. Открой возврат заново.", show_alert=True)
+            return
+
+        if payment.get("refund_requested_at"):
+            await callback.answer("Заявка на возврат по этой подписке уже отправлена.", show_alert=True)
+            return
+
+        if not _refund_is_available(payment):
+            await callback.answer(
+                "Возврат за эту подписку сделать нельзя, так как после покупки / продления прошло 3 суток.",
+                show_alert=True,
             )
-        except Exception as exc:
-            logger.warning("Failed to notify admin about refund request %s: %s", payment_id, exc)
+            return
+
+        if not subscription.get("remnawave_uuid"):
+            await callback.answer("У подписки нет активного ключа для деактивации", show_alert=True)
+            return
+
+        expired_at = datetime.utcnow() - timedelta(seconds=1)
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            if not await remnawave_set_subscription_expiry(session, subscription["remnawave_uuid"], expired_at):
+                await callback.answer("Не удалось деактивировать подписку. Попробуй позже.", show_alert=True)
+                return
+
+        if not await db.deactivate_subscription_for_refund(subscription_id, tg_id, expired_at):
+            await callback.answer("Не удалось деактивировать подписку в базе. Напиши в поддержку.", show_alert=True)
+            return
+
+        if not await db.request_payment_refund(payment_id, tg_id):
+            await callback.answer("Не удалось оформить заявку. Попробуй ещё раз.", show_alert=True)
+            return
+
+        payment_with_subscription = {
+            **payment,
+            "plan_kind": subscription.get("plan_kind"),
+            "type_index": subscription.get("type_index"),
+            "slot_number": subscription.get("slot_number"),
+        }
+        details = _refund_payment_details(payment_with_subscription)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        ])
+        await edit_text_with_photo(
+            callback,
+            "✅ <b>Заявка на возврат отправлена</b>\n\n"
+            f"{details}\n\n"
+            "Подписка деактивирована. Возврат средств будет обработан вручную после проверки.",
+            kb,
+            "Возврат",
+        )
+
+        if ADMIN_ID:
+            try:
+                await callback.bot.send_message(
+                    ADMIN_ID,
+                    "↩️ <b>Новая заявка на возврат</b>\n\n"
+                    f"Пользователь: <code>{tg_id}</code>\n"
+                    f"Подписка: <b>{_html(_subscription_name(subscription))}</b>\n"
+                    f"{details}\n"
+                    f"Payment ID: <code>{payment_id}</code>\n"
+                    f"Платёж: <code>{_html(payment.get('invoice_id'))}</code>\n"
+                    "Статус: подписка деактивирована, деньги нужно вернуть вручную.",
+                )
+            except Exception as exc:
+                logger.warning("Failed to notify admin about refund request %s: %s", payment_id, exc)
+    finally:
+        await db.release_user_lock(tg_id)
+
+
+@router.callback_query(F.data.startswith("refund_payment_"))
+async def process_legacy_refund_payment(callback: CallbackQuery):
+    """Старый callback больше не используется: просим открыть новый сценарий возврата."""
+    await callback.answer("Теперь возврат оформляется через выбор подписки. Отправь /refund ещё раз.", show_alert=True)
 
 
 @router.callback_query(F.data.in_({"my_subscriptions_regular", "my_subscriptions_bypass"}))
