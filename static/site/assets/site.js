@@ -10,6 +10,7 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
+const multiline = (value) => esc(value).replace(/\n/g, "<br>");
 const rubles = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
 const formatDate = (value, time = false) => value ? new Date(value).toLocaleString("ru-RU", time ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "long" }) : "—";
 const happBridgeLink = (url) => `${window.location.origin}/open-happ?url=${encodeURIComponent(url)}`;
@@ -263,11 +264,12 @@ async function pollPendingPayment() {
       const result = await api(`/payments/${encodeURIComponent(invoiceId)}`);
       if (result.status === "paid") {
         localStorage.removeItem("spnPendingPayment");
+        const summary = result.summary || { title: "Оплата прошла", message: "Покупка активирована и уже отображается в кабинете." };
         banner.className = "payment-banner success";
-        banner.innerHTML = `<div><b>✓ Оплата прошла</b><p>Подписка или пакет уже активированы.</p></div>`;
+        banner.innerHTML = `<div><b>✓ ${esc(summary.title)}</b><p>${multiline(summary.message || "Покупка активирована.")}</p></div>`;
         switchAccountSection("overview");
         await loadAccountData();
-        setTimeout(() => banner.classList.add("hidden"), 7000);
+        banner.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
       if (result.status === "canceled") {

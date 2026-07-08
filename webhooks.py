@@ -23,6 +23,7 @@ import database as db
 from services.cryptobot import create_cryptobot_invoice
 from services.payment_processing import process_paid_payment
 from services.device_addons import available_device_addon_packages, current_device_limit, device_count_text, effective_device_limit
+from services.payment_summary import build_payment_success_summary
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
     remnawave_delete_hwid_device,
@@ -589,7 +590,8 @@ async def miniapp_payment_status(invoice_id: str, request: Request):
     payment = await db.get_payment_by_invoice(invoice_id)
     if not payment or payment["tg_id"] != int(user["id"]):
         raise HTTPException(status_code=404, detail="Payment not found")
-    return JSONResponse({"invoice_id": invoice_id, "status": payment["status"]})
+    summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None
+    return JSONResponse({"invoice_id": invoice_id, "status": payment["status"], "summary": summary})
 
 
 async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:

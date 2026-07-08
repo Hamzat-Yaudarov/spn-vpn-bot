@@ -48,6 +48,8 @@ body.view-home-active .hero { display: flex; }
 .card { position: relative; overflow: hidden; padding: 16px; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(145deg, rgba(255,244,204,.025), rgba(255,255,255,0)), var(--panel); box-shadow: 0 10px 30px rgba(0,0,0,.33), inset 0 1px 0 rgba(255,246,214,.08); backdrop-filter: blur(18px); }
 .card::before { display: none; }
 .card.strong { background: linear-gradient(135deg, rgba(216,169,71,.2), rgba(90,184,255,.1), rgba(24,199,154,.08)), var(--panel-strong); border-color: rgba(240, 207, 122, .38); }
+.success-card { margin-bottom: 14px; border-color: rgba(24,199,154,.44); background: linear-gradient(135deg, rgba(24,199,154,.22), rgba(90,184,255,.08)), var(--panel-strong); }
+.success-card .button { margin-top: 12px; }
 .hero-card { background: linear-gradient(135deg, rgba(38, 78, 136, .42), rgba(33, 119, 96, .18), rgba(172, 109, 38, .2)), var(--panel-strong); }
 .info-card { background: linear-gradient(135deg, rgba(90,184,255,.1), rgba(255,255,255,.02)), var(--panel); border-color: rgba(90,184,255,.22); }
 .home-panel { position: relative; overflow: hidden; padding: 16px 4px 8px; border-bottom: 1px solid rgba(240,207,122,.2); }

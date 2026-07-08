@@ -327,13 +327,23 @@ async def process_paid_payment(
             await db.update_payment_status_by_invoice(invoice_id, "paid")
 
             action_text = "активирована" if payment_target == "new" else "продлена"
+            traffic_text = (
+                f"\nТрафик антиглушилки: <b>{traffic_limit_bytes / GB_BYTES:.1f} ГБ</b>"
+                if plan_kind == "bypass"
+                else ""
+            )
             text = (
                 f"✅ <b>{_subscription_display_name(subscription)} {action_text}!</b>\n\n"
-                f"Тариф: {tariff.get('title', tariff_code)} ({days} дней)\n"
+                f"Тариф: <b>{tariff.get('title', tariff_code)}</b>\n"
+                f"Срок действия: <b>до {new_until.strftime('%d.%m.%Y')}</b>\n"
+                f"Устройства: <b>до {device_count_text(device_limit)}</b>"
+                f"{traffic_text}\n\n"
+                "Ключ уже готов — можно подключаться.\n\n"
                 f"<b>Ваш ключ:</b>\n{sub_url}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+                [InlineKeyboardButton(text="🔗 Открыть эту подписку", callback_data=f"subscription_view_{subscription['id']}", style="primary")],
                 [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription['id']}", style="primary")],
                 [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
             ])

@@ -24,6 +24,7 @@ const state = {
   buyTariffCode: null,
   pendingPayment: null,
   activePayment: null,
+  paymentSuccess: null,
   paymentPollTimer: null,
   currentView: "home",
   devices: {},
@@ -63,6 +64,7 @@ function priceHtml(item) {
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
+function multilineHtml(value) { return escapeHtml(value).replace(/\n/g, "<br>"); }
 function deviceWord(count) { return count === 1 ? "устройство" : [2, 3, 4].includes(count) ? "устройства" : "устройств"; }
 function deviceLimitText(s) { const limit = Number(s.devices?.limit || (s.plan_kind === "bypass" ? 3 : 5)); return `${limit} ${deviceWord(limit)}`; }
 function devicePackageText(pkg) { return `+${pkg.count} ${deviceWord(pkg.count)} · ${rub(pkg.price)}${pkg.discount_percent ? ` · скидка ${pkg.discount_percent}%` : ""}`; }
@@ -225,7 +227,13 @@ function stopPaymentPolling() {
 function startPaymentPolling(payment) {
   stopPaymentPolling();
   state.activePayment = { ...payment, attempts: 0 };
-  showToast("После оплаты ключ появится автоматически.");
+  state.paymentSuccess = null;
+  const waitingText = payment.type === "traffic"
+    ? "После оплаты ГБ добавятся автоматически."
+    : payment.type === "devices"
+      ? "После оплаты лимит устройств обновится автоматически."
+      : "После оплаты ключ появится автоматически.";
+  showToast(waitingText);
   state.paymentPollTimer = setInterval(checkActivePayment, 3000);
 }
 
@@ -241,6 +249,12 @@ async function checkActivePayment() {
       state.activePayment = null;
       state.pendingPayment = null;
       await reloadData();
+      state.paymentSuccess = status.summary || {
+        title: "Оплата прошла",
+        message: "Покупка активирована и уже отображается в подписках.",
+        toast: "Оплата прошла. Покупка активирована.",
+        subscription_id: payment.subscription_id || null,
+      };
       if (payment.type === "subscription" && payment.payment_target === "renew" && payment.subscription_id) {
         state.selectedSubId = payment.subscription_id;
         state.keysMode = "detail";
@@ -253,7 +267,7 @@ async function checkActivePayment() {
       }
       state.buyMode = "plan";
       switchView("subs", { preserve: true });
-      showToast(payment.type === "devices" ? "Оплата получена. Лимит устройств обновлён." : "Оплата получена. Ключ обновлён.");
+      showToast(state.paymentSuccess.toast || "Оплата прошла. Покупка активирована.");
       return;
     }
   } catch (e) {
@@ -310,18 +324,19 @@ function renderHome() {
 
 function renderKeys() {
   const container = el("view-subs");
+  const success = successBannerHtml();
   if (!state.subs.length) {
-    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
+    container.innerHTML = `${success}<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
     return;
   }
 
   if (state.keysMode === "list") {
-    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ для управления.");
+    container.innerHTML = success + keysListHtml("Мои ключи", "Выберите ключ для управления.");
     return;
   }
 
   if (state.keysMode === "renew-list") {
-    container.innerHTML = keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
+    container.innerHTML = success + keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
     return;
   }
 
@@ -340,6 +355,13 @@ function renderKeys() {
   if (state.keysMode === "traffic-payment") container.innerHTML = paymentHtml("ГБ для " + subTitle(sub));
   if (state.keysMode === "devices-payment") container.innerHTML = paymentHtml("Устройства для " + subTitle(sub));
   if (state.keysMode === "renew-payment") container.innerHTML = paymentHtml("Продление " + subTitle(sub));
+  if (success && !container.innerHTML.startsWith(success)) container.innerHTML = success + container.innerHTML;
+}
+
+function successBannerHtml() {
+  const summary = state.paymentSuccess;
+  if (!summary) return "";
+  return `<div class="card success-card"><p class="step">Готово</p><p class="title">✅ ${escapeHtml(summary.title || "Оплата прошла")}</p><p class="muted">${multilineHtml(summary.message || "Покупка активирована.")}</p>${summary.subscription_id ? `<button class="button green" onclick="openSubDetail(${Number(summary.subscription_id)})">Открыть подписку</button>` : ""}</div>`;
 }
 
 function keysListHtml(title, subtitle, action = "detail") {

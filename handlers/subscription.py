@@ -30,6 +30,7 @@ from services.device_addons import (
     effective_device_limit,
 )
 from services.image_handler import edit_text_with_photo, send_text_with_photo
+from services.payment_summary import build_payment_success_summary
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
     remnawave_delete_hwid_device,
@@ -1314,6 +1315,27 @@ async def _create_device_addon_payment(callback: CallbackQuery, state: FSMContex
     await state.clear()
 
 
+async def _show_checked_payment_success(callback: CallbackQuery, invoice_id: str):
+    payment = await db.get_payment_by_invoice(invoice_id)
+    summary = await build_payment_success_summary(payment)
+    subscription_id = summary.get("subscription_id")
+    keyboard = []
+    if subscription_id:
+        keyboard.append([InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")])
+    keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
+    keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")])
+
+    await callback.answer(summary.get("toast") or "✅ Оплата прошла!", show_alert=True)
+    await edit_text_with_photo(
+        callback,
+        f"✅ <b>{_html(summary.get('title'))}</b>\n\n"
+        f"{_html(summary.get('message'))}\n\n"
+        "Покупка уже активирована и отображается в твоих подписках.",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Оплати",
+    )
+
+
 @router.callback_query(F.data == "pay_devices_cryptobot")
 async def process_pay_devices_cryptobot(callback: CallbackQuery, state: FSMContext):
     await _create_device_addon_payment(callback, state, "cryptobot")
@@ -1713,14 +1735,20 @@ async def process_check_payment(callback: CallbackQuery):
             payment = await get_payment_status(invoice_id)
             if payment and payment.get("status") == "succeeded":
                 success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
-                await callback.answer("✅ Оплата подтверждена!" if success else "Ошибка при активации подписки", show_alert=True)
+                if success:
+                    await _show_checked_payment_success(callback, invoice_id)
+                else:
+                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напиши в поддержку.", show_alert=True)
             else:
                 await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
         elif provider == "cryptobot":
             invoice = await get_invoice_status(invoice_id)
             if invoice and invoice.get("status") == "paid":
                 success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
-                await callback.answer("✅ Оплата подтверждена!" if success else "Ошибка при активации подписки", show_alert=True)
+                if success:
+                    await _show_checked_payment_success(callback, invoice_id)
+                else:
+                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напиши в поддержку.", show_alert=True)
             else:
                 await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
     except Exception as e:

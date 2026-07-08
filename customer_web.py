@@ -29,6 +29,7 @@ from config import (
 )
 from services.discounts import calculate_discounted_price
 from services.device_addons import available_device_addon_packages, current_device_limit, effective_device_limit
+from services.payment_summary import build_payment_success_summary
 from services.payment_processing import process_paid_payment
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.subscription_sync import reconcile_subscription_expiry
@@ -555,4 +556,5 @@ async def website_payment_status(invoice_id: str, account=Depends(require_web_ac
             await db.update_payment_status_by_invoice(invoice_id, "canceled")
         payment = await db.get_payment_by_invoice(invoice_id)
 
-    return {"invoice_id": invoice_id, "status": payment["status"]}
+    summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None
+    return {"invoice_id": invoice_id, "status": payment["status"], "summary": summary}
