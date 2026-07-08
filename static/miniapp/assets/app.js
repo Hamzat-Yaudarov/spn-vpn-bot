@@ -24,7 +24,7 @@ const state = {
   buyTariffCode: null,
   pendingPayment: null,
   activePayment: null,
-  paymentSuccess: null,
+  paymentResult: null,
   paymentPollTimer: null,
   currentView: "home",
   devices: {},
@@ -227,7 +227,7 @@ function stopPaymentPolling() {
 function startPaymentPolling(payment) {
   stopPaymentPolling();
   state.activePayment = { ...payment, attempts: 0 };
-  state.paymentSuccess = null;
+  state.paymentResult = null;
   const waitingText = payment.type === "traffic"
     ? "После оплаты ГБ добавятся автоматически."
     : payment.type === "devices"
@@ -249,25 +249,16 @@ async function checkActivePayment() {
       state.activePayment = null;
       state.pendingPayment = null;
       await reloadData();
-      state.paymentSuccess = status.summary || {
+      state.paymentResult = status.summary || {
         title: "Оплата прошла",
         message: "Покупка активирована и уже отображается в подписках.",
         toast: "Оплата прошла. Покупка активирована.",
         subscription_id: payment.subscription_id || null,
       };
-      if (payment.type === "subscription" && payment.payment_target === "renew" && payment.subscription_id) {
-        state.selectedSubId = payment.subscription_id;
-        state.keysMode = "detail";
-      } else if ((payment.type === "traffic" || payment.type === "devices") && payment.subscription_id) {
-        state.selectedSubId = payment.subscription_id;
-        state.keysMode = "detail";
-      } else {
-        state.selectedSubId = null;
-        state.keysMode = "list";
-      }
+      state.selectedSubId = null;
+      state.keysMode = "list";
       state.buyMode = "plan";
-      switchView("subs", { preserve: true });
-      showToast(state.paymentSuccess.toast || "Оплата прошла. Покупка активирована.");
+      switchView("payment-result", { preserve: true });
       return;
     }
   } catch (e) {
@@ -287,6 +278,7 @@ function render() {
   renderBuy();
   renderReferral();
   renderHelp();
+  renderPaymentResult();
 }
 
 function renderHome() {
@@ -324,19 +316,18 @@ function renderHome() {
 
 function renderKeys() {
   const container = el("view-subs");
-  const success = successBannerHtml();
   if (!state.subs.length) {
-    container.innerHTML = `${success}<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
+    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
     return;
   }
 
   if (state.keysMode === "list") {
-    container.innerHTML = success + keysListHtml("Мои ключи", "Выберите ключ для управления.");
+    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ для управления.");
     return;
   }
 
   if (state.keysMode === "renew-list") {
-    container.innerHTML = success + keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
+    container.innerHTML = keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
     return;
   }
 
@@ -355,13 +346,19 @@ function renderKeys() {
   if (state.keysMode === "traffic-payment") container.innerHTML = paymentHtml("ГБ для " + subTitle(sub));
   if (state.keysMode === "devices-payment") container.innerHTML = paymentHtml("Устройства для " + subTitle(sub));
   if (state.keysMode === "renew-payment") container.innerHTML = paymentHtml("Продление " + subTitle(sub));
-  if (success && !container.innerHTML.startsWith(success)) container.innerHTML = success + container.innerHTML;
 }
 
-function successBannerHtml() {
-  const summary = state.paymentSuccess;
-  if (!summary) return "";
-  return `<div class="card success-card"><p class="step">Готово</p><p class="title">✅ ${escapeHtml(summary.title || "Оплата прошла")}</p><p class="muted">${multilineHtml(summary.message || "Покупка активирована.")}</p>${summary.subscription_id ? `<button class="button green" onclick="openSubDetail(${Number(summary.subscription_id)})">Открыть подписку</button>` : ""}</div>`;
+function renderPaymentResult() {
+  const summary = state.paymentResult;
+  el("view-payment-result").innerHTML = `<div class="payment-result-shell">
+    <div class="card payment-result-card">
+      <div class="result-icon">✓</div>
+      <p class="step">Готово</p>
+      <p class="title">${escapeHtml(summary?.title || "Оплата прошла")}</p>
+      <p class="muted">${multilineHtml(summary?.message || "Покупка активирована и уже отображается в кабинете.")}</p>
+      <button class="button green" onclick="returnToMainMenu()">Вернуться в главное меню</button>
+    </div>
+  </div>`;
 }
 
 function keysListHtml(title, subtitle, action = "detail") {
@@ -497,6 +494,16 @@ function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"
 function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs", { preserve: true }); }
 function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs", { preserve: true }); }
 function openDeviceAddons(id) { state.selectedSubId = id; state.keysMode = "device-addons"; switchView("subs", { preserve: true }); }
+function returnToMainMenu() {
+  stopPaymentPolling();
+  state.paymentResult = null;
+  state.pendingPayment = null;
+  state.activePayment = null;
+  state.selectedSubId = null;
+  state.keysMode = "list";
+  state.buyMode = "plan";
+  switchView("home", { preserve: true });
+}
 
 async function openDevices(id) {
   state.selectedSubId = id;
