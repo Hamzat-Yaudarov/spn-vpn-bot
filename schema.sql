@@ -213,6 +213,20 @@ CREATE TABLE IF NOT EXISTS traffic_purchases (
     activated_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS device_addon_purchases (
+    id BIGSERIAL PRIMARY KEY,
+    subscription_id BIGINT NOT NULL,
+    device_count INT NOT NULL,
+    amount NUMERIC NOT NULL,
+    provider TEXT,
+    invoice_id TEXT,
+    valid_until TIMESTAMP NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT now(),
+    activated_at TIMESTAMP,
+    expired_processed_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS subscription_traffic_cycles (
     id BIGSERIAL PRIMARY KEY,
     subscription_id BIGINT NOT NULL,

@@ -13,6 +13,11 @@ const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "
 const rubles = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
 const formatDate = (value, time = false) => value ? new Date(value).toLocaleString("ru-RU", time ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "long" }) : "—";
 const happBridgeLink = (url) => `${window.location.origin}/open-happ?url=${encodeURIComponent(url)}`;
+const deviceWord = (count) => count === 1 ? "устройство" : [2, 3, 4].includes(Number(count)) ? "устройства" : "устройств";
+const deviceLimitText = (subscription) => {
+  const limit = Number(subscription.devices?.limit || (subscription.plan_kind === "bypass" ? 3 : 5));
+  return `${limit} ${deviceWord(limit)}`;
+};
 const TRACKING_STORAGE_KEY = "wayspnTrackingCode";
 const TRACKING_CLIENT_KEY = "wayspnTrackingClientId";
 
@@ -108,6 +113,11 @@ function subscriptionName(subscription) {
   return `${subscription.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная"} #${subscription.type_index}`;
 }
 
+function devicePackageButton(subscription, pkg) {
+  const discount = pkg.discount_percent ? `<small>Скидка ${pkg.discount_percent}% · до ${formatDate(subscription.subscription_until)}</small>` : `<small>До ${formatDate(subscription.subscription_until)}</small>`;
+  return `<button class="button glass" data-buy-devices="${subscription.id}" data-device-count="${pkg.count}">+${pkg.count} ${deviceWord(pkg.count)} · ${rubles(pkg.price)}${discount}</button>`;
+}
+
 function renderSubscriptions() {
   const container = $("subscriptionsGrid");
   container.classList.remove("skeleton-grid");
@@ -119,12 +129,15 @@ function renderSubscriptions() {
     const active = sub.status === "active";
     const used = Number(sub.traffic?.used_gb || 0), limit = Number(sub.traffic?.limit_gb || 0);
     const percent = limit ? Math.min(100, Math.round(used / limit * 100)) : 0;
+    const devicePackages = sub.devices?.packages || [];
     return `<article class="subscription-card">
       <div class="sub-head"><div><p class="eyebrow">Подписка</p><h3>${esc(subscriptionName(sub))}</h3></div><span class="badge ${active ? "" : "expired"}">${active ? "Активна" : "Истекла"}</span></div>
       <div class="sub-date"><small>Действует до</small><strong>${formatDate(sub.subscription_until)}</strong></div>
+      <div class="sub-date"><small>Устройства</small><strong>до ${deviceLimitText(sub)}</strong></div>
       ${sub.traffic?.enabled ? `<div class="traffic-bar"><div class="traffic-meta"><span>Трафик</span><span>${used} из ${limit} ГБ</span></div><div class="bar"><i style="width:${percent}%"></i></div></div>` : ""}
       ${sub.subscription_url ? `<div class="key-box"><input readonly value="${esc(sub.subscription_url)}" /><button data-copy-key="${esc(sub.subscription_url)}">Копировать</button></div>` : `<p class="muted">Ключ появится после активации платежа.</p>`}
       <div class="sub-actions">${sub.subscription_url ? `<button class="button primary" data-connect="${esc(sub.subscription_url)}">Подключить</button>` : ""}<button class="button glass" data-renew="${sub.id}">Продлить</button>${sub.traffic?.enabled && active ? `<button class="button glass" data-buy-traffic="${sub.id}">Купить ГБ</button>` : ""}</div>
+      ${active && devicePackages.length ? `<div class="device-addon-box"><small>Докупить устройства до конца текущего периода</small><div class="sub-actions">${devicePackages.map((pkg) => devicePackageButton(sub, pkg)).join("")}</div></div>` : ""}
       ${sub.subscription_url ? `<button class="instruction-link" data-connection-help>Как подключить на телефон или компьютер?</button>` : ""}
     </article>`;
   }).join("");
@@ -138,6 +151,7 @@ function renderTraffic() {
 
 function paymentTitle(payment) {
   if (payment.payment_kind === "traffic_package") return `Пакет ${payment.traffic_package_code?.replace("gb_", "") || ""} ГБ`;
+  if (payment.payment_kind === "device_addon") return `+${payment.target_slot_number || ""} ${deviceWord(payment.target_slot_number || 0)}`;
   const tariff = [...state.catalog.regular, ...state.catalog.bypass].find((item) => item.code === payment.tariff_code);
   return `${payment.payment_target === "renew" ? "Продление" : "Подписка"} · ${tariff?.days || "—"} дней`;
 }
@@ -203,10 +217,15 @@ function openCheckout(data) {
     const plan = findPlan(data.code);
     $("checkoutTitle").textContent = data.target === "renew" ? "Продление подписки" : "Новая подписка";
     $("checkoutDetails").innerHTML = `<div class="checkout-summary"><div><span>Тариф</span><strong>${plan.kind === "bypass" ? "С антиглушилкой" : "Обычный"}</strong></div><div><span>Срок</span><strong>${plan.days} дней</strong></div><div><span>К оплате</span><strong>${rubles(plan.price)}</strong></div></div>`;
-  } else {
+  } else if (data.type === "traffic") {
     const item = state.catalog.traffic_packages.find((entry) => entry.code === data.code);
     $("checkoutTitle").textContent = `Пакет ${item.gb} ГБ`;
     $("checkoutDetails").innerHTML = `<div class="checkout-summary"><div><span>Подписка</span><strong>#${data.subscriptionId}</strong></div><div><span>Трафик</span><strong>${item.gb} ГБ</strong></div><div><span>К оплате</span><strong>${rubles(item.price)}</strong></div></div>`;
+  } else {
+    const subscription = state.subscriptions.find((entry) => entry.id === Number(data.subscriptionId));
+    const pkg = (subscription?.devices?.packages || []).find((entry) => Number(entry.count) === Number(data.deviceCount));
+    $("checkoutTitle").textContent = "Докупить устройства";
+    $("checkoutDetails").innerHTML = `<div class="checkout-summary"><div><span>Подписка</span><strong>${esc(subscription ? subscriptionName(subscription) : `#${data.subscriptionId}`)}</strong></div><div><span>Добавить</span><strong>+${data.deviceCount} ${deviceWord(data.deviceCount)}</strong></div><div><span>Действует до</span><strong>${formatDate(subscription?.subscription_until)}</strong></div><div><span>К оплате</span><strong>${rubles(pkg?.price || 0)}</strong></div></div>`;
   }
   $("checkoutDialog").showModal();
 }
@@ -219,8 +238,10 @@ async function confirmCheckout() {
     let result;
     if (state.checkout.type === "subscription") {
       result = await api("/payments/subscription", { method: "POST", body: JSON.stringify({ tariff_code: state.checkout.code, payment_target: state.checkout.target, subscription_id: state.checkout.subscriptionId || null }) });
-    } else {
+    } else if (state.checkout.type === "traffic") {
       result = await api("/payments/traffic", { method: "POST", body: JSON.stringify({ package_code: state.checkout.code, subscription_id: state.checkout.subscriptionId }) });
+    } else {
+      result = await api("/payments/devices", { method: "POST", body: JSON.stringify({ subscription_id: state.checkout.subscriptionId, device_count: state.checkout.deviceCount }) });
     }
     localStorage.setItem("spnPendingPayment", result.invoice_id);
     location.href = result.pay_url;
@@ -334,6 +355,7 @@ document.addEventListener("click", async (event) => {
   const openPlans = event.target.closest("[data-open-plans]");
   const renew = event.target.closest("[data-renew]");
   const buyTraffic = event.target.closest("[data-buy-traffic]");
+  const buyDevices = event.target.closest("[data-buy-devices]");
   const trafficPlan = event.target.closest("[data-traffic-plan]");
   const copy = event.target.closest("[data-copy-key]");
   const connect = event.target.closest("[data-connect]");
@@ -359,6 +381,9 @@ document.addEventListener("click", async (event) => {
     }
   }
   if (buyTraffic) { switchAccountSection("traffic"); $("trafficSubscription").value = buyTraffic.dataset.buyTraffic; }
+  if (buyDevices) {
+    openCheckout({ type: "devices", subscriptionId: Number(buyDevices.dataset.buyDevices), deviceCount: Number(buyDevices.dataset.deviceCount) });
+  }
   if (trafficPlan) {
     const subscriptionId = Number($("trafficSubscription").value);
     if (!subscriptionId) { toast("Сначала нужна активная подписка с антиглушилкой", true); return; }

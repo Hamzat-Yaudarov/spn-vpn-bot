@@ -12,6 +12,7 @@ from services.remnawave import (
     remnawave_get_subscription_url,
     remnawave_set_subscription_expiry,
 )
+from services.device_addons import effective_device_limit
 from handlers.start import show_main_menu
 from services.image_handler import send_text_with_photo
 
@@ -202,7 +203,8 @@ async def process_promo_input(message: Message, state: FSMContext):
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or "regular"
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-            device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+            active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+            device_limit = effective_device_limit(plan_kind, active_device_addons)
             remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(
                 tg_id,
                 plan_kind,

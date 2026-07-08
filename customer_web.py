@@ -17,6 +17,7 @@ from pydantic import BaseModel
 import database as db
 from config import (
     BYPASS_TRAFFIC_PACKAGES,
+    DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
     GB_BYTES,
     PUBLIC_SITE_URL,
     REGULAR_TARIFFS,
@@ -27,6 +28,7 @@ from config import (
     WEB_SESSION_DAYS,
 )
 from services.discounts import calculate_discounted_price
+from services.device_addons import available_device_addon_packages, current_device_limit, effective_device_limit
 from services.payment_processing import process_paid_payment
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.subscription_sync import reconcile_subscription_expiry
@@ -71,6 +73,11 @@ class SubscriptionPaymentBody(BaseModel):
 class TrafficPaymentBody(BaseModel):
     package_code: str
     subscription_id: int
+
+
+class DevicePaymentBody(BaseModel):
+    subscription_id: int
+    device_count: int
 
 
 class TrackVisitBody(BaseModel):
@@ -167,6 +174,10 @@ async def _serialize_subscription(subscription) -> dict:
         except Exception as exc:
             logger.warning("Website subscription refresh failed for %s: %s", subscription.get("id"), exc)
 
+    active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+    device_limit = effective_device_limit(plan_kind, active_device_addons)
+    device_subscription = {**subscription, "subscription_until": effective_until, "hwid_device_limit": device_limit}
+
     return {
         "id": subscription["id"],
         "plan_kind": plan_kind,
@@ -179,6 +190,11 @@ async def _serialize_subscription(subscription) -> dict:
             "used_gb": round(used_bytes / GB_BYTES, 1),
             "limit_gb": round((subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes") or 0) / GB_BYTES, 1),
             "reset_at": _format_dt(subscription.get("traffic_reset_at")),
+        },
+        "devices": {
+            "limit": current_device_limit(device_subscription),
+            "max_limit": DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
+            "packages": available_device_addon_packages(device_subscription),
         },
     }
 
@@ -457,6 +473,63 @@ async def website_traffic_payment(body: TrafficPaymentBody, account=Depends(requ
     )
     await db.create_traffic_purchase(
         body.subscription_id, body.package_code, package["gb"] * GB_BYTES, amount, "yookassa", invoice_id
+    )
+    return {"invoice_id": invoice_id, "pay_url": pay_url}
+
+
+@router.post("/site/api/payments/devices")
+async def website_device_payment(body: DevicePaymentBody, account=Depends(require_web_account)):
+    service_user_id = int(account["service_user_id"])
+    subscription = await db.get_subscription_by_id(body.subscription_id, service_user_id)
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or not subscription.get("subscription_until")
+        or subscription["subscription_until"] <= datetime.utcnow()
+    ):
+        raise HTTPException(status_code=400, detail="Сначала нужна активная подписка")
+
+    active_device_addons = await db.get_active_device_addon_count(body.subscription_id)
+    device_limit = effective_device_limit(subscription.get("plan_kind"), active_device_addons)
+    device_subscription = {**subscription, "hwid_device_limit": device_limit}
+    package = next((item for item in available_device_addon_packages(device_subscription) if item["count"] == body.device_count), None)
+    if not package:
+        raise HTTPException(status_code=400, detail="Лимит устройств уже достигнут")
+
+    amount = package["price"]
+    tariff_code = f"devices_{body.device_count}"
+    payment = await create_yookassa_payment(
+        None,
+        amount,
+        tariff_code,
+        service_user_id,
+        return_url=f"{PUBLIC_SITE_URL}/account?payment=return",
+    )
+    invoice_id = payment.get("id") if payment else None
+    pay_url = (payment.get("confirmation") or {}).get("confirmation_url") if payment else None
+    if not invoice_id or not pay_url:
+        raise HTTPException(status_code=502, detail="Не удалось создать платёж. Попробуйте позже")
+
+    await db.create_payment(
+        service_user_id,
+        tariff_code,
+        amount,
+        "yookassa",
+        invoice_id,
+        subscription_id=body.subscription_id,
+        payment_target="devices",
+        target_slot_number=body.device_count,
+        payment_kind="device_addon",
+    )
+    await db.create_device_addon_purchase(
+        body.subscription_id,
+        body.device_count,
+        amount,
+        "yookassa",
+        invoice_id,
+        subscription["subscription_until"],
     )
     return {"invoice_id": invoice_id, "pay_url": pay_url}
 

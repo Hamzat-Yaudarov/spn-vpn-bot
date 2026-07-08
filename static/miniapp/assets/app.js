@@ -63,6 +63,9 @@ function priceHtml(item) {
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
+function deviceWord(count) { return count === 1 ? "устройство" : [2, 3, 4].includes(count) ? "устройства" : "устройств"; }
+function deviceLimitText(s) { const limit = Number(s.devices?.limit || (s.plan_kind === "bypass" ? 3 : 5)); return `${limit} ${deviceWord(limit)}`; }
+function devicePackageText(pkg) { return `+${pkg.count} ${deviceWord(pkg.count)} · ${rub(pkg.price)}${pkg.discount_percent ? ` · скидка ${pkg.discount_percent}%` : ""}`; }
 
 function daysLeft(value) {
   if (!value) return null;
@@ -149,6 +152,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.action === "renew") openRenew(subId);
   if (target.dataset.action === "traffic") openTraffic(subId);
   if (target.dataset.action === "devices") openDevices(subId);
+  if (target.dataset.action === "device-addons") openDeviceAddons(subId);
   if (target.dataset.action === "delete-device") deleteDevice(subId, target.dataset.hwid || "");
   if (target.dataset.action === "delete-all-devices") deleteAllDevices(subId);
   if (target.dataset.action === "happ") {
@@ -240,7 +244,7 @@ async function checkActivePayment() {
       if (payment.type === "subscription" && payment.payment_target === "renew" && payment.subscription_id) {
         state.selectedSubId = payment.subscription_id;
         state.keysMode = "detail";
-      } else if (payment.type === "traffic" && payment.subscription_id) {
+      } else if ((payment.type === "traffic" || payment.type === "devices") && payment.subscription_id) {
         state.selectedSubId = payment.subscription_id;
         state.keysMode = "detail";
       } else {
@@ -249,7 +253,7 @@ async function checkActivePayment() {
       }
       state.buyMode = "plan";
       switchView("subs", { preserve: true });
-      showToast("Оплата получена. Ключ обновлён.");
+      showToast(payment.type === "devices" ? "Оплата получена. Лимит устройств обновлён." : "Оплата получена. Ключ обновлён.");
       return;
     }
   } catch (e) {
@@ -330,9 +334,11 @@ function renderKeys() {
 
   if (state.keysMode === "detail") container.innerHTML = subscriptionDetailHtml(sub);
   if (state.keysMode === "devices") container.innerHTML = devicesHtml(sub);
+  if (state.keysMode === "device-addons") container.innerHTML = deviceAddonsHtml(sub);
   if (state.keysMode === "renew") container.innerHTML = renewHtml(sub);
   if (state.keysMode === "traffic") container.innerHTML = trafficHtml(sub);
   if (state.keysMode === "traffic-payment") container.innerHTML = paymentHtml("ГБ для " + subTitle(sub));
+  if (state.keysMode === "devices-payment") container.innerHTML = paymentHtml("Устройства для " + subTitle(sub));
   if (state.keysMode === "renew-payment") container.innerHTML = paymentHtml("Продление " + subTitle(sub));
 }
 
@@ -352,21 +358,22 @@ function keyButton(s, action) {
 function subscriptionDetailHtml(s) {
   const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
   const remaining = trafficRemaining(s);
-  const limitText = s.plan_kind === "bypass" ? "3 устройства" : "5 устройств";
   const tone = statusTone(s);
   const trafficToneClass = trafficTone(s);
+  const devicePackages = s.devices?.packages || [];
   return `<div class="grid">
     <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
     <div class="card key-hero ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
       <div class="key-hero-top"><div><p class="step">${s.plan_kind === "bypass" ? "Антиглушилка" : "Обычный ключ"}</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `до ${date(s.subscription_until)} · ${timeLeftText(s.subscription_until)}` : "Срок закончился"}</p></div><span class="status-dot ${tone}"></span></div>
       ${badgesHtml(s)}
-      <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${limitText}</b></div></div>
+      <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${deviceLimitText(s)}</b></div></div>
       ${s.traffic.enabled ? `<div class="traffic-panel ${trafficToneClass}">${trafficToneClass ? `<p class="traffic-alert">${trafficToneClass === "danger" ? "Трафик почти закончился" : "Трафик заканчивается"}</p>` : ""}<div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
     </div>
     <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Откройте ключ в Happ или скопируйте его.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
     <div class="action-grid sticky-actions">
       <button class="button accent" data-action="renew" data-sub-id="${s.id}">Продлить</button>
       <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
+      ${s.status === "active" && devicePackages.length ? `<button class="button green wide" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
       ${s.traffic.enabled ? `<button class="button green wide" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
     </div>
   </div>`;
@@ -389,9 +396,22 @@ function devicesHtml(s) {
 
   return `<div class="grid">
     <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-note"><p class="step">Устройства</p><p class="title">${subTitle(s)}</p><p class="muted">Удалите устройство, если нужно освободить слот для нового подключения.</p></div>
+    <div class="section-note"><p class="step">Устройства</p><p class="title">${subTitle(s)}</p><p class="muted">Лимит: до ${deviceLimitText(s)}. Удалите устройство, если нужно освободить слот для нового подключения.</p></div>
     ${list}
+    ${s.status === "active" && (s.devices?.packages || []).length ? `<button class="button green" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
     ${devices.length ? `<button class="button danger" data-action="delete-all-devices" data-sub-id="${s.id}">Удалить все устройства</button>` : ""}
+  </div>`;
+}
+
+function deviceAddonsHtml(s) {
+  const packages = s.devices?.packages || [];
+  if (!packages.length) {
+    return `<div class="grid"><button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button><div class="card empty"><h2>Лимит уже максимальный</h2><p class="muted">Сейчас доступно до ${deviceLimitText(s)}.</p></div></div>`;
+  }
+  return `<div class="grid">
+    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
+    <div class="section-note"><p class="step">Устройства</p><p class="title">Докупить устройства</p><p class="muted">Выберите пакет для ${subTitle(s)}. Он действует до ${date(s.subscription_until)}.</p></div>
+    <div class="choice-list">${packages.map((pkg) => `<button class="choice-button" onclick="prepareDevicePayment(${s.id}, ${pkg.count})"><span>${devicePackageText(pkg)}<small>После окончания периода лимит вернётся к базовому.</small></span><b>›</b></button>`).join("")}</div>
   </div>`;
 }
 
@@ -442,7 +462,7 @@ function renderBuy() {
 function paymentHtml(title) {
   return `<div class="grid">
     <button class="button ghost" onclick="backFromPayment()">← Назад</button>
-    <div class="section-note payment-note"><p class="step">Шаг 3 из 3</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты подписка активируется автоматически.</p></div><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div>
+    <div class="section-note payment-note"><p class="step">Оплата</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты всё обновится автоматически.</p></div><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div>
   </div>`;
 }
 
@@ -454,6 +474,7 @@ function openRenewList() { state.keysMode = "renew-list"; state.selectedSubId = 
 function openSubDetail(id) { state.selectedSubId = id; state.keysMode = "detail"; switchView("subs", { preserve: true }); }
 function openRenew(id) { state.selectedSubId = id; state.keysMode = "renew"; switchView("subs", { preserve: true }); }
 function openTraffic(id) { state.selectedSubId = id; state.keysMode = "traffic"; switchView("subs", { preserve: true }); }
+function openDeviceAddons(id) { state.selectedSubId = id; state.keysMode = "device-addons"; switchView("subs", { preserve: true }); }
 
 async function openDevices(id) {
   state.selectedSubId = id;
@@ -512,9 +533,16 @@ function prepareTrafficPayment(subscriptionId, packageCode) {
   renderKeys();
 }
 
+function prepareDevicePayment(subscriptionId, deviceCount) {
+  state.pendingPayment = { type: "devices", subscription_id: subscriptionId, device_count: deviceCount };
+  state.keysMode = "devices-payment";
+  renderKeys();
+}
+
 function backFromPayment() {
   if (!state.pendingPayment) return;
   if (state.pendingPayment.type === "traffic") state.keysMode = "traffic";
+  else if (state.pendingPayment.type === "devices") state.keysMode = "device-addons";
   else if (state.pendingPayment.payment_target === "renew") state.keysMode = "renew";
   else state.buyMode = "tariff";
   state.pendingPayment = null;
@@ -527,6 +555,8 @@ async function payPrepared(provider) {
     let data;
     if (state.pendingPayment.type === "traffic") {
       data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
+    } else if (state.pendingPayment.type === "devices") {
+      data = await api("/miniapp/api/payments/devices", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     } else {
       data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
     }

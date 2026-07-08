@@ -5,7 +5,8 @@ from datetime import timedelta
 import aiohttp
 
 import database as db
-from config import BYPASS_BASE_TRAFFIC_GB, BYPASS_HWID_DEVICE_LIMIT, BYPASS_SQUAD_UUID, GB_BYTES
+from config import BYPASS_BASE_TRAFFIC_GB, BYPASS_SQUAD_UUID, GB_BYTES
+from services.device_addons import effective_device_limit
 from services.remnawave import (
     remnawave_get_user_usage,
     remnawave_reset_user_traffic,
@@ -43,6 +44,8 @@ async def process_due_traffic_resets():
                 new_limit = base_bytes + remaining_paid
                 next_reset_at = subscription['traffic_reset_at'] + timedelta(days=30)
                 period_start = subscription['traffic_reset_at'] - timedelta(days=30)
+                active_device_addons = await db.get_active_device_addon_count(subscription['id'])
+                device_limit = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
 
                 reset_ok = await remnawave_reset_user_traffic(session, subscription['remnawave_uuid'])
                 if not reset_ok:
@@ -55,7 +58,7 @@ async def process_due_traffic_resets():
                     traffic_limit_bytes=new_limit,
                     traffic_limit_strategy="NO_RESET",
                     active_internal_squads=[BYPASS_SQUAD_UUID],
-                    hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
+                    hwid_device_limit=device_limit,
                     telegram_id=subscription['tg_id'],
                 )
                 if not updated:
@@ -133,13 +136,15 @@ async def process_pending_traffic_limit_sync():
         for subscription in subscriptions:
             try:
                 limit_bytes = subscription.get('current_period_limit_bytes') or subscription.get('base_traffic_bytes') or BYPASS_BASE_TRAFFIC_GB * GB_BYTES
+                active_device_addons = await db.get_active_device_addon_count(subscription['id'])
+                device_limit = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
                 updated = await remnawave_update_user_profile(
                     session,
                     subscription['remnawave_uuid'],
                     traffic_limit_bytes=limit_bytes,
                     traffic_limit_strategy="NO_RESET",
                     active_internal_squads=[BYPASS_SQUAD_UUID],
-                    hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
+                    hwid_device_limit=device_limit,
                     telegram_id=subscription['tg_id'],
                 )
                 if not updated:

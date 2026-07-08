@@ -21,6 +21,7 @@ from services.remnawave import (
     remnawave_set_subscription_expiry,
     remnawave_update_user_profile,
 )
+from services.device_addons import device_count_text, effective_device_limit
 
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,9 @@ async def process_paid_payment(
         if payment_record.get("payment_kind") == "traffic_package":
             return await _process_paid_traffic_package(bot, tg_id, invoice_id, payment_record)
 
+        if payment_record.get("payment_kind") == "device_addon":
+            return await _process_paid_device_addon(bot, tg_id, invoice_id, payment_record)
+
         if tariff_code not in TARIFFS:
             logger.error("Invalid tariff code: %s", tariff_code)
             return False
@@ -142,7 +146,8 @@ async def process_paid_payment(
         payment_target = payment_record.get("payment_target") or "new"
         plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-        device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+        active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+        device_limit = effective_device_limit(plan_kind, active_device_addons)
         base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
         traffic_limit_bytes = max(
             subscription.get("current_period_limit_bytes") or 0,
@@ -374,6 +379,8 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
 
     traffic_bytes = package["gb"] * GB_BYTES
     new_limit = (subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes") or 0) + traffic_bytes
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    device_limit = effective_device_limit(subscription.get("plan_kind"), active_device_addons)
 
     connector = aiohttp.TCPConnector(ssl=False)
     timeout = aiohttp.ClientTimeout(total=30)
@@ -384,7 +391,7 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
             traffic_limit_bytes=new_limit,
             traffic_limit_strategy="NO_RESET",
             active_internal_squads=[BYPASS_SQUAD_UUID],
-            hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
+            hwid_device_limit=device_limit,
             telegram_id=tg_id if tg_id > 0 else None,
         )
         if not updated:
@@ -410,4 +417,78 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
             )
         except Exception as exc:
             logger.warning("Could not send traffic notification to %s: %s", tg_id, exc)
+    return True
+
+
+async def _process_paid_device_addon(bot, tg_id: int, invoice_id: str, payment_record) -> bool:
+    purchase = await db.get_device_addon_purchase_by_invoice(invoice_id)
+    if not purchase:
+        logger.error("Device add-on purchase not found for invoice %s", invoice_id)
+        return False
+
+    subscription_id = payment_record.get("subscription_id") or purchase.get("subscription_id")
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id) if subscription_id else None
+    now = datetime.utcnow()
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or not subscription.get("subscription_until")
+        or subscription["subscription_until"] <= now
+    ):
+        logger.error("Device add-on target subscription is invalid: %s", subscription_id)
+        return False
+
+    if not subscription.get("remnawave_uuid"):
+        logger.error("Device add-on target subscription has no Remnawave UUID: %s", subscription_id)
+        return False
+
+    if purchase.get("valid_until") <= now:
+        logger.error("Device add-on purchase already expired: %s", invoice_id)
+        return False
+
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    new_limit = effective_device_limit(
+        subscription.get("plan_kind"),
+        active_device_addons + int(purchase.get("device_count") or 0),
+    )
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        updated = await remnawave_update_user_profile(
+            session,
+            subscription["remnawave_uuid"],
+            hwid_device_limit=new_limit,
+            telegram_id=tg_id if tg_id > 0 else None,
+        )
+        if not updated:
+            logger.error("Failed to update device limit for subscription %s", subscription_id)
+            return False
+
+    await db.activate_device_addon_purchase(invoice_id)
+    await db.set_subscription_device_limit(subscription_id, new_limit)
+    await db.update_payment_status_by_invoice(invoice_id, "paid")
+
+    count = int(purchase.get("device_count") or 0)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+    if bot is not None and tg_id > 0:
+        try:
+            await bot.send_message(
+                tg_id,
+                f"✅ <b>Дополнительные устройства подключены!</b>\n\n"
+                f"Подписка: <b>{_subscription_display_name(subscription)}</b>\n"
+                f"Добавлено: <b>+{device_count_text(count)}</b>\n"
+                f"Новый лимит: <b>{device_count_text(new_limit)}</b>\n"
+                f"Действует до: <b>{purchase['valid_until'].strftime('%d.%m.%Y')}</b>",
+                reply_markup=kb,
+            )
+        except Exception as exc:
+            logger.warning("Could not send device add-on notification to %s: %s", tg_id, exc)
+
+    logger.info("Device add-on activated for subscription %s, new limit %s", subscription_id, new_limit)
     return True

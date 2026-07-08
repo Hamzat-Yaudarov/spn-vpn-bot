@@ -17,10 +17,12 @@ from config import (
     WEBHOOK_HOST,
     WEBHOOK_PORT,
     GB_BYTES,
+    DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
 )
 import database as db
 from services.cryptobot import create_cryptobot_invoice
 from services.payment_processing import process_paid_payment
+from services.device_addons import available_device_addon_packages, current_device_limit, device_count_text, effective_device_limit
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
     remnawave_delete_hwid_device,
@@ -173,6 +175,10 @@ async def _serialize_subscription(subscription) -> dict:
         if plan_kind == "bypass" and user_info:
             used_bytes = (user_info.get("userTraffic") or {}).get("usedTrafficBytes") or used_bytes
 
+    active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+    device_limit = effective_device_limit(plan_kind, active_device_addons)
+    device_subscription = {**subscription, "subscription_until": effective_until, "hwid_device_limit": device_limit}
+
     return {
         "id": subscription["id"],
         "plan_kind": plan_kind,
@@ -186,6 +192,11 @@ async def _serialize_subscription(subscription) -> dict:
             "used_gb": _format_gb(used_bytes),
             "limit_gb": _format_gb(subscription.get("current_period_limit_bytes") or subscription.get("base_traffic_bytes")),
             "reset_at": _format_dt(subscription.get("traffic_reset_at")),
+        },
+        "devices": {
+            "limit": current_device_limit(device_subscription),
+            "max_limit": DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
+            "packages": available_device_addon_packages(device_subscription),
         },
     }
 
@@ -492,6 +503,84 @@ async def miniapp_create_traffic_payment(request: Request):
     )
     await db.create_traffic_purchase(int(subscription_id), package_code, package["gb"] * GB_BYTES, amount, provider, invoice_id)
     return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider})
+
+
+@app.post("/miniapp/api/payments/devices")
+async def miniapp_create_device_payment(request: Request):
+    user = await _miniapp_user(request)
+    if not _bot:
+        raise HTTPException(status_code=503, detail="Bot is not ready")
+
+    body = await request.json()
+    tg_id = int(user["id"])
+    provider = body.get("provider")
+    subscription_id = body.get("subscription_id")
+    try:
+        device_count = int(body.get("device_count") or 0)
+    except (TypeError, ValueError):
+        device_count = 0
+
+    if provider not in {"cryptobot", "yookassa"} or not subscription_id or device_count <= 0:
+        raise HTTPException(status_code=400, detail="Invalid device payment")
+
+    subscription = await db.get_subscription_by_id(int(subscription_id), tg_id)
+    if (
+        not subscription
+        or subscription.get("generation") != "v2"
+        or not subscription.get("is_visible")
+        or not subscription.get("is_renewable")
+        or not subscription.get("subscription_until")
+        or subscription["subscription_until"] <= datetime.utcnow()
+    ):
+        raise HTTPException(status_code=400, detail="Invalid subscription")
+
+    active_device_addons = await db.get_active_device_addon_count(int(subscription_id))
+    device_limit = effective_device_limit(subscription.get("plan_kind"), active_device_addons)
+    device_subscription = {**subscription, "hwid_device_limit": device_limit}
+    package = next((item for item in available_device_addon_packages(device_subscription) if item["count"] == device_count), None)
+    if not package:
+        raise HTTPException(status_code=400, detail="Device limit reached")
+
+    amount = package["price"]
+    tariff_code = f"devices_{device_count}"
+    if provider == "cryptobot":
+        invoice = await create_cryptobot_invoice(_bot, amount, tariff_code, tg_id)
+        invoice_id = str(invoice["invoice_id"]) if invoice else None
+        pay_url = invoice.get("bot_invoice_url") if invoice else None
+    else:
+        payment = await create_yookassa_payment(_bot, amount, tariff_code, tg_id)
+        invoice_id = payment.get("id") if payment else None
+        pay_url = (payment.get("confirmation") or {}).get("confirmation_url") if payment else None
+
+    if not invoice_id or not pay_url:
+        raise HTTPException(status_code=502, detail="Payment provider error")
+
+    await db.create_payment(
+        tg_id,
+        tariff_code,
+        amount,
+        provider,
+        invoice_id,
+        subscription_id=int(subscription_id),
+        payment_target="devices",
+        target_slot_number=device_count,
+        payment_kind="device_addon",
+    )
+    await db.create_device_addon_purchase(
+        int(subscription_id),
+        device_count,
+        amount,
+        provider,
+        invoice_id,
+        subscription["subscription_until"],
+    )
+    return JSONResponse({
+        "invoice_id": invoice_id,
+        "pay_url": pay_url,
+        "provider": provider,
+        "title": f"+{device_count_text(device_count)}",
+        "amount": amount,
+    })
 
 
 @app.get("/miniapp/api/payments/{invoice_id}")

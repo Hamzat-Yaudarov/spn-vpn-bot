@@ -276,6 +276,18 @@ async def run_migrations():
                 'activated_at': {'type': 'TIMESTAMP', 'nullable': True},
             }
 
+            expected_device_addon_purchases_columns = {
+                'subscription_id': {'type': 'BIGINT', 'nullable': False},
+                'device_count': {'type': 'INT', 'nullable': False},
+                'amount': {'type': 'NUMERIC', 'nullable': False},
+                'provider': {'type': 'TEXT', 'nullable': True},
+                'invoice_id': {'type': 'TEXT', 'nullable': True},
+                'valid_until': {'type': 'TIMESTAMP', 'nullable': False},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
+                'activated_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'expired_processed_at': {'type': 'TIMESTAMP', 'nullable': True},
+            }
+
             expected_traffic_cycles_columns = {
                 'subscription_id': {'type': 'BIGINT', 'nullable': False},
                 'period_start': {'type': 'TIMESTAMP', 'nullable': False},
@@ -524,6 +536,23 @@ async def run_migrations():
             logging.info("✅ Таблица 'traffic_purchases' создана или уже существует")
 
             await conn.execute("""
+                CREATE TABLE IF NOT EXISTS device_addon_purchases (
+                    id BIGSERIAL PRIMARY KEY,
+                    subscription_id BIGINT NOT NULL,
+                    device_count INT NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    provider TEXT,
+                    invoice_id TEXT,
+                    valid_until TIMESTAMP NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT now(),
+                    activated_at TIMESTAMP,
+                    expired_processed_at TIMESTAMP
+                )
+            """)
+            logging.info("✅ Таблица 'device_addon_purchases' создана или уже существует")
+
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS subscription_traffic_cycles (
                     id BIGSERIAL PRIMARY KEY,
                     subscription_id BIGINT NOT NULL,
@@ -698,6 +727,9 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_referral_earnings_referred_user_id ON referral_earnings(referred_user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_referral_withdrawals_referrer_id ON referral_withdrawals(referrer_id);",
                 "CREATE INDEX IF NOT EXISTS idx_traffic_purchases_subscription_id ON traffic_purchases(subscription_id);",
+                "CREATE INDEX IF NOT EXISTS idx_device_addon_purchases_subscription_id ON device_addon_purchases(subscription_id);",
+                "CREATE INDEX IF NOT EXISTS idx_device_addon_purchases_invoice ON device_addon_purchases(invoice_id);",
+                "CREATE INDEX IF NOT EXISTS idx_device_addon_purchases_expiry ON device_addon_purchases(valid_until, status, expired_processed_at);",
                 "CREATE INDEX IF NOT EXISTS idx_traffic_cycles_subscription_id ON subscription_traffic_cycles(subscription_id);",
                 "CREATE INDEX IF NOT EXISTS idx_tracking_links_code ON tracking_links(code);",
                 "CREATE INDEX IF NOT EXISTS idx_tracking_clicks_code ON tracking_link_clicks(code);",
@@ -792,6 +824,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'referral_earnings', expected_referral_earnings_columns)
             await sync_table_schema(conn, 'referral_withdrawals', expected_referral_withdrawals_columns)
             await sync_table_schema(conn, 'traffic_purchases', expected_traffic_purchases_columns)
+            await sync_table_schema(conn, 'device_addon_purchases', expected_device_addon_purchases_columns)
             await sync_table_schema(conn, 'subscription_traffic_cycles', expected_traffic_cycles_columns)
             await sync_table_schema(conn, 'tracking_links', expected_tracking_links_columns)
             await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
@@ -985,11 +1018,16 @@ async def run_migrations():
                 """
                 UPDATE subscriptions
                 SET hwid_device_limit = CASE
-                    WHEN plan_kind = 'bypass' THEN $1::INT
-                    ELSE $2::INT
+                    WHEN plan_kind = 'bypass' THEN GREATEST(COALESCE(hwid_device_limit, 0), $1::INT)
+                    ELSE GREATEST(COALESCE(hwid_device_limit, 0), $2::INT)
                 END
                 WHERE generation = 'v2'
                   AND is_visible = TRUE
+                  AND (
+                        COALESCE(hwid_device_limit, 0) <= 0
+                     OR (plan_kind = 'bypass' AND COALESCE(hwid_device_limit, 0) < $1::INT)
+                     OR (COALESCE(plan_kind, 'regular') <> 'bypass' AND COALESCE(hwid_device_limit, 0) < $2::INT)
+                  )
                 """,
                 BYPASS_HWID_DEVICE_LIMIT,
                 REGULAR_HWID_DEVICE_LIMIT,
@@ -1202,7 +1240,7 @@ async def list_web_account_payments(service_user_id: int, limit: int = 30):
     return await db_execute(
         """
         SELECT invoice_id, tariff_code, amount, provider, status, payment_target,
-               payment_kind, traffic_package_code, subscription_id, created_at, updated_at
+               payment_kind, traffic_package_code, subscription_id, target_slot_number, created_at, updated_at
         FROM payments
         WHERE tg_id = $1
         ORDER BY created_at DESC, id DESC
@@ -2206,6 +2244,119 @@ async def add_traffic_to_subscription(subscription_id: int, traffic_bytes: int) 
         WHERE id = $2
         """,
         (traffic_bytes, subscription_id)
+    )
+
+
+async def create_device_addon_purchase(
+    subscription_id: int,
+    device_count: int,
+    amount: float,
+    provider: str,
+    invoice_id: str,
+    valid_until,
+):
+    """Создать запись покупки дополнительных устройств."""
+    return await db_execute(
+        """
+        INSERT INTO device_addon_purchases (
+            subscription_id,
+            device_count,
+            amount,
+            provider,
+            invoice_id,
+            valid_until
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+        """,
+        (subscription_id, device_count, amount, provider, str(invoice_id), valid_until),
+        fetch_one=True,
+    )
+
+
+async def get_device_addon_purchase_by_invoice(invoice_id: str):
+    """Получить покупку устройств по invoice_id."""
+    return await db_execute(
+        "SELECT * FROM device_addon_purchases WHERE invoice_id = $1 LIMIT 1",
+        (str(invoice_id),),
+        fetch_one=True,
+    )
+
+
+async def activate_device_addon_purchase(invoice_id: str) -> bool:
+    """Отметить покупку устройств активированной."""
+    await db_execute(
+        """
+        UPDATE device_addon_purchases
+        SET status = 'paid',
+            activated_at = now()
+        WHERE invoice_id = $1
+          AND status != 'paid'
+        """,
+        (str(invoice_id),),
+    )
+    return True
+
+
+async def get_active_device_addon_count(subscription_id: int):
+    """Посчитать активные докупленные устройства для подписки."""
+    result = await db_execute(
+        """
+        SELECT COALESCE(SUM(device_count), 0) AS device_count
+        FROM device_addon_purchases
+        WHERE subscription_id = $1
+          AND status = 'paid'
+          AND valid_until > now() AT TIME ZONE 'UTC'
+        """,
+        (subscription_id,),
+        fetch_one=True,
+    )
+    return int(result["device_count"] or 0) if result else 0
+
+
+async def set_subscription_device_limit(subscription_id: int, device_limit: int) -> None:
+    """Обновить локальный лимит устройств у подписки."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET hwid_device_limit = $1,
+            updated_at = now()
+        WHERE id = $2
+        """,
+        (device_limit, subscription_id),
+    )
+
+
+async def get_subscriptions_with_expired_device_addons():
+    """Получить подписки, у которых истекли докупленные устройства и надо пересчитать лимит."""
+    return await db_execute(
+        """
+        SELECT DISTINCT s.*
+        FROM subscriptions s
+        JOIN device_addon_purchases dap ON dap.subscription_id = s.id
+        WHERE dap.status = 'paid'
+          AND dap.valid_until <= now() AT TIME ZONE 'UTC'
+          AND dap.expired_processed_at IS NULL
+          AND s.generation = 'v2'
+          AND s.remnawave_uuid IS NOT NULL
+        ORDER BY s.id ASC
+        """,
+        fetch_all=True,
+    )
+
+
+async def mark_expired_device_addons_processed(subscription_id: int) -> None:
+    """Отметить истёкшие покупки устройств обработанными."""
+    await db_execute(
+        """
+        UPDATE device_addon_purchases
+        SET expired_processed_at = now()
+        WHERE subscription_id = $1
+          AND status = 'paid'
+          AND valid_until <= now() AT TIME ZONE 'UTC'
+          AND expired_processed_at IS NULL
+        """,
+        (subscription_id,),
     )
 
 

@@ -16,6 +16,7 @@ from config import (
     BYPASS_SQUAD_UUID,
     BYPASS_TRAFFIC_PACKAGES,
     BYPASS_TARIFFS,
+    DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
     GB_BYTES,
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
@@ -23,6 +24,11 @@ from config import (
     TARIFFS,
 )
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
+from services.device_addons import (
+    available_device_addon_packages,
+    device_count_text,
+    effective_device_limit,
+)
 from services.image_handler import edit_text_with_photo, send_text_with_photo
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
@@ -154,7 +160,13 @@ def _device_limit_text(subscription) -> str:
     limit = subscription.get('hwid_device_limit')
     if not limit:
         limit = BYPASS_HWID_DEVICE_LIMIT if subscription.get('plan_kind') == 'bypass' else REGULAR_HWID_DEVICE_LIMIT
-    return f"{limit} устройства" if limit in (2, 3, 4) else f"{limit} устройств"
+    return device_count_text(int(limit))
+
+
+def _device_addon_label(package: dict) -> str:
+    discount = int(package.get("discount_percent") or 0)
+    discount_text = f" · скидка {discount}%" if discount else ""
+    return f"+{package['count']} — {package['price']:g} ₽{discount_text}"
 
 
 async def _get_subscription_access_data(subscription) -> tuple[str | None, str, datetime | None]:
@@ -377,10 +389,17 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
 
     sub_url, remaining_str, effective_until = await _get_subscription_access_data(subscription)
     plan_title = 'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'
-    display_subscription = {**subscription, 'subscription_until': effective_until}
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    effective_device_limit_value = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
+    display_subscription = {
+        **subscription,
+        'subscription_until': effective_until,
+        'hwid_device_limit': effective_device_limit_value,
+    }
     status_text = _subscription_short_status(display_subscription)
     until_text = _format_date(effective_until)
-    limit_text = _device_limit_text(subscription)
+    limit_text = _device_limit_text(display_subscription)
+    device_packages = available_device_addon_packages(display_subscription)
     traffic_text = ""
 
     if subscription.get('plan_kind') == 'bypass' and not subscription.get('legacy_readonly'):
@@ -409,6 +428,8 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
     ]
     if subscription.get('generation') == 'v2' and subscription.get('is_renewable'):
         keyboard.append([InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")])
+        if status_text == 'активна' and device_packages:
+            keyboard.append([InlineKeyboardButton(text="➕ Докупить устройства", callback_data=f"device_addons_{subscription_id}", style="success")])
     if (
         subscription.get('generation') == 'v2'
         and subscription.get('is_renewable')
@@ -534,6 +555,98 @@ async def _delete_all_subscription_devices(callback: CallbackQuery, subscription
 
     await callback.answer("Все устройства удалены")
     await _show_subscription_devices(callback, subscription_id)
+
+
+async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: int, state: FSMContext):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+        or not subscription.get('subscription_until')
+        or subscription['subscription_until'] <= datetime.utcnow()
+    ):
+        await callback.answer("Для этой подписки нельзя докупить устройства", show_alert=True)
+        return
+
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    current_limit = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
+    display_subscription = {**subscription, 'hwid_device_limit': current_limit}
+    packages = available_device_addon_packages(display_subscription)
+    if not packages:
+        await callback.answer(f"Лимит уже {DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT} устройств", show_alert=True)
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=_device_addon_label(package),
+                callback_data=f"device_addon_package_{subscription_id}_{package['count']}",
+                style="success",
+            )
+        ]
+        for package in packages
+    ]
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад к подписке", callback_data=f"subscription_view_{subscription_id}", style="danger")])
+
+    await state.update_data(device_addon_subscription_id=subscription_id)
+    await edit_text_with_photo(
+        callback,
+        f"➕ <b>Докупить устройства</b>\n\n"
+        f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
+        f"Сейчас доступно: <b>{device_count_text(int(current_limit))}</b>\n"
+        f"Максимум: <b>{device_count_text(DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT)}</b>\n\n"
+        f"Выбери, сколько устройств добавить.\n"
+        f"Действует до конца текущего периода: <b>{_format_date(subscription['subscription_until'])}</b>.\n"
+        f"После этой даты лимит вернётся к базовому, если не докупить заново.",
+        InlineKeyboardMarkup(inline_keyboard=keyboard),
+        "Моя подписка",
+    )
+
+
+async def _show_device_addon_payment_methods(callback: CallbackQuery, state: FSMContext, subscription_id: int, device_count: int):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+        or not subscription.get('subscription_until')
+        or subscription['subscription_until'] <= datetime.utcnow()
+    ):
+        await callback.answer("Подписка не найдена или уже истекла", show_alert=True)
+        return
+
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    current_limit = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
+    display_subscription = {**subscription, 'hwid_device_limit': current_limit}
+    package = next((item for item in available_device_addon_packages(display_subscription) if item["count"] == device_count), None)
+    if not package:
+        await callback.answer("Такой пакет уже недоступен", show_alert=True)
+        return
+
+    await state.update_data(
+        device_addon_subscription_id=subscription_id,
+        device_addon_count=device_count,
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_devices_cryptobot", style="success")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_devices_yookassa", style="success")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"device_addons_{subscription_id}", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"➕ <b>+{device_count_text(device_count)} к {_subscription_name(subscription)}</b>\n\n"
+        f"Действует до: <b>{_format_date(subscription['subscription_until'])}</b>\n"
+        f"Сумма: <b>{package['price']:g} ₽</b>\n\n"
+        "Выбери способ оплаты:",
+        kb,
+        "Выбери способ оплаты",
+    )
 
 
 async def _show_subscription_instruction(callback: CallbackQuery, subscription_id: int):
@@ -902,6 +1015,20 @@ async def process_device_delete(callback: CallbackQuery, state: FSMContext):
     await _delete_subscription_device(callback, subscription_id, device_index)
 
 
+@router.callback_query(F.data.startswith("device_addons_"))
+async def process_device_addons(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    await _show_device_addon_packages(callback, subscription_id, state)
+
+
+@router.callback_query(F.data.startswith("device_addon_package_"))
+async def process_device_addon_package(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    subscription_id = int(parts[-2])
+    device_count = int(parts[-1])
+    await _show_device_addon_payment_methods(callback, state, subscription_id, device_count)
+
+
 @router.callback_query(F.data.startswith("renew_subscription_"))
 async def process_subscription_renew(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
@@ -1096,6 +1223,105 @@ async def process_pay_gb_cryptobot(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "pay_gb_yookassa")
 async def process_pay_gb_yookassa(callback: CallbackQuery, state: FSMContext):
     await _create_gb_payment(callback, state, "yookassa")
+
+
+async def _create_device_addon_payment(callback: CallbackQuery, state: FSMContext, provider: str):
+    tg_id = callback.from_user.id
+    data = await state.get_data()
+    subscription_id = data.get("device_addon_subscription_id")
+    device_count = int(data.get("device_addon_count") or 0)
+
+    if not subscription_id or device_count <= 0:
+        await callback.answer("Не выбран пакет устройств", show_alert=True)
+        await state.clear()
+        return
+
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+    if (
+        not subscription
+        or subscription.get('generation') != 'v2'
+        or not subscription.get('is_visible')
+        or not subscription.get('is_renewable')
+        or not subscription.get('subscription_until')
+        or subscription['subscription_until'] <= datetime.utcnow()
+    ):
+        await callback.answer("Подписка не найдена или уже истекла", show_alert=True)
+        await state.clear()
+        return
+
+    active_device_addons = await db.get_active_device_addon_count(subscription_id)
+    current_limit = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
+    display_subscription = {**subscription, 'hwid_device_limit': current_limit}
+    package = next((item for item in available_device_addon_packages(display_subscription) if item["count"] == device_count), None)
+    if not package:
+        await callback.answer("Этот пакет уже недоступен", show_alert=True)
+        await state.clear()
+        return
+
+    amount = package["price"]
+    tariff_code = f"devices_{device_count}"
+
+    if provider == "cryptobot":
+        invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
+        if not invoice:
+            await callback.answer("Ошибка создания счёта", show_alert=True)
+            return
+        invoice_id = str(invoice["invoice_id"])
+        pay_url = invoice["bot_invoice_url"]
+    else:
+        payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
+        if not payment:
+            await callback.answer("Ошибка создания платежа", show_alert=True)
+            return
+        invoice_id = payment["id"]
+        pay_url = payment.get("confirmation", {}).get("confirmation_url", "")
+
+    await db.create_payment(
+        tg_id,
+        tariff_code,
+        amount,
+        provider,
+        invoice_id,
+        subscription_id=subscription_id,
+        payment_target="devices",
+        target_slot_number=device_count,
+        payment_kind="device_addon",
+    )
+    await db.create_device_addon_purchase(
+        subscription_id,
+        device_count,
+        amount,
+        provider,
+        invoice_id,
+        subscription["subscription_until"],
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"device_addons_{subscription_id}", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"➕ <b>Счёт на +{device_count_text(device_count)}</b>\n\n"
+        f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
+        f"Действует до: <b>{_format_date(subscription['subscription_until'])}</b>\n"
+        f"Сумма: <b>{amount:g} ₽</b>\n\n"
+        "После оплаты лимит устройств обновится автоматически.",
+        kb,
+        "Оплати",
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == "pay_devices_cryptobot")
+async def process_pay_devices_cryptobot(callback: CallbackQuery, state: FSMContext):
+    await _create_device_addon_payment(callback, state, "cryptobot")
+
+
+@router.callback_query(F.data == "pay_devices_yookassa")
+async def process_pay_devices_yookassa(callback: CallbackQuery, state: FSMContext):
+    await _create_device_addon_payment(callback, state, "yookassa")
 
 
 @router.callback_query(F.data.startswith("tariff_"))
@@ -1345,7 +1571,8 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-            device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+            active_device_addons = await db.get_active_device_addon_count(subscription['id'])
+            device_limit = effective_device_limit(plan_kind, active_device_addons)
             base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
             traffic_limit_bytes = max(
                 subscription.get("current_period_limit_bytes") or 0,

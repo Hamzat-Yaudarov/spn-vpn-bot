@@ -36,6 +36,7 @@ from services.remnawave import (
     remnawave_revoke_subscription,
 )
 from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
+from services.device_addons import effective_device_limit
 
 logger = logging.getLogger(__name__)
 
@@ -829,7 +830,8 @@ async def admin_give_sub(message: Message):
             )
 
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-        device_limit = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
+        active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+        device_limit = effective_device_limit(plan_kind, active_device_addons)
         base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
         traffic_limit_bytes = max(
             subscription.get("current_period_limit_bytes") or 0,

@@ -167,6 +167,7 @@ a { color: inherit; text-decoration: none; }
 .badge { padding: 6px 9px; border-radius: 8px; color: var(--accent); background: rgba(110,231,183,.1); font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .badge.expired { color: var(--danger); background: rgba(255,126,139,.1); }
 .sub-date { margin: 25px 0 19px; padding: 17px; border-radius: 13px; background: rgba(0,0,0,.16); }
+.sub-date + .sub-date { margin-top: -8px; }
 .sub-date small { display: block; margin-bottom: 6px; color: var(--muted); }
 .sub-date strong { font-size: 18px; }
 .traffic-bar { margin-bottom: 20px; }
@@ -178,6 +179,11 @@ a { color: inherit; text-decoration: none; }
 .key-box button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-weight: 750; }
 .sub-actions { margin-top: 14px; display: flex; gap: 8px; }
 .sub-actions .button { flex: 1; padding-inline: 10px; font-size: 12px; }
+.device-addon-box { margin-top: 14px; padding: 13px; border: 1px solid rgba(110,231,183,.16); border-radius: 14px; background: rgba(110,231,183,.06); }
+.device-addon-box > small { display: block; color: var(--muted); font-weight: 750; }
+.device-addon-box .sub-actions { flex-wrap: wrap; margin-top: 10px; }
+.device-addon-box .button { min-width: 130px; flex-direction: column; gap: 2px; min-height: 54px; line-height: 1.2; }
+.device-addon-box .button small { color: var(--muted); font-size: 10px; font-weight: 650; }
 .instruction-link { width: 100%; margin-top: 12px; padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 12px; text-align: left; }
 .empty-card { grid-column: 1 / -1; padding: 55px 25px; border: 1px dashed var(--line); border-radius: 20px; text-align: center; color: var(--muted); }
 .empty-card h3 { color: var(--text); }
