@@ -145,14 +145,30 @@ async def admin_delete_subscription(subscription_id: int, _: int = Depends(requi
     if not await db.acquire_user_lock(tg_id):
         raise HTTPException(status_code=409, detail="Пользователь сейчас занят другой операцией")
     try:
+        remnawave_updated = True
         if subscription.get("remnawave_uuid"):
             expired_at = datetime.utcnow() - timedelta(seconds=1)
-            updated = await remnawave_set_subscription_expiry(None, subscription["remnawave_uuid"], expired_at)
-            if not updated:
-                raise HTTPException(status_code=502, detail="Не удалось отключить подписку в Remnawave")
-        await db.delete_subscription_record(subscription_id)
-        logger.info("Web admin deleted subscription %s for user %s", subscription_id, tg_id)
-        return {"ok": True}
+            remnawave_updated = await remnawave_set_subscription_expiry(
+                None,
+                subscription["remnawave_uuid"],
+                expired_at,
+            )
+            if not remnawave_updated:
+                logger.warning(
+                    "Web admin could not disable Remnawave subscription %s for user %s; deleting local record anyway",
+                    subscription_id,
+                    tg_id,
+                )
+        deleted = await db.delete_subscription_record(subscription_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Подписка уже удалена")
+        logger.info(
+            "Web admin deleted subscription %s for user %s (remnawave_updated=%s)",
+            subscription_id,
+            tg_id,
+            remnawave_updated,
+        )
+        return {"ok": True, "remnawave_updated": remnawave_updated}
     finally:
         await db.release_user_lock(tg_id)
 

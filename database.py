@@ -1740,12 +1740,41 @@ async def update_subscription(
 
 async def delete_subscription_record(subscription_id: int):
     """Удалить запись подписки и синхронизировать legacy-поля."""
-    subscription = await get_subscription_by_id(subscription_id)
-    if not subscription:
-        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            subscription = await conn.fetchrow(
+                "SELECT * FROM subscriptions WHERE id = $1 FOR UPDATE",
+                subscription_id,
+            )
+            if not subscription:
+                return False
 
-    await db_execute("DELETE FROM subscriptions WHERE id = $1", (subscription_id,))
-    await sync_primary_subscription_to_user(subscription['tg_id'])
+            tg_id = subscription["tg_id"]
+            await conn.execute(
+                "DELETE FROM notification_state WHERE subscription_id = $1",
+                subscription_id,
+            )
+            await conn.execute(
+                "UPDATE payments SET subscription_id = NULL, updated_at = now() WHERE subscription_id = $1",
+                subscription_id,
+            )
+            await conn.execute(
+                "DELETE FROM traffic_purchases WHERE subscription_id = $1",
+                subscription_id,
+            )
+            await conn.execute(
+                "DELETE FROM device_addon_purchases WHERE subscription_id = $1",
+                subscription_id,
+            )
+            await conn.execute(
+                "DELETE FROM subscription_traffic_cycles WHERE subscription_id = $1",
+                subscription_id,
+            )
+            await conn.execute("DELETE FROM subscriptions WHERE id = $1", subscription_id)
+
+    await sync_primary_subscription_to_user(tg_id)
+    return True
 
 
 async def has_subscription(tg_id: int) -> bool:
