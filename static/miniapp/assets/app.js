@@ -155,6 +155,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.action === "traffic") openTraffic(subId);
   if (target.dataset.action === "devices") openDevices(subId);
   if (target.dataset.action === "device-addons") openDeviceAddons(subId);
+  if (target.dataset.action === "delete-subscription") deleteSubscription(subId);
   if (target.dataset.action === "delete-device") deleteDevice(subId, target.dataset.hwid || "");
   if (target.dataset.action === "delete-all-devices") deleteAllDevices(subId);
   if (target.dataset.action === "happ") {
@@ -394,6 +395,7 @@ function subscriptionDetailHtml(s) {
       <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
       ${s.status === "active" && devicePackages.length ? `<button class="button green wide" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
       ${s.traffic.enabled ? `<button class="button green wide" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
+      <button class="button danger wide" data-action="delete-subscription" data-sub-id="${s.id}">Удалить подписку</button>
     </div>
   </div>`;
 }
@@ -538,6 +540,28 @@ async function deleteAllDevices(id) {
     await api(`/miniapp/api/subscriptions/${id}/devices/delete-all`, { method: "POST", body: JSON.stringify({}) });
     showToast("Все устройства удалены");
     await openDevices(id);
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+function confirmAction(message) {
+  if (tg?.showConfirm) return new Promise((resolve) => tg.showConfirm(message, resolve));
+  return Promise.resolve(window.confirm(message));
+}
+
+async function deleteSubscription(id) {
+  const sub = state.subs.find((item) => item.id === Number(id));
+  const name = sub ? subTitle(sub) : "эту подписку";
+  const ok = await confirmAction(`Удалить ${name}? Ключ будет удалён из Remnawave и перестанет работать. Деньги автоматически не возвращаются.`);
+  if (!ok) return;
+  try {
+    await api(`/miniapp/api/subscriptions/${id}`, { method: "DELETE" });
+    showToast("Подписка удалена");
+    state.selectedSubId = null;
+    state.keysMode = "list";
+    await reloadData();
+    switchView("subs", { preserve: true });
   } catch (e) {
     showToast(e.message);
   }

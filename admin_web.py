@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,8 +16,13 @@ from config import (
     PUBLIC_SITE_URL,
     TARIFFS,
 )
-from services.remnawave import remnawave_set_subscription_expiry
 from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
+from services.subscription_deletion import (
+    RemnawaveDeletionError,
+    SubscriptionBusyError,
+    SubscriptionNotFoundError,
+    delete_subscription_everywhere,
+)
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 
 
@@ -138,39 +143,16 @@ async def admin_adjust_subscription(subscription_id: int, body: AdjustDaysBody, 
 
 @router.delete("/admin/api/subscriptions/{subscription_id}")
 async def admin_delete_subscription(subscription_id: int, _: int = Depends(require_admin)):
-    subscription = await db.get_subscription_by_id(subscription_id)
-    if not subscription:
-        raise HTTPException(status_code=404, detail="Подписка не найдена")
-    tg_id = int(subscription["tg_id"])
-    if not await db.acquire_user_lock(tg_id):
-        raise HTTPException(status_code=409, detail="Пользователь сейчас занят другой операцией")
     try:
-        remnawave_updated = True
-        if subscription.get("remnawave_uuid"):
-            expired_at = datetime.utcnow() - timedelta(seconds=1)
-            remnawave_updated = await remnawave_set_subscription_expiry(
-                None,
-                subscription["remnawave_uuid"],
-                expired_at,
-            )
-            if not remnawave_updated:
-                logger.warning(
-                    "Web admin could not disable Remnawave subscription %s for user %s; deleting local record anyway",
-                    subscription_id,
-                    tg_id,
-                )
-        deleted = await db.delete_subscription_record(subscription_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Подписка уже удалена")
-        logger.info(
-            "Web admin deleted subscription %s for user %s (remnawave_updated=%s)",
-            subscription_id,
-            tg_id,
-            remnawave_updated,
-        )
-        return {"ok": True, "remnawave_updated": remnawave_updated}
-    finally:
-        await db.release_user_lock(tg_id)
+        result = await delete_subscription_everywhere(subscription_id, actor="web_admin")
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SubscriptionBusyError as exc:
+        raise HTTPException(status_code=409, detail="Пользователь сейчас занят другой операцией")
+    except RemnawaveDeletionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"ok": True, "remnawave_deleted": result["remnawave_deleted"]}
 
 
 @router.get("/admin/api/promos")

@@ -137,7 +137,7 @@ function renderSubscriptions() {
       <div class="sub-date"><small>Устройства</small><strong>до ${deviceLimitText(sub)}</strong></div>
       ${sub.traffic?.enabled ? `<div class="traffic-bar"><div class="traffic-meta"><span>Трафик</span><span>${used} из ${limit} ГБ</span></div><div class="bar"><i style="width:${percent}%"></i></div></div>` : ""}
       ${sub.subscription_url ? `<div class="key-box"><input readonly value="${esc(sub.subscription_url)}" /><button data-copy-key="${esc(sub.subscription_url)}">Копировать</button></div>` : `<p class="muted">Ключ появится после активации платежа.</p>`}
-      <div class="sub-actions">${sub.subscription_url ? `<button class="button primary" data-connect="${esc(sub.subscription_url)}">Подключить</button>` : ""}<button class="button glass" data-renew="${sub.id}">Продлить</button>${sub.traffic?.enabled && active ? `<button class="button glass" data-buy-traffic="${sub.id}">Купить ГБ</button>` : ""}</div>
+      <div class="sub-actions">${sub.subscription_url ? `<button class="button primary" data-connect="${esc(sub.subscription_url)}">Подключить</button>` : ""}<button class="button glass" data-renew="${sub.id}">Продлить</button>${sub.traffic?.enabled && active ? `<button class="button glass" data-buy-traffic="${sub.id}">Купить ГБ</button>` : ""}<button class="button glass danger" data-delete-subscription="${sub.id}">Удалить</button></div>
       ${active && devicePackages.length ? `<div class="device-addon-box"><small>Докупить устройства до конца текущего периода</small><div class="sub-actions">${devicePackages.map((pkg) => devicePackageButton(sub, pkg)).join("")}</div></div>` : ""}
       ${sub.subscription_url ? `<button class="instruction-link" data-connection-help>Как подключить на телефон или компьютер?</button>` : ""}
     </article>`;
@@ -356,6 +356,7 @@ document.addEventListener("click", async (event) => {
   const planButton = event.target.closest("[data-plan]");
   const openPlans = event.target.closest("[data-open-plans]");
   const renew = event.target.closest("[data-renew]");
+  const deleteSubscriptionButton = event.target.closest("[data-delete-subscription]");
   const buyTraffic = event.target.closest("[data-buy-traffic]");
   const buyDevices = event.target.closest("[data-buy-devices]");
   const trafficPlan = event.target.closest("[data-traffic-plan]");
@@ -372,6 +373,21 @@ document.addEventListener("click", async (event) => {
   if (renew) {
     const subscription = state.subscriptions.find((item) => item.id === Number(renew.dataset.renew));
     if (subscription) openRenewDialog(subscription);
+  }
+  if (deleteSubscriptionButton) {
+    const subscriptionId = Number(deleteSubscriptionButton.dataset.deleteSubscription);
+    const subscription = state.subscriptions.find((item) => item.id === subscriptionId);
+    const name = subscription ? subscriptionName(subscription) : "эту подписку";
+    if (!confirm(`Удалить ${name}? Ключ будет удалён из Remnawave и перестанет работать. Деньги автоматически не возвращаются.`)) return;
+    deleteSubscriptionButton.disabled = true;
+    try {
+      await api(`/subscriptions/${subscriptionId}`, { method: "DELETE" });
+      toast("Подписка удалена");
+      await loadAccountData();
+    } catch (error) {
+      toast(error.message, true);
+      deleteSubscriptionButton.disabled = false;
+    }
   }
   if (renewPlan && state.renewSubscription) {
     const subscription = state.renewSubscription;

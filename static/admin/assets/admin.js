@@ -84,7 +84,7 @@ $("userDetails").addEventListener("click", async (e) => {
       toast("Срок подписки обновлён");
       await openUser($("userDialog").dataset.user);
     }
-    if (del) { if (!confirm("Удалить подписку и отключить её в Remnawave?")) return; del.disabled = true; const result = await api(`/subscriptions/${del.dataset.deleteSub}`, { method: "DELETE" }); toast(result.remnawave_updated === false ? "Подписка удалена, но Remnawave не подтвердил отключение" : "Подписка удалена"); await openUser($("userDialog").dataset.user); }
+    if (del) { if (!confirm("Удалить подписку из бота и Remnawave?")) return; del.disabled = true; await api(`/subscriptions/${del.dataset.deleteSub}`, { method: "DELETE" }); toast("Подписка удалена из бота и Remnawave"); await openUser($("userDialog").dataset.user); }
   } catch (error) { toast(error.message, true); }
 });
 

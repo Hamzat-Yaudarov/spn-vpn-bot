@@ -34,6 +34,7 @@ from services.remnawave import (
     remnawave_get_user_info,
     remnawave_get_subscription_url,
     remnawave_revoke_subscription,
+    remnawave_delete_user,
 )
 from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
 from services.device_addons import effective_device_limit
@@ -737,7 +738,7 @@ async def admin_give_sub(message: Message):
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
             "• <code>ТИП</code> - <code>regular</code> или <code>bypass</code>\n"
-            "• <code>НОМЕР</code> - номер подписки внутри типа 1..3 (необязательно)\n"
+            f"• <code>НОМЕР</code> - номер подписки внутри типа 1..{db.MAX_SUBSCRIPTIONS_PER_USER} (необязательно)\n"
             "• <code>ДНЕЙ</code> - количество дней (число > 0)\n\n"
             "<b>Примеры:</b>\n"
             "<code>/give_sub 123456789 regular 30</code>\n"
@@ -784,7 +785,7 @@ async def admin_give_sub(message: Message):
             "Убедитесь, что:\n"
             "• ТГ_ИД, НОМЕР и ДНЕЙ - целые числа\n"
             "• ТИП - regular или bypass\n"
-            "• НОМЕР от 1 до 3\n"
+            f"• НОМЕР от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}\n"
             "• ДНЕЙ больше 0\n\n"
             "<b>Примеры:</b>\n"
             "<code>/give_sub 123456789 regular 30</code>\n"
@@ -809,7 +810,7 @@ async def admin_give_sub(message: Message):
         if type_index is None:
             type_index = await db.get_next_type_index(tg_id, plan_kind)
             if type_index is None:
-                await message.answer(f"❌ У пользователя уже максимум 3 подписки типа <code>{plan_kind}</code>")
+                await message.answer(f"❌ У пользователя уже максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок типа <code>{plan_kind}</code>")
                 return
 
         subscription = await db.get_subscription_by_type_index(tg_id, plan_kind, type_index)
@@ -1040,7 +1041,7 @@ async def admin_take_sub(message: Message):
             "<b>Использование:</b> /take_sub ТГ_ИД [СЛОТ] ДНЕЙ\n\n"
             "<b>Параметры:</b>\n"
             "• <code>ТГ_ИД</code> - ID пользователя Telegram (число)\n"
-            "• <code>СЛОТ</code> - номер подписки 1..3 (необязательно, по умолчанию 1)\n"
+            f"• <code>СЛОТ</code> - номер подписки 1..{db.MAX_SUBSCRIPTIONS_PER_USER * 2} (необязательно, по умолчанию 1)\n"
             "• <code>ДНЕЙ</code> - количество дней для удаления (число > 0)\n\n"
             "<b>Примеры:</b>\n"
             "<code>/take_sub 123456789 10</code>\n"
@@ -1057,8 +1058,9 @@ async def admin_take_sub(message: Message):
             await message.answer("❌ ID пользователя должен быть положительным числом")
             return
 
-        if slot_number < 1 or slot_number > db.MAX_SUBSCRIPTIONS_PER_USER:
-            await message.answer(f"❌ Слот должен быть от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER}")
+        max_slot = db.MAX_SUBSCRIPTIONS_PER_USER * 2
+        if slot_number < 1 or slot_number > max_slot:
+            await message.answer(f"❌ Слот должен быть от 1 до {max_slot}")
             return
 
         if days <= 0:
@@ -1075,7 +1077,7 @@ async def admin_take_sub(message: Message):
             "❌ <b>Ошибка валидации</b>\n\n"
             "Убедитесь, что:\n"
             "• ТГ_ИД, СЛОТ и ДНЕЙ - целые числа\n"
-            "• СЛОТ от 1 до 3\n"
+            f"• СЛОТ от 1 до {db.MAX_SUBSCRIPTIONS_PER_USER * 2}\n"
             "• ДНЕЙ больше 0\n\n"
             "<b>Примеры:</b>\n"
             "<code>/take_sub 123456789 10</code>\n"
@@ -1129,16 +1131,11 @@ async def admin_take_sub(message: Message):
         logger.info(f"Admin {admin_id} /take_sub user {tg_id} slot {slot_number}: current_until={current_subscription_until}, removing {days} days, new_until={new_subscription_until}, now={now}")
 
         if new_subscription_until <= now:
-            connector = aiohttp.TCPConnector(ssl=False)
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                success = await remnawave_set_subscription_expiry(
-                    session,
-                    remnawave_uuid,
-                    now - timedelta(seconds=1)
-                )
-                if not success:
-                    logger.warning(f"Failed to update Remnawave for user {tg_id}, continuing")
+            success = await remnawave_delete_user(None, remnawave_uuid)
+            if not success:
+                await message.answer("❌ Не удалось удалить подписку в Remnawave. Локальная запись не удалена.")
+                logger.warning(f"Failed to delete Remnawave user {remnawave_uuid} for {tg_id}")
+                return
 
             await db.delete_subscription_record(subscription['id'])
 
@@ -1147,7 +1144,7 @@ async def admin_take_sub(message: Message):
                 f"👤 <b>Пользователь:</b> <code>{tg_id}</code>\n"
                 f"🔢 <b>Слот:</b> #{slot_number}\n"
                 f"📅 <b>Удалено дней:</b> {days}\n"
-                f"❌ <b>Статус:</b> подписка истекла"
+                f"❌ <b>Статус:</b> подписка удалена из Remnawave"
             )
 
             try:

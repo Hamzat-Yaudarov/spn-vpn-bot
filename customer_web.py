@@ -32,6 +32,12 @@ from services.device_addons import available_device_addon_packages, current_devi
 from services.payment_summary import build_payment_success_summary
 from services.payment_processing import process_paid_payment
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
+from services.subscription_deletion import (
+    RemnawaveDeletionError,
+    SubscriptionBusyError,
+    SubscriptionNotFoundError,
+    delete_subscription_everywhere,
+)
 from services.subscription_sync import reconcile_subscription_expiry
 from services.web_auth import (
     create_session_token,
@@ -369,6 +375,21 @@ async def website_subscriptions(account=Depends(require_web_account)):
     return {"subscriptions": [await _serialize_subscription(item) for item in subscriptions]}
 
 
+@router.delete("/site/api/subscriptions/{subscription_id}")
+async def website_delete_subscription(subscription_id: int, account=Depends(require_web_account)):
+    service_user_id = int(account["service_user_id"])
+    try:
+        await delete_subscription_everywhere(subscription_id, tg_id=service_user_id, actor="website_user")
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SubscriptionBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RemnawaveDeletionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"ok": True}
+
+
 @router.get("/site/api/payments")
 async def website_payments(account=Depends(require_web_account)):
     rows = await db.list_web_account_payments(int(account["service_user_id"]))
@@ -404,7 +425,7 @@ async def website_subscription_payment(body: SubscriptionPaymentBody, account=De
     else:
         target_slot_number = await db.get_next_type_index(service_user_id, tariff["kind"])
         if target_slot_number is None:
-            raise HTTPException(status_code=400, detail="Достигнут лимит подписок этого типа")
+            raise HTTPException(status_code=400, detail=f"Достигнут лимит: максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок этого типа")
 
     discounts = await db.get_active_discounts()
     amount = calculate_discounted_price(

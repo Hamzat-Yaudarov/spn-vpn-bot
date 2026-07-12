@@ -40,6 +40,12 @@ from services.remnawave import (
     remnawave_get_user_info,
     remnawave_set_subscription_expiry,
 )
+from services.subscription_deletion import (
+    RemnawaveDeletionError,
+    SubscriptionBusyError,
+    SubscriptionNotFoundError,
+    delete_subscription_everywhere,
+)
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 from services.subscription_sync import refresh_subscription_expiry
 from services.discounts import calculate_discounted_price, current_price
@@ -438,6 +444,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         and status_text == 'активна'
     ):
         keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
+    keyboard.append([InlineKeyboardButton(text="🗑 Удалить подписку", callback_data=f"delete_subscription_{subscription_id}", style="danger")])
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -937,7 +944,7 @@ async def process_plan_choice(callback: CallbackQuery, state: FSMContext):
     type_index = await db.get_next_type_index(tg_id, plan_kind)
     if type_index is None:
         plan_name = "обычных" if plan_kind == "regular" else "подписок с антиглушилкой"
-        await callback.answer(f"У тебя уже максимум 3 {plan_name}", show_alert=True)
+        await callback.answer(f"У тебя уже максимум {db.MAX_SUBSCRIPTIONS_PER_USER} {plan_name}", show_alert=True)
         return
 
     await state.update_data(
@@ -986,6 +993,61 @@ async def process_my_subscription_view(callback: CallbackQuery, state: FSMContex
     subscription = await db.get_subscription_by_id(subscription_id, callback.from_user.id)
     plan_kind = (subscription.get('plan_kind') or 'regular') if subscription else 'regular'
     await _show_subscription_card(callback, subscription_id, back_callback=f"my_subscriptions_{plan_kind}")
+
+
+@router.callback_query(F.data.startswith("delete_subscription_confirm_"))
+async def process_delete_subscription_confirm(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    try:
+        result = await delete_subscription_everywhere(subscription_id, tg_id=callback.from_user.id, actor="user_bot")
+    except SubscriptionNotFoundError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except SubscriptionBusyError:
+        await callback.answer("Подписка сейчас занята другой операцией. Попробуй чуть позже.", show_alert=True)
+        return
+    except RemnawaveDeletionError:
+        await callback.answer("Не удалось удалить ключ в Remnawave. Попробуй позже или напиши в поддержку.", show_alert=True)
+        return
+
+    await state.clear()
+    subscription = result["subscription"]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"✅ <b>Подписка удалена</b>\n\n"
+        f"{_subscription_name(subscription)} удалена из бота и Remnawave. Ключ больше не будет работать.\n\n"
+        "Если удалил подписку по ошибке — напиши в поддержку.",
+        kb,
+        "Подписка удалена",
+    )
+
+
+@router.callback_query(F.data.startswith("delete_subscription_"))
+async def process_delete_subscription_request(callback: CallbackQuery, state: FSMContext):
+    subscription_id = int(callback.data.split("_")[-1])
+    subscription = await db.get_subscription_by_id(subscription_id, callback.from_user.id)
+
+    if not _is_bot_viewable_subscription(subscription):
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"delete_subscription_confirm_{subscription_id}", style="danger")],
+        [InlineKeyboardButton(text="↩️ Отмена", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+    ])
+    await edit_text_with_photo(
+        callback,
+        f"🗑 <b>Удалить {_subscription_name(subscription)}?</b>\n\n"
+        "Ключ будет удалён из Remnawave и перестанет работать. Это действие нельзя отменить.\n\n"
+        "Удаление не оформляет возврат денег. Если нужен возврат и прошло меньше 3 суток после оплаты — используй /refund.",
+        kb,
+        "Удаление подписки",
+    )
 
 
 @router.callback_query(F.data.startswith("subscription_instruction_"))

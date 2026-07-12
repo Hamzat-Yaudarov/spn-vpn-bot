@@ -229,6 +229,50 @@ async def remnawave_update_user_profile(
         return False
 
 
+async def remnawave_delete_user(session: aiohttp.ClientSession, user_uuid: str) -> bool:
+    """Физически удалить пользователя из Remnawave."""
+    async def _delete():
+        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+            async with temp_session.delete(
+                f"{REMNAWAVE_BASE_URL}/users/{user_uuid}",
+                headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"},
+            ) as resp:
+                if resp.status in (200, 201, 204):
+                    if resp.status != 204:
+                        data = {}
+                        if resp.content_length != 0:
+                            try:
+                                data = await resp.json(content_type=None)
+                            except Exception:
+                                data = {}
+                        response = data.get("response", data) if isinstance(data, dict) else {}
+                        deleted_flag = None
+                        for key in ("isDeleted", "is_deleted", "deleted"):
+                            if isinstance(response, dict) and key in response:
+                                deleted_flag = response[key]
+                                break
+                            if isinstance(data, dict) and key in data:
+                                deleted_flag = data[key]
+                                break
+                        if deleted_flag is False:
+                            raise RuntimeError(f"Delete user returned false: {data}")
+                    logging.info("Deleted Remnawave user %s", user_uuid)
+                    return True
+                if resp.status == 404:
+                    logging.info("Remnawave user %s already deleted", user_uuid)
+                    return True
+                error_text = await resp.text()
+                raise RuntimeError(f"Delete user failed ({resp.status}): {error_text}")
+
+    try:
+        result = await safe_api_call(_delete, error_message=f"Failed to delete Remnawave user {user_uuid}")
+        return bool(result)
+    except Exception as e:
+        logging.error(f"Delete Remnawave user error: {e}")
+        return False
+
+
 async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid: str) -> bool:
     """Сбросить трафик пользователя в Remnawave."""
     async def _reset():

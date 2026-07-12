@@ -42,6 +42,7 @@ a { color: inherit; text-decoration: none; }
 .button.primary:hover { box-shadow: 0 14px 38px rgba(54, 214, 156, .28); }
 .button.ghost { background: transparent; }
 .button.glass { background: rgba(255,255,255,.06); backdrop-filter: blur(10px); }
+.button.danger { color: #ffd6db; border-color: rgba(255,126,139,.32); background: rgba(255,126,139,.1); }
 .button.large { min-height: 52px; padding-inline: 24px; border-radius: 14px; }
 .button.wide { width: 100%; min-height: 50px; }
 

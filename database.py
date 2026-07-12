@@ -15,7 +15,7 @@ from config import (
 )
 
 
-MAX_SUBSCRIPTIONS_PER_USER = 3
+MAX_SUBSCRIPTIONS_PER_USER = 5
 
 
 # Глобальный пул подключений

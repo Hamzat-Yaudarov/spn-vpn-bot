@@ -31,6 +31,12 @@ from services.remnawave import (
     remnawave_get_subscription_url,
     remnawave_get_user_info,
 )
+from services.subscription_deletion import (
+    RemnawaveDeletionError,
+    SubscriptionBusyError,
+    SubscriptionNotFoundError,
+    delete_subscription_everywhere,
+)
 from services.yookassa import create_yookassa_payment, get_payment_status
 from services.subscription_sync import reconcile_subscription_expiry
 from services.discounts import calculate_discounted_price
@@ -319,6 +325,22 @@ async def miniapp_subscriptions(request: Request):
     return JSONResponse({"subscriptions": serialized})
 
 
+@app.delete("/miniapp/api/subscriptions/{subscription_id}")
+async def miniapp_delete_subscription(subscription_id: int, request: Request):
+    user = await _miniapp_user(request)
+    tg_id = int(user["id"])
+    try:
+        await delete_subscription_everywhere(subscription_id, tg_id=tg_id, actor="miniapp_user")
+    except SubscriptionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SubscriptionBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RemnawaveDeletionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return JSONResponse({"ok": True})
+
+
 @app.get("/miniapp/api/subscriptions/{subscription_id}/devices")
 async def miniapp_subscription_devices(subscription_id: int, request: Request):
     user = await _miniapp_user(request)
@@ -411,7 +433,7 @@ async def miniapp_create_subscription_payment(request: Request):
     else:
         target_slot_number = await db.get_next_type_index(tg_id, tariff["kind"])
         if target_slot_number is None:
-            raise HTTPException(status_code=400, detail="Subscription limit reached")
+            raise HTTPException(status_code=400, detail=f"Достигнут лимит: максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок этого типа")
 
     discounts = await db.get_active_discounts()
     amount = calculate_discounted_price(
