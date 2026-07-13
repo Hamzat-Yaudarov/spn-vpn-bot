@@ -2535,6 +2535,45 @@ async def apply_traffic_reset(subscription_id: int, remaining_paid_traffic_bytes
     )
 
 
+async def update_subscription_traffic_period(
+    subscription_id: int,
+    *,
+    traffic_enabled: bool,
+    base_traffic_bytes: int,
+    carried_traffic_bytes: int,
+    current_paid_traffic_bytes: int,
+    current_period_limit_bytes: int,
+    traffic_reset_at,
+    last_known_used_traffic_bytes: int,
+) -> None:
+    """Обновить traffic-cycle подписки после покупки/продления/ручной правки."""
+    await db_execute(
+        """
+        UPDATE subscriptions
+        SET traffic_enabled = $2,
+            base_traffic_bytes = $3,
+            carried_traffic_bytes = $4,
+            current_paid_traffic_bytes = $5,
+            current_period_limit_bytes = $6,
+            traffic_reset_at = $7,
+            last_known_used_traffic_bytes = $8,
+            last_traffic_sync_at = now(),
+            updated_at = now()
+        WHERE id = $1
+        """,
+        (
+            subscription_id,
+            traffic_enabled,
+            base_traffic_bytes,
+            carried_traffic_bytes,
+            current_paid_traffic_bytes,
+            current_period_limit_bytes,
+            traffic_reset_at,
+            last_known_used_traffic_bytes,
+        )
+    )
+
+
 async def update_payment_status(payment_id: int, status: str):
     """Обновить статус платежа"""
     await db_execute(

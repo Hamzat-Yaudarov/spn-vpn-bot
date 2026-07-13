@@ -6,7 +6,6 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
 from config import (
-    BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_TRAFFIC_PACKAGES,
     BYPASS_SQUAD_UUID,
@@ -18,10 +17,12 @@ from config import (
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
+    remnawave_reset_user_traffic,
     remnawave_set_subscription_expiry,
     remnawave_update_user_profile,
 )
 from services.device_addons import device_count_text, effective_device_limit
+from services.traffic_periods import build_traffic_period_state
 
 
 logger = logging.getLogger(__name__)
@@ -146,13 +147,11 @@ async def process_paid_payment(
         payment_target = payment_record.get("payment_target") or "new"
         plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        now = datetime.utcnow()
+        traffic_state = build_traffic_period_state(subscription, plan_kind, now)
         active_device_addons = await db.get_active_device_addon_count(subscription["id"])
         device_limit = effective_device_limit(plan_kind, active_device_addons)
-        base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-        traffic_limit_bytes = max(
-            subscription.get("current_period_limit_bytes") or 0,
-            base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
-        ) if plan_kind == "bypass" else 0
+        traffic_limit_bytes = traffic_state.limit_bytes
         traffic_limit_strategy = "NO_RESET"
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
@@ -188,6 +187,27 @@ async def process_paid_payment(
                     invoice_id,
                 )
                 return False
+
+            should_reset_traffic_now = (
+                traffic_state.enabled
+                and not traffic_state.was_active
+                and bool(uuid)
+                and (payment_target == "renew" or bool(subscription.get("remnawave_uuid")))
+            )
+            if should_reset_traffic_now:
+                reset_ok = await remnawave_reset_user_traffic(session, uuid)
+                if reset_ok:
+                    logger.info(
+                        "Traffic reset immediately after reactivating expired bypass subscription %s",
+                        subscription["id"],
+                    )
+                else:
+                    logger.warning(
+                        "Immediate traffic reset failed for reactivated subscription %s; queued retry",
+                        subscription["id"],
+                    )
+                    traffic_state.reset_at = now
+                    traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
 
             try:
                 referrer = await db.get_referrer(tg_id)
@@ -259,7 +279,6 @@ async def process_paid_payment(
                 )
 
             existing_subscription = subscription.get("subscription_until")
-            now = datetime.utcnow()
 
             if existing_subscription and existing_subscription > now:
                 new_until = existing_subscription + timedelta(days=days)
@@ -281,11 +300,6 @@ async def process_paid_payment(
                     new_until,
                 )
 
-            traffic_reset_at = None
-            if plan_kind == "bypass":
-                traffic_reset_at = subscription.get("traffic_reset_at") if existing_subscription and existing_subscription > now else None
-                traffic_reset_at = traffic_reset_at or now + timedelta(days=30)
-
             if not await remnawave_set_subscription_expiry(session, uuid, new_until):
                 logger.warning("Failed to sync Remnawave expiry for subscription %s", subscription["id"])
 
@@ -306,20 +320,26 @@ async def process_paid_payment(
                     is_renewable = TRUE,
                     traffic_enabled = $2,
                     base_traffic_bytes = $3,
-                    current_period_limit_bytes = $4,
-                    traffic_reset_at = $5,
-                    hwid_device_limit = $6,
+                    carried_traffic_bytes = $4,
+                    current_paid_traffic_bytes = $5,
+                    current_period_limit_bytes = $6,
+                    traffic_reset_at = $7,
+                    hwid_device_limit = $8,
+                    last_known_used_traffic_bytes = $9,
                     last_traffic_sync_at = now(),
-                    purchase_days = $7
-                WHERE id = $8
+                    purchase_days = $10
+                WHERE id = $11
                 """,
                 (
                     plan_kind,
-                    plan_kind == "bypass",
-                    base_traffic_bytes,
+                    traffic_state.enabled,
+                    traffic_state.base_bytes,
+                    traffic_state.carried_bytes,
+                    traffic_state.paid_bytes,
                     traffic_limit_bytes,
-                    traffic_reset_at,
+                    traffic_state.reset_at,
                     device_limit,
+                    traffic_state.last_known_used_bytes,
                     days,
                     subscription["id"],
                 )

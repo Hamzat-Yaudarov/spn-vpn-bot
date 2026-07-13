@@ -14,11 +14,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from config import (
     ADMIN_ID,
-    BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     DEFAULT_SQUAD_UUID,
-    GB_BYTES,
     MINIAPP_URL,
     PUBLIC_SITE_URL,
     REGULAR_HWID_DEVICE_LIMIT,
@@ -33,11 +31,13 @@ from services.remnawave import (
     remnawave_set_subscription_expiry,
     remnawave_get_user_info,
     remnawave_get_subscription_url,
+    remnawave_reset_user_traffic,
     remnawave_revoke_subscription,
     remnawave_delete_user,
 )
 from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
 from services.device_addons import effective_device_limit
+from services.traffic_periods import build_traffic_period_state
 
 logger = logging.getLogger(__name__)
 
@@ -831,14 +831,11 @@ async def admin_give_sub(message: Message):
             )
 
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        now = datetime.utcnow()
+        traffic_state = build_traffic_period_state(subscription, plan_kind, now)
         active_device_addons = await db.get_active_device_addon_count(subscription["id"])
         device_limit = effective_device_limit(plan_kind, active_device_addons)
-        base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-        traffic_limit_bytes = max(
-            subscription.get("current_period_limit_bytes") or 0,
-            base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
-        ) if plan_kind == "bypass" else 0
-        now = datetime.utcnow()
+        traffic_limit_bytes = traffic_state.limit_bytes
         current_until = subscription.get('subscription_until')
         if current_until and current_until > now:
             new_until = current_until + timedelta(days=days)
@@ -870,6 +867,27 @@ async def admin_give_sub(message: Message):
                 logger.error(f"Failed to get/create Remnawave user for TG {tg_id} by admin {admin_id}")
                 return
 
+            should_reset_traffic_now = (
+                traffic_state.enabled
+                and not traffic_state.was_active
+                and bool(uuid)
+                and bool(subscription.get("remnawave_uuid"))
+            )
+            if should_reset_traffic_now:
+                reset_ok = await remnawave_reset_user_traffic(session, uuid)
+                if reset_ok:
+                    logger.info(
+                        "Traffic reset immediately after admin reactivated expired bypass subscription %s",
+                        subscription["id"],
+                    )
+                else:
+                    logger.warning(
+                        "Immediate traffic reset failed for admin-reactivated subscription %s; queued retry",
+                        subscription["id"],
+                    )
+                    traffic_state.reset_at = now
+                    traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
+
             success = await remnawave_set_subscription_expiry(session, uuid, new_until)
             if not success:
                 logger.warning(f"Failed to set subscription expiry in Remnawave for {tg_id} {plan_kind} #{type_index}, but continuing")
@@ -888,22 +906,28 @@ async def admin_give_sub(message: Message):
                     purchase_days = $3,
                     traffic_enabled = $4,
                     base_traffic_bytes = $5,
-                    current_period_limit_bytes = $6,
-                    traffic_reset_at = $7,
-                    hwid_device_limit = $8,
+                    carried_traffic_bytes = $6,
+                    current_paid_traffic_bytes = $7,
+                    current_period_limit_bytes = $8,
+                    traffic_reset_at = $9,
+                    hwid_device_limit = $10,
+                    last_known_used_traffic_bytes = $11,
                     last_traffic_sync_at = now(),
                     updated_at = now()
-                WHERE id = $9
+                WHERE id = $12
                 """,
                 (
                     plan_kind,
                     type_index,
                     days,
-                    plan_kind == "bypass",
-                    base_traffic_bytes,
+                    traffic_state.enabled,
+                    traffic_state.base_bytes,
+                    traffic_state.carried_bytes,
+                    traffic_state.paid_bytes,
                     traffic_limit_bytes,
-                    (subscription.get("traffic_reset_at") if plan_kind == "bypass" and current_until and current_until > now else None) or (now + timedelta(days=30) if plan_kind == "bypass" else None),
+                    traffic_state.reset_at,
                     device_limit,
+                    traffic_state.last_known_used_bytes,
                     subscription['id'],
                 )
             )

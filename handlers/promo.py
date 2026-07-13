@@ -10,9 +10,11 @@ import database as db
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
+    remnawave_reset_user_traffic,
     remnawave_set_subscription_expiry,
 )
 from services.device_addons import effective_device_limit
+from services.traffic_periods import build_traffic_period_state
 from handlers.start import show_main_menu
 from services.image_handler import send_text_with_photo
 
@@ -198,13 +200,26 @@ async def process_promo_input(message: Message, state: FSMContext):
                 purchase_days=days,
             )
 
+        plan_kind = subscription.get("plan_kind") or "regular"
+        squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+        now = datetime.utcnow()
+        existing_subscription = subscription.get('subscription_until')
+        traffic_state = build_traffic_period_state(subscription, plan_kind, now)
+        active_device_addons = await db.get_active_device_addon_count(subscription["id"])
+        device_limit = effective_device_limit(plan_kind, active_device_addons)
+
+        if existing_subscription and existing_subscription > now:
+            # Активная подписка есть - добавляем дни к ней
+            new_until = existing_subscription + timedelta(days=days)
+            logger.info(f"User {tg_id} has active subscription, extending from {existing_subscription} by {days} days to {new_until}")
+        else:
+            # Подписки нет или она истекла - создаём новую
+            new_until = now + timedelta(days=days)
+            logger.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
+
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            plan_kind = subscription.get("plan_kind") or "regular"
-            squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-            active_device_addons = await db.get_active_device_addon_count(subscription["id"])
-            device_limit = effective_device_limit(plan_kind, active_device_addons)
             remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(
                 tg_id,
                 plan_kind,
@@ -216,6 +231,8 @@ async def process_promo_input(message: Message, state: FSMContext):
                 days=days,
                 extend_if_exists=promo_target_mode == "existing" and bool(subscription.get("remnawave_uuid")),
                 remna_username=remna_username,
+                traffic_limit_bytes=traffic_state.limit_bytes if plan_kind == "bypass" else 0,
+                traffic_limit_strategy="NO_RESET",
                 active_internal_squads=[squad_uuid],
                 hwid_device_limit=device_limit,
                 telegram_id=tg_id,
@@ -236,21 +253,27 @@ async def process_promo_input(message: Message, state: FSMContext):
                 await show_main_menu(message)
                 return
 
-        existing_subscription = subscription.get('subscription_until')
-        now = datetime.utcnow()
+            should_reset_traffic_now = (
+                traffic_state.enabled
+                and not traffic_state.was_active
+                and bool(uuid)
+                and (promo_target_mode == "existing" or bool(subscription.get("remnawave_uuid")))
+            )
+            if should_reset_traffic_now:
+                reset_ok = await remnawave_reset_user_traffic(session, uuid)
+                if reset_ok:
+                    logger.info(
+                        "Traffic reset immediately after promo reactivated expired bypass subscription %s",
+                        subscription["id"],
+                    )
+                else:
+                    logger.warning(
+                        "Immediate traffic reset failed for promo-reactivated subscription %s; queued retry",
+                        subscription["id"],
+                    )
+                    traffic_state.reset_at = now
+                    traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
 
-        if existing_subscription and existing_subscription > now:
-            # Активная подписка есть - добавляем дни к ней
-            new_until = existing_subscription + timedelta(days=days)
-            logger.info(f"User {tg_id} has active subscription, extending from {existing_subscription} by {days} days to {new_until}")
-        else:
-            # Подписки нет или она истекла - создаём новую
-            new_until = now + timedelta(days=days)
-            logger.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
-
-        connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             if not await remnawave_set_subscription_expiry(session, uuid, new_until):
                 logger.warning("Failed to sync Remnawave expiry for promo subscription %s", subscription['id'])
 
@@ -260,6 +283,16 @@ async def process_promo_input(message: Message, state: FSMContext):
             username,
             new_until,
             squad_uuid,
+        )
+        await db.update_subscription_traffic_period(
+            subscription['id'],
+            traffic_enabled=traffic_state.enabled,
+            base_traffic_bytes=traffic_state.base_bytes,
+            carried_traffic_bytes=traffic_state.carried_bytes,
+            current_paid_traffic_bytes=traffic_state.paid_bytes,
+            current_period_limit_bytes=traffic_state.limit_bytes,
+            traffic_reset_at=traffic_state.reset_at,
+            last_known_used_traffic_bytes=traffic_state.last_known_used_bytes,
         )
 
         # Отправляем успешное сообщение

@@ -11,7 +11,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import database as db
 from config import (
     ADMIN_ID,
-    BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     BYPASS_TRAFFIC_PACKAGES,
@@ -38,6 +37,7 @@ from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
     remnawave_get_user_info,
+    remnawave_reset_user_traffic,
     remnawave_set_subscription_expiry,
 )
 from services.subscription_deletion import (
@@ -49,6 +49,7 @@ from services.subscription_deletion import (
 from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
 from services.subscription_sync import refresh_subscription_expiry
 from services.discounts import calculate_discounted_price, current_price
+from services.traffic_periods import build_traffic_period_state
 from states import UserStates
 
 
@@ -1655,13 +1656,11 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
             squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
+            now = datetime.utcnow()
+            traffic_state = build_traffic_period_state(subscription, plan_kind, now)
             active_device_addons = await db.get_active_device_addon_count(subscription['id'])
             device_limit = effective_device_limit(plan_kind, active_device_addons)
-            base_traffic_bytes = BYPASS_BASE_TRAFFIC_GB * GB_BYTES if plan_kind == "bypass" else 0
-            traffic_limit_bytes = max(
-                subscription.get("current_period_limit_bytes") or 0,
-                base_traffic_bytes + (subscription.get("carried_traffic_bytes") or 0) + (subscription.get("current_paid_traffic_bytes") or 0),
-            ) if plan_kind == "bypass" else 0
+            traffic_limit_bytes = traffic_state.limit_bytes
             remna_username = subscription.get("remnawave_username") or _build_new_remnawave_username(
                 tg_id,
                 plan_kind,
@@ -1689,20 +1688,35 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 logging.warning(f"Failed to get subscription URL for {uuid}")
 
         existing_subscription = subscription.get("subscription_until")
-        now = datetime.utcnow()
         if existing_subscription and existing_subscription > now:
             new_until = existing_subscription + timedelta(days=tariff["days"])
         else:
             new_until = now + timedelta(days=tariff["days"])
 
-        traffic_reset_at = None
-        if plan_kind == "bypass":
-            traffic_reset_at = subscription.get("traffic_reset_at") if existing_subscription and existing_subscription > now else None
-            traffic_reset_at = traffic_reset_at or now + timedelta(days=30)
-
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            should_reset_traffic_now = (
+                traffic_state.enabled
+                and not traffic_state.was_active
+                and bool(uuid)
+                and (purchase_mode == "renew" or bool(subscription.get("remnawave_uuid")))
+            )
+            if should_reset_traffic_now:
+                reset_ok = await remnawave_reset_user_traffic(session, uuid)
+                if reset_ok:
+                    logging.info(
+                        "Traffic reset immediately after reactivating expired bypass subscription %s",
+                        subscription["id"],
+                    )
+                else:
+                    logging.warning(
+                        "Immediate traffic reset failed for reactivated subscription %s; queued retry",
+                        subscription["id"],
+                    )
+                    traffic_state.reset_at = now
+                    traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
+
             if not await remnawave_set_subscription_expiry(session, uuid, new_until):
                 logging.warning(f"Failed to sync Remnawave expiry for referral balance subscription {subscription['id']}")
 
@@ -1722,20 +1736,26 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
                 is_renewable = TRUE,
                 traffic_enabled = $2,
                 base_traffic_bytes = $3,
-                current_period_limit_bytes = $4,
-                traffic_reset_at = $5,
-                hwid_device_limit = $6,
+                carried_traffic_bytes = $4,
+                current_paid_traffic_bytes = $5,
+                current_period_limit_bytes = $6,
+                traffic_reset_at = $7,
+                hwid_device_limit = $8,
+                last_known_used_traffic_bytes = $9,
                 last_traffic_sync_at = now(),
-                purchase_days = $7
-            WHERE id = $8
+                purchase_days = $10
+            WHERE id = $11
             """,
             (
                 plan_kind,
-                plan_kind == "bypass",
-                base_traffic_bytes,
+                traffic_state.enabled,
+                traffic_state.base_bytes,
+                traffic_state.carried_bytes,
+                traffic_state.paid_bytes,
                 traffic_limit_bytes,
-                traffic_reset_at,
+                traffic_state.reset_at,
                 device_limit,
+                traffic_state.last_known_used_bytes,
                 tariff["days"],
                 subscription['id'],
             )
