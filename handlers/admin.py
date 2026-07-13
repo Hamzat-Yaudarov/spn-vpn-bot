@@ -38,6 +38,7 @@ from services.remnawave import (
 from services.subscription_adjustment import SubscriptionAdjustmentError, adjust_subscription_days
 from services.device_addons import effective_device_limit
 from services.traffic_periods import build_traffic_period_state
+from services.traffic_resets import reset_all_active_bypass_traffic
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,85 @@ def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) ->
 
 def _plan_title(plan_kind: str) -> str:
     return "Обычная" if plan_kind == "regular" else "С антиглушилкой"
+
+
+@router.message(Command("help"))
+async def admin_help(message: Message):
+    """Показать администратору список команд."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("Откройте главное меню: /start")
+        return
+
+    await message.answer(
+        "🛠 <b>Команды админа</b>\n\n"
+        "<b>Подписки</b>\n"
+        "• <code>/give_sub ТГ_ИД ТИП [НОМЕР] ДНЕЙ</code> — выдать или продлить подписку. Тип: <code>regular</code> / <code>bypass</code>.\n"
+        "• <code>/sub_days ТГ_ИД ID_ПОДПИСКИ +/-ДНИ</code> — добавить или убрать дни у конкретной подписки.\n"
+        "• <code>/take_sub ТГ_ИД [СЛОТ] ДНЕЙ</code> — убрать дни по старому номеру слота; если дней больше остатка, подписка удалится.\n"
+        "• <code>/reset_traffic_all</code> — сразу сбросить трафик всем активным подпискам с антиглушилкой.\n"
+        "• <code>/reissue_sub_links [active]</code> — перевыпустить ссылки подписок; <code>active</code> только для активных.\n\n"
+        "<b>Промо и ссылки</b>\n"
+        "• <code>/new_code КОД ДНЕЙ ЛИМИТ</code> — создать промокод.\n"
+        "• <code>/new_link КОД [Название]</code> — создать tracking-ссылку.\n"
+        "• <code>/links</code> — список tracking-ссылок.\n"
+        "• <code>/link_stats КОД</code> — статистика конкретной ссылки.\n"
+        "• <code>/disable_link КОД</code> — выключить tracking-ссылку.\n"
+        "• <code>/enable_link КОД</code> — включить tracking-ссылку.\n\n"
+        "<b>Пользователи и рассылки</b>\n"
+        "• <code>/send ТГ_ИД текст</code> — отправить сообщение пользователю. Можно ответить командой на фото/сообщение.\n"
+        "• <code>/all_sms</code> — рассылка всем пользователям.\n"
+        "• <code>/not_sub_sms</code> — рассылка пользователям без активной подписки.\n"
+        "• <code>/enable_collab ТГ_ИД %</code> — включить партнёрство: 15, 20, 25 или 30%.\n"
+        "• <code>/stats</code> — статистика бота.\n\n"
+        "Подсказка: ID подписки удобнее брать из веб-админки."
+    )
+
+
+@router.message(Command("reset_traffic_all", "reset_all_traffic"))
+async def admin_reset_all_traffic(message: Message):
+    """Принудительно сбросить трафик всем активным bypass-подпискам."""
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        logger.warning("Unauthorized /reset_traffic_all attempt from user %s", admin_id)
+        return
+
+    status_message = await message.answer(
+        "🔄 <b>Запустил массовый сброс трафика</b>\n\n"
+        "Сбрасываю только активные подписки с антиглушилкой.\n"
+        "Это может занять немного времени."
+    )
+
+    try:
+        result = await reset_all_active_bypass_traffic()
+    except Exception as exc:
+        logger.error("Admin %s failed to reset all active bypass traffic: %s", admin_id, exc, exc_info=True)
+        await status_message.edit_text(f"❌ Ошибка массового сброса трафика: {html.escape(str(exc)[:200])}")
+        return
+
+    failed_ids = result.get("failed_ids") or []
+    failed_text = ""
+    if failed_ids:
+        preview = ", ".join(str(item) for item in failed_ids[:20])
+        suffix = "..." if len(failed_ids) > 20 else ""
+        failed_text = f"\n\nНе удалось сбросить subscription id: <code>{preview}{suffix}</code>"
+
+    await status_message.edit_text(
+        "✅ <b>Массовый сброс трафика завершён</b>\n\n"
+        f"Найдено активных антиглушилок: <b>{result.get('total', 0)}</b>\n"
+        f"Успешно сброшено: <b>{result.get('success', 0)}</b>\n"
+        f"Ошибок: <b>{result.get('failed', 0)}</b>\n\n"
+        "Следующий плановый сброс для успешно обработанных подписок поставлен примерно через 30 дней."
+        f"{failed_text}"
+    )
+    logger.info(
+        "Admin %s reset all active bypass traffic: total=%s success=%s failed=%s",
+        admin_id,
+        result.get("total", 0),
+        result.get("success", 0),
+        result.get("failed", 0),
+    )
 
 
 def _parse_admin_subscription_command(parts: list[str]) -> tuple[int, int, int]:

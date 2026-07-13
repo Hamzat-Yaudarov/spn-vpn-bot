@@ -2478,6 +2478,24 @@ async def get_bypass_subscriptions_for_traffic_reset():
     )
 
 
+async def get_active_bypass_subscriptions_for_manual_traffic_reset():
+    """Получить все активные bypass-подписки для ручного массового сброса трафика."""
+    return await db_execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE generation = 'v2'
+          AND plan_kind = 'bypass'
+          AND is_visible = TRUE
+          AND traffic_enabled = TRUE
+          AND remnawave_uuid IS NOT NULL
+          AND subscription_until IS NOT NULL
+          AND subscription_until > now() AT TIME ZONE 'UTC'
+        ORDER BY tg_id ASC, type_index ASC, id ASC
+        """,
+        fetch_all=True,
+    )
+
+
 async def record_traffic_cycle(
     subscription_id: int,
     period_start,

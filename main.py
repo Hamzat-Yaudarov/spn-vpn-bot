@@ -76,10 +76,12 @@ async def setup_menu_button():
             await bot.set_my_commands(
                 [
                     BotCommand(command="start", description="Главное меню"),
+                    BotCommand(command="help", description="Команды админа"),
                     BotCommand(command="refund", description="Оформить возврат"),
                     BotCommand(command="send", description="Сообщение пользователю по ID"),
                     BotCommand(command="all_sms", description="Рассылка всем"),
                     BotCommand(command="not_sub_sms", description="Рассылка без подписки"),
+                    BotCommand(command="reset_traffic_all", description="Сбросить трафик антиглушилок"),
                 ],
                 scope=BotCommandScopeChat(chat_id=ADMIN_ID),
             )
