@@ -123,6 +123,7 @@ TARIFFS = {**REGULAR_TARIFFS, **BYPASS_TARIFFS}
 PAYMENT_CHECK_INTERVAL = 30  # секунд - интервал проверки платежей
 CLEANUP_CHECK_INTERVAL = 300  # 5 минут - интервал удаления истёкших платежей
 PAYMENT_EXPIRY_TIME = 86400  # 24 часа - время жизни неоплаченного счёта (достаточно для вебхука от Юкассы)
+TRACKING_ATTRIBUTION_DAYS = 30  # last-touch окно для привязки Telegram-платежа к рекламному переходу
 
 # ────────────────────────────────────────────────
 #           ANTI-SPAM COOLDOWNS

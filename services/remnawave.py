@@ -1,4 +1,5 @@
 import aiohttp
+import json
 import logging
 import secrets
 import string
@@ -188,8 +189,15 @@ async def remnawave_update_user_profile(
     active_internal_squads: list[str] | None = None,
     hwid_device_limit: int | None = None,
     telegram_id: int | None = None,
+    missing_user_is_success: bool = False,
 ) -> bool:
-    """Обновить профиль пользователя Remnawave."""
+    """Обновить профиль пользователя Remnawave.
+
+    ``missing_user_is_success`` используется только для идемпотентной очистки
+    старых записей: если Remnawave точно отвечает ``404 / A025``, значит
+    пользователя уже нет и удалять у него лимит больше не требуется.
+    Для обычных покупок, продлений и синхронизаций значение остаётся False.
+    """
     payload = {"uuid": str(user_uuid)}
 
     if expire_at is not None:
@@ -219,6 +227,17 @@ async def remnawave_update_user_profile(
                 if resp.status == 200:
                     return True
                 error_text = await resp.text()
+                if missing_user_is_success and resp.status == 404:
+                    try:
+                        error_data = json.loads(error_text)
+                    except (TypeError, ValueError):
+                        error_data = {}
+                    if error_data.get("errorCode") == "A025":
+                        logging.info(
+                            "Remnawave user %s is already absent; profile cleanup is complete",
+                            user_uuid,
+                        )
+                        return True
                 raise RuntimeError(f"Update user failed ({resp.status}): {error_text}")
 
     try:

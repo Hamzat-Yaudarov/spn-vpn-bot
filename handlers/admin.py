@@ -602,9 +602,13 @@ async def admin_tracking_link_stats(message: Message):
         f"👁 <b>Переходов всего:</b> {stats['total_clicks']}\n"
         f"👤 <b>Уникальных пользователей:</b> {stats['unique_clicks']}\n"
         f"🆕 <b>Новых пользователей по ссылке:</b> {stats['attributed_users']}\n\n"
-        f"💳 <b>Оплаченных платежей:</b> {stats['paid_payments']}\n"
-        f"💰 <b>Выручка:</b> {stats['revenue']:.2f} ₽\n\n"
-        "<b>Покупки по тарифам:</b>\n"
+        f"💳 <b>Оплаченных подписок:</b> {stats['paid_subscriptions']}\n"
+        f"🆕 <b>Новых подписок:</b> {stats['new_subscriptions']}\n"
+        f"👥 <b>Уникальных плательщиков:</b> {stats['unique_payers']}\n"
+        f"💰 <b>Выручка от подписок:</b> {stats['subscription_revenue']:.2f} ₽\n"
+        f"🧾 <b>Всего оплаченных операций:</b> {stats['paid_payments']}\n"
+        f"💵 <b>Общая выручка:</b> {stats['revenue']:.2f} ₽\n\n"
+        "<b>Покупки по тарифам без запрошенных возвратов:</b>\n"
         f"{_format_tracking_tariffs(stats['payments_by_tariff'])}"
     )
 

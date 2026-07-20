@@ -5,6 +5,7 @@ from datetime import datetime
 from config import (
     DATABASE_URL,
     PAYMENT_EXPIRY_TIME,
+    TRACKING_ATTRIBUTION_DAYS,
     GIFT_REQUEST_COOLDOWN,
     PROMO_REQUEST_COOLDOWN,
     PAYMENT_CHECK_COOLDOWN,
@@ -1874,6 +1875,27 @@ async def get_user_tracking_code(tg_id: int) -> str | None:
     return result['tracking_code'] if result and result['tracking_code'] else None
 
 
+async def get_payment_tracking_code(tg_id: int) -> str | None:
+    """Получить last-touch код для платежа с fallback на first-touch пользователя."""
+    recent_click = await db_execute(
+        """
+        SELECT click.code
+        FROM tracking_link_clicks click
+        JOIN tracking_links link ON link.code = click.code
+        WHERE click.tg_id = $1
+          AND link.is_active = TRUE
+          AND click.clicked_at >= now() - ($2::integer * INTERVAL '1 day')
+        ORDER BY click.clicked_at DESC, click.id DESC
+        LIMIT 1
+        """,
+        (tg_id, TRACKING_ATTRIBUTION_DAYS),
+        fetch_one=True,
+    )
+    if recent_click and recent_click['code']:
+        return recent_click['code']
+    return await get_user_tracking_code(tg_id)
+
+
 async def get_tracking_link_stats(code: str):
     """Получить статистику tracking-ссылки."""
     code = code.strip().lower()
@@ -1904,7 +1926,26 @@ async def get_tracking_link_stats(code: str):
         """
         SELECT
             COUNT(*) AS paid_payments,
-            COALESCE(SUM(amount), 0) AS revenue
+            COUNT(*) FILTER (
+                WHERE payment_kind = 'subscription'
+                  AND refund_requested_at IS NULL
+            ) AS paid_subscriptions,
+            COUNT(*) FILTER (
+                WHERE payment_kind = 'subscription'
+                  AND payment_target = 'new'
+                  AND refund_requested_at IS NULL
+            ) AS new_subscriptions,
+            COUNT(DISTINCT tg_id) FILTER (
+                WHERE payment_kind = 'subscription'
+                  AND refund_requested_at IS NULL
+            ) AS unique_payers,
+            COALESCE(SUM(amount) FILTER (
+                WHERE refund_requested_at IS NULL
+            ), 0) AS revenue,
+            COALESCE(SUM(amount) FILTER (
+                WHERE payment_kind = 'subscription'
+                  AND refund_requested_at IS NULL
+            ), 0) AS subscription_revenue
         FROM payments
         WHERE tracking_code = $1
           AND status = 'paid'
@@ -1919,6 +1960,7 @@ async def get_tracking_link_stats(code: str):
         FROM payments
         WHERE tracking_code = $1
           AND status = 'paid'
+          AND refund_requested_at IS NULL
         GROUP BY tariff_code, payment_kind
         ORDER BY payment_kind ASC, tariff_code ASC
         """,
@@ -1933,7 +1975,11 @@ async def get_tracking_link_stats(code: str):
         'new_clicks': clicks['new_clicks'] if clicks else 0,
         'attributed_users': users_count['count'] if users_count else 0,
         'paid_payments': payments_summary['paid_payments'] if payments_summary else 0,
+        'paid_subscriptions': payments_summary['paid_subscriptions'] if payments_summary else 0,
+        'new_subscriptions': payments_summary['new_subscriptions'] if payments_summary else 0,
+        'unique_payers': payments_summary['unique_payers'] if payments_summary else 0,
         'revenue': float(payments_summary['revenue'] or 0) if payments_summary else 0,
+        'subscription_revenue': float(payments_summary['subscription_revenue'] or 0) if payments_summary else 0,
         'payments_by_tariff': payments_by_tariff or [],
     }
 
@@ -1957,7 +2003,7 @@ async def create_payment(
 ):
     """Создать запись о платеже"""
     from datetime import datetime
-    tracking_code = await get_user_tracking_code(tg_id)
+    tracking_code = await get_payment_tracking_code(tg_id)
     await db_execute(
         """
         INSERT INTO payments (

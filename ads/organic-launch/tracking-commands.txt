@@ -1,0 +1,121 @@
+# Создавать в диалоге с @WaySPN_robot от имени администратора.
+# День 01
+/new_link ig_d01 Instagram Reels — день 01 — антиглушилка
+/new_link tt_d01 TikTok — день 01 — антиглушилка
+/new_link yt_d01 YouTube Shorts — день 01 — антиглушилка
+# День 02
+/new_link ig_d02 Instagram Reels — день 02 — выбор тарифа
+/new_link tt_d02 TikTok — день 02 — выбор тарифа
+/new_link yt_d02 YouTube Shorts — день 02 — выбор тарифа
+# День 03
+/new_link ig_d03 Instagram Reels — день 03 — обычный 200
+/new_link tt_d03 TikTok — день 03 — обычный 200
+/new_link yt_d03 YouTube Shorts — день 03 — обычный 200
+# День 04
+/new_link ig_d04 Instagram Reels — день 04 — антиглушилка 300
+/new_link tt_d04 TikTok — день 04 — антиглушилка 300
+/new_link yt_d04 YouTube Shorts — день 04 — антиглушилка 300
+# День 05
+/new_link ig_d05 Instagram Reels — день 05 — обычный 90 дней
+/new_link tt_d05 TikTok — день 05 — обычный 90 дней
+/new_link yt_d05 YouTube Shorts — день 05 — обычный 90 дней
+# День 06
+/new_link ig_d06 Instagram Reels — день 06 — антиглушилка 90 дней
+/new_link tt_d06 TikTok — день 06 — антиглушилка 90 дней
+/new_link yt_d06 YouTube Shorts — день 06 — антиглушилка 90 дней
+# День 07
+/new_link ig_d07 Instagram Reels — день 07 — пять устройств
+/new_link tt_d07 TikTok — день 07 — пять устройств
+/new_link yt_d07 YouTube Shorts — день 07 — пять устройств
+# День 08
+/new_link ig_d08 Instagram Reels — день 08 — цикл 150 ГБ
+/new_link tt_d08 TikTok — день 08 — цикл 150 ГБ
+/new_link yt_d08 YouTube Shorts — день 08 — цикл 150 ГБ
+# День 09
+/new_link ig_d09 Instagram Reels — день 09 — дополнительные ГБ
+/new_link tt_d09 TikTok — день 09 — дополнительные ГБ
+/new_link yt_d09 YouTube Shorts — день 09 — дополнительные ГБ
+# День 10
+/new_link ig_d10 Instagram Reels — день 10 — дополнительные устройства
+/new_link tt_d10 TikTok — день 10 — дополнительные устройства
+/new_link yt_d10 YouTube Shorts — день 10 — дополнительные устройства
+# День 11
+/new_link ig_d11 Instagram Reels — день 11 — способы оплаты
+/new_link tt_d11 TikTok — день 11 — способы оплаты
+/new_link yt_d11 YouTube Shorts — день 11 — способы оплаты
+# День 12
+/new_link ig_d12 Instagram Reels — день 12 — после оплаты
+/new_link tt_d12 TikTok — день 12 — после оплаты
+/new_link yt_d12 YouTube Shorts — день 12 — после оплаты
+# День 13
+/new_link ig_d13 Instagram Reels — день 13 — ключ Happ
+/new_link tt_d13 TikTok — день 13 — ключ Happ
+/new_link yt_d13 YouTube Shorts — день 13 — ключ Happ
+# День 14
+/new_link ig_d14 Instagram Reels — день 14 — Android
+/new_link tt_d14 TikTok — день 14 — Android
+/new_link yt_d14 YouTube Shorts — день 14 — Android
+# День 15
+/new_link ig_d15 Instagram Reels — день 15 — iPhone
+/new_link tt_d15 TikTok — день 15 — iPhone
+/new_link yt_d15 YouTube Shorts — день 15 — iPhone
+# День 16
+/new_link ig_d16 Instagram Reels — день 16 — сайт
+/new_link tt_d16 TikTok — день 16 — сайт
+/new_link yt_d16 YouTube Shorts — день 16 — сайт
+# День 17
+/new_link ig_d17 Instagram Reels — день 17 — освободить устройство
+/new_link tt_d17 TikTok — день 17 — освободить устройство
+/new_link yt_d17 YouTube Shorts — день 17 — освободить устройство
+# День 18
+/new_link ig_d18 Instagram Reels — день 18 — продление ключа
+/new_link tt_d18 TikTok — день 18 — продление ключа
+/new_link yt_d18 YouTube Shorts — день 18 — продление ключа
+# День 19
+/new_link ig_d19 Instagram Reels — день 19 — несколько ключей
+/new_link tt_d19 TikTok — день 19 — несколько ключей
+/new_link yt_d19 YouTube Shorts — день 19 — несколько ключей
+# День 20
+/new_link ig_d20 Instagram Reels — день 20 — остаток трафика
+/new_link tt_d20 TikTok — день 20 — остаток трафика
+/new_link yt_d20 YouTube Shorts — день 20 — остаток трафика
+# День 21
+/new_link ig_d21 Instagram Reels — день 21 — перенос трафика
+/new_link tt_d21 TikTok — день 21 — перенос трафика
+/new_link yt_d21 YouTube Shorts — день 21 — перенос трафика
+# День 22
+/new_link ig_d22 Instagram Reels — день 22 — запрос возврата
+/new_link tt_d22 TikTok — день 22 — запрос возврата
+/new_link yt_d22 YouTube Shorts — день 22 — запрос возврата
+# День 23
+/new_link ig_d23 Instagram Reels — день 23 — поддержка
+/new_link tt_d23 TikTok — день 23 — поддержка
+/new_link yt_d23 YouTube Shorts — день 23 — поддержка
+# День 24
+/new_link ig_d24 Instagram Reels — день 24 — рефералы
+/new_link tt_d24 TikTok — день 24 — рефералы
+/new_link yt_d24 YouTube Shorts — день 24 — рефералы
+# День 25
+/new_link ig_d25 Instagram Reels — день 25 — оплата балансом
+/new_link tt_d25 TikTok — день 25 — оплата балансом
+/new_link yt_d25 YouTube Shorts — день 25 — оплата балансом
+# День 26
+/new_link ig_d26 Instagram Reels — день 26 — 200 или 300
+/new_link tt_d26 TikTok — день 26 — 200 или 300
+/new_link yt_d26 YouTube Shorts — день 26 — 200 или 300
+# День 27
+/new_link ig_d27 Instagram Reels — день 27 — цена в день
+/new_link tt_d27 TikTok — день 27 — цена в день
+/new_link yt_d27 YouTube Shorts — день 27 — цена в день
+# День 28
+/new_link ig_d28 Instagram Reels — день 28 — полный путь
+/new_link tt_d28 TikTok — день 28 — полный путь
+/new_link yt_d28 YouTube Shorts — день 28 — полный путь
+# День 29
+/new_link ig_d29 Instagram Reels — день 29 — Happ вручную
+/new_link tt_d29 TikTok — день 29 — Happ вручную
+/new_link yt_d29 YouTube Shorts — день 29 — Happ вручную
+# День 30
+/new_link ig_d30 Instagram Reels — день 30 — все тарифы
+/new_link tt_d30 TikTok — день 30 — все тарифы
+/new_link yt_d30 YouTube Shorts — день 30 — все тарифы

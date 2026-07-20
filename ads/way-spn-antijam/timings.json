@@ -1,0 +1,43 @@
+{
+  "duration_seconds": 13.0,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "build_id": "safe-v2",
+  "voice_file": "voice-safe-v2.mp3",
+  "output_file": "way-spn-antijam-story-safe-v2.mp4",
+  "poster_file": "way-spn-antijam-poster-safe-v2.jpg",
+  "tracking_url": "https://t.me/WaySPN_robot",
+  "bot_handle": "@WaySPN_robot",
+  "scenes": [
+    {
+      "start": 0.0,
+      "end": 2.5,
+      "headline": ["ИНТЕРНЕТ СНОВА", "НЕСТАБИЛЕН?"]
+    },
+    {
+      "start": 2.5,
+      "end": 5.5,
+      "headline": ["РЕЖИМ С", "АНТИГЛУШИЛКОЙ"],
+      "caption": ["Отдельный режим", "для сетевых ограничений"]
+    },
+    {
+      "start": 5.5,
+      "end": 9.0,
+      "headline": ["ВСЁ НЕОБХОДИМОЕ", "В ОДНОЙ ПОДПИСКЕ"],
+      "features": [
+        ["150 ГБ", "трафика на 30 дней"],
+        ["ДО 3 УСТРОЙСТВ", "в одной подписке"],
+        ["ПОНЯТНЫЕ ШАГИ", "в инструкции по подключению"]
+      ]
+    },
+    {
+      "start": 9.0,
+      "end": 13.0,
+      "headline": ["ПОДКЛЮЧАЙТЕСЬ", "ПРЯМО СЕЙЧАС"],
+      "price": "300 ₽",
+      "period": "за 30 дней",
+      "button": "ПОДКЛЮЧИТЬ В TELEGRAM"
+    }
+  ]
+}

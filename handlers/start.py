@@ -7,6 +7,7 @@ from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_U
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
+from services.notification_delivery import clear_telegram_delivery_blocked
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     # Создаём пользователя если его нет
     await db.create_user(tg_id, username, referrer_id, tracking_code)
+    await clear_telegram_delivery_blocked(tg_id)
     logger.info(
         "User ensured in database after /start: user=%s username=%s was_new=%s tracking_code=%s referrer_id=%s",
         tg_id,

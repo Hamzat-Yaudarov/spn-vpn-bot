@@ -9,6 +9,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
 from config import GB_BYTES
+from services.notification_delivery import (
+    is_telegram_delivery_blocked,
+    mark_telegram_delivery_blocked,
+)
 from services.remnawave import remnawave_get_user_info
 
 
@@ -338,14 +342,38 @@ async def _send_notifications_for_low_traffic(bot):
 
 async def _send_message(bot, tg_id: int, text: str, reply_markup: InlineKeyboardMarkup) -> bool:
     try:
+        if await is_telegram_delivery_blocked(tg_id):
+            return False
+    except Exception as e:
+        logger.warning("Failed to read notification delivery state for user %s: %s", tg_id, e)
+
+    try:
         await bot.send_message(tg_id, text, reply_markup=reply_markup)
         return True
     except TelegramAPIError as e:
-        if "429" in str(e) or "Too Many Requests" in str(e):
+        error_text = str(e)
+        error_text_lower = error_text.lower()
+        permanently_unreachable = any(
+            marker in error_text_lower
+            for marker in ("chat not found", "bot was blocked", "user is deactivated")
+        )
+        if permanently_unreachable:
+            try:
+                await mark_telegram_delivery_blocked(tg_id)
+            except Exception as state_error:
+                logger.error(
+                    "Failed to save blocked notification delivery state for user %s: %s",
+                    tg_id,
+                    state_error,
+                )
+            logger.warning(
+                "Scheduled notifications disabled for unreachable Telegram user %s: %s",
+                tg_id,
+                error_text,
+            )
+        elif "429" in error_text or "Too Many Requests" in error_text:
             logger.warning("🚫 Rate limited while sending notification")
             await asyncio.sleep(5)
-        elif "bot was blocked" in str(e).lower() or "user is deactivated" in str(e).lower():
-            logger.debug("User %s blocked bot or deactivated account", tg_id)
         else:
             logger.error("Failed to send notification to user %s: %s", tg_id, e)
     except Exception as e:

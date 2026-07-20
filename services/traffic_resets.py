@@ -161,6 +161,7 @@ async def process_pending_legacy_limit_removals():
                     subscription["remnawave_uuid"],
                     traffic_limit_bytes=0,
                     traffic_limit_strategy="NO_RESET",
+                    missing_user_is_success=True,
                 )
                 if not updated:
                     logger.warning(
