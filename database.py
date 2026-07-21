@@ -708,6 +708,16 @@ async def run_migrations():
                     revoked_at TIMESTAMP
                 )
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS mobile_access_keys (
+                    id UUID PRIMARY KEY,
+                    tg_id BIGINT UNIQUE NOT NULL,
+                    key_hash TEXT UNIQUE NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    last_used_at TIMESTAMP,
+                    revoked_at TIMESTAMP
+                )
+            """)
             logging.info("✅ Таблицы мобильной авторизации созданы или уже существуют")
 
             # ═══════════════════════════════════════════════════════════
@@ -732,6 +742,7 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_access ON mobile_sessions(access_token_hash);",
                 "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_refresh ON mobile_sessions(refresh_token_hash);",
                 "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_user ON mobile_sessions(tg_id, revoked_at);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_access_keys_hash ON mobile_access_keys(key_hash);",
 
                 # subscriptions индексы
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);",

@@ -39,8 +39,8 @@ For a release, inject an RSA-4096 signing key without committing it or its passw
 Verify the result independently:
 
 ```sh
-apksigner verify --verbose --print-certs app/build/outputs/apk/release/WayVPN-1.0.0-universal-release.apk
-shasum -a 256 app/build/outputs/apk/release/WayVPN-1.0.0-universal-release.apk
+apksigner verify --verbose --print-certs app/build/outputs/apk/release/WayVPN-1.1.0-universal-release.apk
+shasum -a 256 app/build/outputs/apk/release/WayVPN-1.1.0-universal-release.apk
 ```
 
 The expected v1 certificate fingerprint is `980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957`. APK bytes can differ when signed with another certificate; clients deliberately reject that as an update.

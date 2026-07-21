@@ -27,6 +27,8 @@ data class TokenResponse(
     val expires_in: Int,
 )
 
+data class AccessKeyResponse(val access_key: String)
+
 data class MeResponse(val tg_id: Long, val username: String?)
 
 data class TrafficDto(
@@ -120,6 +122,19 @@ class WayApi {
     suspend fun exchange(challengeId: String, verifier: String): TokenResponse = executeJson(
         requestBuilder("/auth/exchange").post(jsonBody(mapOf("challenge_id" to challengeId, "code_verifier" to verifier))).build(),
         TokenResponse::class.java,
+    )
+
+    suspend fun exchangeAccessKey(accessKey: String): TokenResponse = executeJson(
+        requestBuilder("/auth/key-exchange").post(jsonBody(mapOf(
+            "access_key" to accessKey,
+            "device_name" to "${Build.MANUFACTURER} ${Build.MODEL}",
+        ))).build(),
+        TokenResponse::class.java,
+    )
+
+    suspend fun issueAccessKey(accessToken: String): AccessKeyResponse = executeJson(
+        requestBuilder("/auth/access-key", accessToken).post(ByteArray(0).toRequestBody(null)).build(),
+        AccessKeyResponse::class.java,
     )
 
     suspend fun refresh(refreshToken: String): TokenResponse = executeJson(

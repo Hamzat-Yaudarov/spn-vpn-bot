@@ -23,6 +23,7 @@ class SecureStore(private val context: Context) {
     companion object {
         const val REFRESH_TOKEN = "refresh_token"
         const val ACCESS_TOKEN = "access_token"
+        const val ACCOUNT_ACCESS_KEY = "account_access_key"
         const val HWID = "installation_hwid"
         const val LAST_PROFILE = "last_profile"
         const val PROFILE_EXPIRES_AT = "profile_expires_at"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Upstream v2rayNG translation catalog is retained for GPL compatibility,
+         while Way VPN exposes only its Russian branded activity. -->
+    <issue id="MissingTranslation">
+        <ignore path="src/main/res/values/strings.xml" />
+    </issue>
+
+    <!-- These tools:node=remove markers intentionally strip optional transitive
+         components. Some classes are absent in dependency variants selected by AGP. -->
+    <issue id="MissingClass">
+        <ignore path="src/main/AndroidManifest.xml" />
+    </issue>
+</lint>

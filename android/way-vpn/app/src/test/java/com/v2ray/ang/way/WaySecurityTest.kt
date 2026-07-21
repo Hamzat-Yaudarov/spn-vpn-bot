@@ -45,4 +45,13 @@ class WaySecurityTest {
         assertTrue(WayRuntimePolicy.isProfileUsable(1_001, nowEpochSecond = 1_000))
         assertEquals(1_750_000_000L, WayRuntimePolicy.parseExpiry("2025-06-15T15:06:40Z"))
     }
+
+    @Test
+    fun accountAccessKeyIsStrictButHumanInputIsNormalized() {
+        val key = "WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
+        assertTrue(AccountAccessKey.isValid("  ${key.lowercase()} \n"))
+        assertEquals(key, AccountAccessKey.normalize(" ${key.lowercase()} "))
+        assertFalse(AccountAccessKey.isValid("WAY-TOO-SHORT"))
+        assertFalse(AccountAccessKey.isValid("WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXY0"))
+    }
 }

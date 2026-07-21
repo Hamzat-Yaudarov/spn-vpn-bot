@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME, PUBLIC_SITE_URL
 import database as db
 from handlers.start import mobile_auth_keyboard, show_main_menu
 from services.image_handler import edit_text_with_photo
@@ -56,7 +56,14 @@ async def process_mobile_auth_approval(callback: CallbackQuery, state: FSMContex
 
     await callback.answer("Вход подтверждён")
     await callback.message.edit_text(
-        "✅ <b>Вход в Way VPN подтверждён.</b>\n\nВернитесь в приложение — оно завершит вход автоматически."
+        "✅ <b>Вход в Way VPN подтверждён.</b>\n\nНажмите кнопку ниже, чтобы безопасно вернуться в приложение.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="↩️ Вернуться в Way VPN",
+                url=f"{PUBLIC_SITE_URL.rstrip('/')}/mobile/auth-return",
+                style="success",
+            )
+        ]]),
     )
     await state.clear()
 

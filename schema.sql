@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS mobile_sessions (
     revoked_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS mobile_access_keys (
+    id UUID PRIMARY KEY,
+    tg_id BIGINT UNIQUE NOT NULL,
+    key_hash TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS partnerships (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT UNIQUE NOT NULL,
@@ -299,6 +308,7 @@ CREATE INDEX IF NOT EXISTS idx_mobile_auth_expiry ON mobile_auth_challenges(expi
 CREATE INDEX IF NOT EXISTS idx_mobile_sessions_access ON mobile_sessions(access_token_hash);
 CREATE INDEX IF NOT EXISTS idx_mobile_sessions_refresh ON mobile_sessions(refresh_token_hash);
 CREATE INDEX IF NOT EXISTS idx_mobile_sessions_user ON mobile_sessions(tg_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_mobile_access_keys_hash ON mobile_access_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);

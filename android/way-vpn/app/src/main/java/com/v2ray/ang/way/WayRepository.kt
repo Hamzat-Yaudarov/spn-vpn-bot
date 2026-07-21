@@ -43,6 +43,29 @@ class WayRepository(context: Context) {
         }
     }
 
+    suspend fun loginWithAccessKey(value: String) {
+        val normalized = AccountAccessKey.normalize(value)
+        require(AccountAccessKey.isValid(normalized)) { "Некорректный ключ доступа Way VPN" }
+        val tokens = api.exchangeAccessKey(normalized)
+        saveTokens(tokens)
+        secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
+        secureStore.put(SecureStore.PENDING_CHALLENGE, null)
+        secureStore.put(SecureStore.PENDING_VERIFIER, null)
+    }
+
+    suspend fun accountAccessKey(): String? = secureStore.get(SecureStore.ACCOUNT_ACCESS_KEY)
+
+    suspend fun ensureAccountAccessKey(): String {
+        accountAccessKey()?.takeIf(AccountAccessKey::isValid)?.let { return AccountAccessKey.normalize(it) }
+        return rotateAccountAccessKey()
+    }
+
+    suspend fun rotateAccountAccessKey(): String = authorized { token ->
+        api.issueAccessKey(token).access_key.also {
+            secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, it)
+        }
+    }
+
     private suspend fun saveTokens(tokens: TokenResponse) {
         secureStore.put(SecureStore.ACCESS_TOKEN, tokens.access_token)
         secureStore.put(SecureStore.REFRESH_TOKEN, tokens.refresh_token)

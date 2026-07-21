@@ -1,238 +1,705 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#07131D"
-    android:fillViewport="true">
+    android:background="#0B0D12"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/login_panel"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="24dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Way VPN"
-            android:textColor="#FFFFFF"
-            android:textSize="34sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Безопасный доступ к вашим SPN-серверам"
-            android:textColor="#93A8B8"
-            android:textSize="15sp" />
-
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/login_panel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            app:cardBackgroundColor="#102431"
-            app:cardCornerRadius="24dp"
-            app:strokeColor="#244151"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="22dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Вход через Telegram"
-                    android:textColor="#FFFFFF"
-                    android:textSize="22sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/login_status"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="Приложение не запрашивает пароль Telegram. Подтверждение выполняется в боте WaySPN."
-                    android:textColor="#B7C8D3"
-                    android:textSize="15sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/login_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="56dp"
-                    android:layout_marginTop="20dp"
-                    android:text="Войти через Telegram"
-                    android:textAllCaps="false"
-                    android:textSize="16sp"
-                    app:backgroundTint="#55D6BE"
-                    app:cornerRadius="16dp" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
         <LinearLayout
-            android:id="@+id/account_panel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:gravity="center_horizontal"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:padding="28dp">
 
             <TextView
-                android:id="@+id/user_name"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#FFFFFF"
-                android:textSize="18sp"
+                android:layout_marginTop="52dp"
+                android:text="WAY"
+                android:textColor="#39E6A5"
+                android:textSize="54sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="Подписка"
-                android:textColor="#93A8B8"
-                android:textSize="13sp" />
+                android:text="VPN"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
+                android:textStyle="bold" />
 
-            <Spinner
-                android:id="@+id/subscription_spinner"
+            <TextView
+                android:id="@+id/login_status"
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:background="#17303E"
-                android:paddingHorizontal="12dp" />
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:gravity="center"
+                android:text="Войдите через Telegram на первом устройстве или используйте свой ключ доступа."
+                android:textColor="#9499A5"
+                android:textSize="16sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/login_button"
+                android:layout_width="match_parent"
+                android:layout_height="58dp"
+                android:layout_marginTop="26dp"
+                android:text="Войти через Telegram"
+                android:textAllCaps="false"
+                android:textColor="#07110C"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                app:backgroundTint="#39E6A5"
+                app:cornerRadius="20dp" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:text="Сервер"
-                android:textColor="#93A8B8"
-                android:textSize="13sp" />
+                android:layout_marginTop="22dp"
+                android:text="или"
+                android:textColor="#626773"
+                android:textSize="14sp" />
 
-            <Spinner
-                android:id="@+id/server_spinner"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:background="#17303E"
-                android:paddingHorizontal="12dp" />
-
-            <com.google.android.material.card.MaterialCardView
+            <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                app:cardBackgroundColor="#102431"
-                app:cardCornerRadius="22dp">
+                android:layout_marginTop="14dp"
+                android:hint="Ключ доступа WAY-…"
+                app:boxBackgroundColor="#1B1E25"
+                app:boxBackgroundMode="filled"
+                app:boxCornerRadiusBottomEnd="18dp"
+                app:boxCornerRadiusBottomStart="18dp"
+                app:boxCornerRadiusTopEnd="18dp"
+                app:boxCornerRadiusTopStart="18dp"
+                app:boxStrokeColor="#39E6A5"
+                app:hintTextColor="#9499A5">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/access_key_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:inputType="textCapCharacters|textNoSuggestions"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/key_login_button"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="12dp"
+                android:text="Войти по ключу"
+                android:textAllCaps="false"
+                android:textColor="#39E6A5"
+                app:cornerRadius="18dp"
+                app:strokeColor="#39E6A5" />
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <LinearLayout
+        android:id="@+id/account_panel"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/home_page"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:paddingStart="22dp"
+                    android:paddingTop="24dp"
+                    android:paddingEnd="22dp"
+                    android:paddingBottom="24dp">
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp"
+                        app:strokeWidth="0dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="18dp">
+
+                            <TextView
+                                android:layout_width="48dp"
+                                android:layout_height="48dp"
+                                android:background="#1D4C3C"
+                                android:gravity="center"
+                                android:text="▣"
+                                android:textColor="#39E6A5"
+                                android:textSize="24sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="14dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <Spinner
+                                    android:id="@+id/subscription_spinner"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="40dp"
+                                    android:background="@android:color/transparent" />
+
+                                <TextView
+                                    android:id="@+id/subscription_expiry"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Загрузка подписки…"
+                                    android:textColor="#F2B84B"
+                                    android:textSize="14sp" />
+                            </LinearLayout>
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/sync_button"
+                                android:layout_width="50dp"
+                                android:layout_height="50dp"
+                                android:minWidth="0dp"
+                                android:text="↻"
+                                android:textColor="#39E6A5"
+                                android:textSize="26sp"
+                                app:backgroundTint="#191C22"
+                                app:cornerRadius="16dp" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/connect_button"
+                        android:layout_width="190dp"
+                        android:layout_height="190dp"
+                        android:layout_marginTop="34dp"
+                        android:text="W\nПОДКЛЮЧИТЬ"
+                        android:textAllCaps="false"
+                        android:textColor="#07110C"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        app:backgroundTint="#39E6A5"
+                        app:cornerRadius="96dp"
+                        app:elevation="0dp"
+                        app:strokeColor="#174D3A"
+                        app:strokeWidth="10dp" />
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="30dp"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="20dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Подробнее"
+                                android:textColor="#FFFFFF"
+                                android:textSize="19sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/connection_status"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="20dp"
+                                android:text="Статус:  Не подключено"
+                                android:textColor="#9499A5"
+                                android:textSize="16sp" />
+
+                            <TextView
+                                android:id="@+id/protocol_info"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="15dp"
+                                android:text="Протокол:  —"
+                                android:textColor="#9499A5"
+                                android:textSize="16sp" />
+
+                            <TextView
+                                android:id="@+id/encryption_info"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="15dp"
+                                android:text="Защита:  —"
+                                android:textColor="#9499A5"
+                                android:textSize="16sp" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="20dp">
+
+                            <TextView
+                                android:id="@+id/current_server_name"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Автовыбор сервера"
+                                android:textColor="#FFFFFF"
+                                android:textSize="19sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/current_server_details"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="5dp"
+                                android:text="Будет выбран узел с минимальной задержкой"
+                                android:textColor="#9499A5"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <TextView
+                        android:id="@+id/traffic_info"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:gravity="center"
+                        android:textColor="#9499A5"
+                        android:textSize="14sp" />
+
+                    <Spinner
+                        android:id="@+id/server_spinner"
+                        android:layout_width="1dp"
+                        android:layout_height="1dp"
+                        android:visibility="invisible" />
+                </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
+
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/servers_page"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:visibility="gone">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="20dp">
+                    android:padding="22dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Список серверов"
+                            android:textColor="#FFFFFF"
+                            android:textSize="31sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/ping_all_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="50dp"
+                            android:text="Пинг"
+                            android:textAllCaps="false"
+                            android:textColor="#39E6A5"
+                            app:backgroundTint="#1B1E25"
+                            app:cornerRadius="17dp" />
+                    </LinearLayout>
 
                     <TextView
-                        android:id="@+id/connection_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="Выберите сервер вручную или оставьте автоматический выбор по минимальной задержке."
+                        android:textColor="#9499A5"
+                        android:textSize="14sp" />
+
+                    <LinearLayout
+                        android:id="@+id/server_list_container"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="18dp"
+                        android:orientation="vertical" />
+                </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
+
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/support_page"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="22dp">
+
+                    <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Не подключено"
+                        android:text="Поддержка"
                         android:textColor="#FFFFFF"
-                        android:textSize="25sp"
+                        android:textSize="31sp"
                         android:textStyle="bold" />
 
                     <TextView
-                        android:id="@+id/subscription_expiry"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:textColor="#B7C8D3"
+                        android:layout_marginTop="5dp"
+                        android:text="Обычно отвечаем в течение часа"
+                        android:textColor="#9499A5"
+                        android:textSize="15sp" />
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="28dp"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="20dp">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Написать в Telegram\nОпишите проблему — мы быстро вернёмся с ответом"
+                                android:textColor="#FFFFFF"
+                                android:textSize="16sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/support_telegram_button"
+                                android:layout_width="52dp"
+                                android:layout_height="52dp"
+                                android:minWidth="0dp"
+                                android:text="↗"
+                                android:textColor="#39E6A5"
+                                android:textSize="24sp"
+                                app:backgroundTint="#191C22"
+                                app:cornerRadius="17dp" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="34dp"
+                        android:text="Частые вопросы"
+                        android:textColor="#FFFFFF"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="#1B1E25"
+                        android:padding="18dp"
+                        android:text="VPN не подключается\n\n1. Обновите профиль.  2. Выберите другой сервер.  3. Проверьте системное разрешение VPN."
+                        android:textColor="#D6D8DE"
                         android:textSize="15sp" />
 
                     <TextView
-                        android:id="@+id/traffic_info"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="#1B1E25"
+                        android:padding="18dp"
+                        android:text="Низкая скорость\n\nОткройте «Серверы», нажмите «Пинг» и выберите зелёный узел с меньшей задержкой."
+                        android:textColor="#D6D8DE"
+                        android:textSize="15sp" />
+                </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
+
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/settings_page"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="22dp">
+
+                    <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:textColor="#B7C8D3"
+                        android:text="Настройки"
+                        android:textColor="#FFFFFF"
+                        android:textSize="31sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/user_name"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:textColor="#9499A5"
                         android:textSize="15sp" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/connect_button"
+                    <com.google.android.material.card.MaterialCardView
                         android:layout_width="match_parent"
-                        android:layout_height="64dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="24dp"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="20dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Ваш ключ доступа"
+                                android:textColor="#FFFFFF"
+                                android:textSize="20sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="5dp"
+                                android:text="Используйте его только на своих устройствах"
+                                android:textColor="#9499A5"
+                                android:textSize="14sp" />
+
+                            <TextView
+                                android:id="@+id/access_key_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="18dp"
+                                android:background="#191C22"
+                                android:fontFamily="monospace"
+                                android:padding="16dp"
+                                android:text="Загрузка…"
+                                android:textColor="#FFFFFF"
+                                android:textIsSelectable="false"
+                                android:textSize="15sp"
+                                android:textStyle="bold" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="12dp"
+                                android:orientation="horizontal">
+
+                                <com.google.android.material.button.MaterialButton
+                                    android:id="@+id/copy_key_button"
+                                    android:layout_width="0dp"
+                                    android:layout_height="50dp"
+                                    android:layout_weight="1"
+                                    android:text="Копировать"
+                                    android:textAllCaps="false"
+                                    app:backgroundTint="#1D4C3C" />
+
+                                <com.google.android.material.button.MaterialButton
+                                    android:id="@+id/qr_key_button"
+                                    android:layout_width="0dp"
+                                    android:layout_height="50dp"
+                                    android:layout_marginStart="8dp"
+                                    android:layout_weight="1"
+                                    android:text="Показать QR"
+                                    android:textAllCaps="false"
+                                    app:backgroundTint="#1D4C3C" />
+                            </LinearLayout>
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/rotate_key_button"
+                                style="@style/Widget.MaterialComponents.Button.TextButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="48dp"
+                                android:text="Заменить скомпрометированный ключ"
+                                android:textAllCaps="false"
+                                android:textColor="#F2B84B" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        app:cardBackgroundColor="#22262E"
+                        app:cardCornerRadius="22dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="16dp">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/payment_button"
+                                android:layout_width="match_parent"
+                                android:layout_height="52dp"
+                                android:text="Купить или продлить подписку"
+                                android:textAllCaps="false"
+                                app:backgroundTint="#39E6A5" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/devices_button"
+                                style="@style/Widget.MaterialComponents.Button.TextButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="50dp"
+                                android:text="Мои устройства"
+                                android:textAllCaps="false" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/vpn_settings_button"
+                                style="@style/Widget.MaterialComponents.Button.TextButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="50dp"
+                                android:text="Always-on и блокировка без VPN"
+                                android:textAllCaps="false" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/update_button"
+                                style="@style/Widget.MaterialComponents.Button.TextButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="50dp"
+                                android:text="Проверить обновления"
+                                android:textAllCaps="false" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <TextView
+                        android:id="@+id/device_id_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
                         android:layout_marginTop="18dp"
-                        android:text="Подключить"
+                        android:textColor="#626773"
+                        android:textSize="12sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/logout_button"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:layout_marginTop="16dp"
+                        android:layout_marginBottom="20dp"
+                        android:text="Выйти и удалить данные"
                         android:textAllCaps="false"
-                        android:textSize="18sp"
-                        android:textStyle="bold"
-                        app:backgroundTint="#55D6BE"
-                        app:cornerRadius="20dp" />
+                        android:textColor="#FF5B78"
+                        app:backgroundTint="#4B2029"
+                        app:cornerRadius="18dp" />
                 </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
+            </androidx.core.widget.NestedScrollView>
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="76dp"
+            android:background="#0B0D12"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/sync_button"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:layout_marginTop="16dp"
-                android:text="Обновить профиль и выбрать быстрый сервер"
-                android:textAllCaps="false" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/payment_button"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:text="Оплата"
-                    android:textAllCaps="false"
-                    app:backgroundTint="#173B4A" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/devices_button"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_marginStart="10dp"
-                    android:layout_weight="1"
-                    android:text="Устройства"
-                    android:textAllCaps="false"
-                    app:backgroundTint="#173B4A" />
-            </LinearLayout>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/vpn_settings_button"
+                android:id="@+id/nav_home"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="8dp"
-                android:text="Always-on и блокировка без VPN"
-                android:textAllCaps="false" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/update_button"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:text="Проверить обновления"
-                android:textAllCaps="false" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/logout_button"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginBottom="24dp"
-                android:text="Выйти и удалить данные"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:minWidth="0dp"
+                android:text="⌂\nГлавная"
                 android:textAllCaps="false"
-                android:textColor="#FF9D9D" />
+                android:textColor="#39E6A5"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/nav_servers"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:minWidth="0dp"
+                android:text="◎\nСерверы"
+                android:textAllCaps="false"
+                android:textColor="#777C87"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/nav_support"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:minWidth="0dp"
+                android:text="▤\nПоддержка"
+                android:textAllCaps="false"
+                android:textColor="#777C87"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/nav_settings"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:minWidth="0dp"
+                android:text="⚙\nНастройки"
+                android:textAllCaps="false"
+                android:textColor="#777C87"
+                android:textSize="13sp" />
         </LinearLayout>
     </LinearLayout>
-</androidx.core.widget.NestedScrollView>
+</LinearLayout>

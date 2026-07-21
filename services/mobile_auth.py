@@ -19,6 +19,7 @@ from config import (
 
 
 CODE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+ACCESS_KEY_RE = re.compile(r"^WAY-(?:[A-Z2-7]{4}-){5}[A-Z2-7]{4}$")
 
 
 class MobileAuthError(Exception):
@@ -35,6 +36,17 @@ def utcnow() -> datetime:
 
 def hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def normalize_access_key(value: str) -> str:
+    """Нормализовать ключ без ослабления его формата."""
+    return re.sub(r"\s+", "", (value or "").strip().upper())
+
+
+def generate_access_key() -> str:
+    """120-битный ключ аккаунта, пригодный для ручного ввода и QR."""
+    encoded = base64.b32encode(secrets.token_bytes(15)).decode("ascii").rstrip("=")
+    return "WAY-" + "-".join(encoded[index:index + 4] for index in range(0, len(encoded), 4))
 
 
 def code_challenge_for_verifier(verifier: str) -> str:
@@ -136,6 +148,75 @@ def _token_response(session_id: uuid.UUID, access_token: str, refresh_token: str
     }
 
 
+async def _create_session(conn, tg_id: int, device_name: str | None) -> dict:
+    session_id = uuid.uuid4()
+    access_token = secrets.token_urlsafe(48)
+    refresh_token = secrets.token_urlsafe(48)
+    access_expires = utcnow() + timedelta(minutes=MOBILE_ACCESS_TOKEN_MINUTES)
+    refresh_expires = utcnow() + timedelta(days=MOBILE_REFRESH_TOKEN_DAYS)
+    await conn.execute(
+        """
+        INSERT INTO mobile_sessions
+            (id, tg_id, device_name, access_token_hash, access_expires_at,
+             refresh_token_hash, refresh_expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """,
+        session_id,
+        int(tg_id),
+        (device_name or "")[:120] or None,
+        hash_secret(access_token),
+        access_expires,
+        hash_secret(refresh_token),
+        refresh_expires,
+    )
+    return _token_response(session_id, access_token, refresh_token, access_expires)
+
+
+async def issue_access_key(tg_id: int) -> str:
+    """Выпустить/повернуть переносимый ключ аккаунта; в БД хранится только SHA-256."""
+    access_key = generate_access_key()
+    await db.db_execute(
+        """
+        INSERT INTO mobile_access_keys (id, tg_id, key_hash)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (tg_id) DO UPDATE SET
+            key_hash = EXCLUDED.key_hash,
+            created_at = now(),
+            last_used_at = NULL,
+            revoked_at = NULL
+        """,
+        (uuid.uuid4(), int(tg_id), hash_secret(access_key)),
+    )
+    return access_key
+
+
+async def exchange_access_key(access_key: str, device_name: str | None = None) -> dict:
+    """Создать отдельную мобильную сессию для установки по ключу аккаунта."""
+    normalized = normalize_access_key(access_key)
+    if not ACCESS_KEY_RE.fullmatch(normalized):
+        raise MobileAuthError("invalid_access_key", "Некорректный ключ доступа", 401)
+
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT tg_id
+                FROM mobile_access_keys
+                WHERE key_hash = $1 AND revoked_at IS NULL
+                FOR UPDATE
+                """,
+                hash_secret(normalized),
+            )
+            if not row:
+                raise MobileAuthError("invalid_access_key", "Ключ доступа не найден или был заменён", 401)
+            await conn.execute(
+                "UPDATE mobile_access_keys SET last_used_at = now() WHERE tg_id = $1",
+                int(row["tg_id"]),
+            )
+            return await _create_session(conn, int(row["tg_id"]), device_name)
+
+
 async def exchange_challenge(challenge_id: str, verifier: str) -> dict:
     try:
         parsed_id = uuid.UUID(challenge_id)
@@ -161,26 +242,7 @@ async def exchange_challenge(challenge_id: str, verifier: str) -> dict:
             if row["status"] != "approved" or not row["approved_tg_id"]:
                 raise MobileAuthError("authorization_pending", "Подтвердите вход в Telegram", 202)
 
-            session_id = uuid.uuid4()
-            access_token = secrets.token_urlsafe(48)
-            refresh_token = secrets.token_urlsafe(48)
-            access_expires = utcnow() + timedelta(minutes=MOBILE_ACCESS_TOKEN_MINUTES)
-            refresh_expires = utcnow() + timedelta(days=MOBILE_REFRESH_TOKEN_DAYS)
-            await conn.execute(
-                """
-                INSERT INTO mobile_sessions
-                    (id, tg_id, device_name, access_token_hash, access_expires_at,
-                     refresh_token_hash, refresh_expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """,
-                session_id,
-                int(row["approved_tg_id"]),
-                row["device_name"],
-                hash_secret(access_token),
-                access_expires,
-                hash_secret(refresh_token),
-                refresh_expires,
-            )
+            tokens = await _create_session(conn, int(row["approved_tg_id"]), row["device_name"])
             await conn.execute(
                 """
                 UPDATE mobile_auth_challenges
@@ -189,7 +251,7 @@ async def exchange_challenge(challenge_id: str, verifier: str) -> dict:
                 """,
                 parsed_id,
             )
-    return _token_response(session_id, access_token, refresh_token, access_expires)
+    return tokens
 
 
 async def rotate_refresh_token(refresh_token: str) -> dict:

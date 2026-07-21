@@ -51,6 +51,24 @@ class _Pool:
         return _AsyncContext(self.connection)
 
 
+class _AccessKeyConnection:
+    def __init__(self, tg_id=1001):
+        self.tg_id = tg_id
+        self.sessions = []
+
+    def transaction(self):
+        return _AsyncContext()
+
+    async def fetchrow(self, query, *params):
+        if "FROM mobile_access_keys" in query:
+            return {"tg_id": self.tg_id}
+        return None
+
+    async def execute(self, query, *params):
+        if "INSERT INTO mobile_sessions" in query:
+            self.sessions.append(params)
+
+
 class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
     def test_pkce_challenge_is_urlsafe_sha256(self):
         verifier = "A" * 64
@@ -96,6 +114,32 @@ class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(mobile_auth.MobileAuthError) as error:
                 await mobile_auth.exchange_challenge(str(uuid.uuid4()), "E" * 64)
         self.assertEqual(error.exception.code, "invalid_verifier")
+
+    def test_access_key_has_strict_human_readable_format(self):
+        access_key = mobile_auth.generate_access_key()
+        self.assertRegex(access_key, mobile_auth.ACCESS_KEY_RE)
+        self.assertEqual(mobile_auth.normalize_access_key(f"  {access_key.lower()} \n"), access_key)
+
+    @patch("services.mobile_auth.db.db_execute", new_callable=AsyncMock)
+    async def test_access_key_is_stored_only_as_hash(self, execute):
+        access_key = await mobile_auth.issue_access_key(1001)
+        params = execute.await_args.args[1]
+        self.assertNotEqual(params[2], access_key)
+        self.assertEqual(params[2], mobile_auth.hash_secret(access_key))
+
+    async def test_access_key_creates_separate_device_session(self):
+        connection = _AccessKeyConnection()
+        access_key = mobile_auth.generate_access_key()
+        with patch("services.mobile_auth.db.get_pool", new=AsyncMock(return_value=_Pool(connection))):
+            tokens = await mobile_auth.exchange_access_key(access_key, "Pixel 10")
+        self.assertIn("access_token", tokens)
+        self.assertEqual(len(connection.sessions), 1)
+        self.assertEqual(connection.sessions[0][1], 1001)
+
+    async def test_invalid_access_key_is_rejected_without_database_lookup(self):
+        with self.assertRaises(mobile_auth.MobileAuthError) as error:
+            await mobile_auth.exchange_access_key("WAY-TOO-SHORT")
+        self.assertEqual(error.exception.code, "invalid_access_key")
 
 
 class MobileProfileSecurityTests(unittest.TestCase):
@@ -153,6 +197,11 @@ class PublicReleaseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as rejected:
             await mobile_api.android_release_artifact("../.env")
         self.assertEqual(rejected.exception.status_code, 404)
+
+    async def test_auth_return_is_no_store_and_opens_android_package(self):
+        response = await mobile_api.mobile_auth_return()
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIn(mobile_api.ANDROID_PACKAGE_ID.encode(), response.body)
 
 
 if __name__ == "__main__":

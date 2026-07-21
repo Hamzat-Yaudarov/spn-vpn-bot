@@ -39,7 +39,9 @@ from services.mobile_auth import (
     MobileAuthError,
     authenticate_access_token,
     create_challenge,
+    exchange_access_key,
     exchange_challenge,
+    issue_access_key,
     revoke_session,
     rotate_refresh_token,
 )
@@ -60,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.0-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.0-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.0-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.0-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.0.0-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.0.0-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.0.0-gpl-source.zip": "application/zip",
@@ -223,7 +229,7 @@ async def auth_challenges(request: Request):
             "challenge_id": challenge["id"],
             "telegram_url": f"https://t.me/{BOT_USERNAME}?start=app_{challenge['start_token']}",
             "expires_at": _format_dt(challenge["expires_at"]),
-            "poll_interval_seconds": 2,
+            "poll_interval_seconds": 3,
         },
         status_code=201,
         headers={"Cache-Control": "no-store"},
@@ -232,10 +238,24 @@ async def auth_challenges(request: Request):
 
 @router.post("/auth/exchange")
 async def auth_exchange(request: Request):
-    _rate_limit(request, "exchange", 30, 5 * 60)
+    body = await _json_body(request)
+    challenge_id = str(body.get("challenge_id") or "")[:64]
+    # Клиент опрашивает один и тот же challenge до пяти минут. Ограничение
+    # привязано к challenge, а не блокирует всех пользователей одного NAT.
+    _rate_limit(request, f"exchange:{challenge_id}", 110, 5 * 60)
+    try:
+        tokens = await exchange_challenge(challenge_id, body.get("code_verifier", ""))
+    except MobileAuthError as exc:
+        return _auth_error(exc)
+    return JSONResponse(tokens, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/auth/key-exchange")
+async def auth_key_exchange(request: Request):
+    _rate_limit(request, "key-exchange", 10, 15 * 60)
     body = await _json_body(request)
     try:
-        tokens = await exchange_challenge(body.get("challenge_id", ""), body.get("code_verifier", ""))
+        tokens = await exchange_access_key(body.get("access_key", ""), body.get("device_name"))
     except MobileAuthError as exc:
         return _auth_error(exc)
     return JSONResponse(tokens, headers={"Cache-Control": "no-store"})
@@ -256,6 +276,16 @@ async def auth_refresh(request: Request):
 async def auth_logout(session=Depends(_mobile_session)):
     await revoke_session(session["id"])
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/auth/access-key")
+async def auth_access_key(request: Request, session=Depends(_mobile_session)):
+    _rate_limit(request, f"access-key:{int(session['tg_id'])}", 5, 60 * 60)
+    access_key = await issue_access_key(int(session["tg_id"]))
+    return JSONResponse(
+        {"access_key": access_key},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
 
 
 @router.get("/me")
@@ -521,7 +551,11 @@ async def android_update_manifest():
         "apkUrl": ANDROID_APK_URL,
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
-        "releaseNotes": ["Первый выпуск Way VPN", "Telegram-вход и защищённый полный VPN-туннель"],
+        "releaseNotes": [
+            "Исправлено завершение входа через Telegram",
+            "Вход по ключу аккаунта на нескольких своих устройствах",
+            "Новый интерфейс: Главная, Серверы, Поддержка и Настройки",
+        ],
     }, headers={"Cache-Control": "no-store"})
 
 
@@ -533,5 +567,17 @@ async def mobile_payment_return():
 <title>Way VPN — проверка оплаты</title><style>body{{font-family:sans-serif;background:#08131f;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:420px;padding:28px}}a{{display:block;padding:15px;border-radius:14px;background:#55d6be;color:#07131d;text-align:center;text-decoration:none;font-weight:700}}</style></head>
 <body><main><h1>Возвращаемся в Way VPN</h1><p>Приложение само запросит статус счёта у сервера. Параметры этой страницы не используются как подтверждение оплаты.</p>
 <a href=\"intent://wayspn.ru/mobile/payment-return#Intent;scheme=https;package={package};end\">Открыть Way VPN</a></main></body></html>""",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@public_router.get("/mobile/auth-return")
+async def mobile_auth_return():
+    package = html.escape(ANDROID_PACKAGE_ID, quote=True)
+    return HTMLResponse(f"""<!doctype html>
+<html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>Way VPN — вход подтверждён</title><style>body{{font-family:sans-serif;background:#0b0d12;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:420px;padding:28px}}a{{display:block;padding:15px;border-radius:18px;background:#39e6a5;color:#07110c;text-align:center;text-decoration:none;font-weight:700}}</style></head>
+<body><main><h1>Вход подтверждён</h1><p>Откройте Way VPN — приложение безопасно завершит обмен одноразового запроса.</p>
+<a href=\"intent://wayspn.ru/mobile/auth-return#Intent;scheme=https;package={package};end\">Открыть Way VPN</a></main></body></html>""",
         headers={"Cache-Control": "no-store"},
     )

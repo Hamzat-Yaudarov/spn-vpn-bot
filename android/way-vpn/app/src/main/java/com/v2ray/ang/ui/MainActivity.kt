@@ -1,15 +1,23 @@
 package com.v2ray.ang.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Gravity
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -26,6 +34,7 @@ import com.v2ray.ang.databinding.ActivityMainBinding
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
+import com.v2ray.ang.util.QRCodeDecoder
 import com.v2ray.ang.way.DeviceDto
 import com.v2ray.ang.way.LoginRequest
 import com.v2ray.ang.way.NodeSelector
@@ -57,7 +66,10 @@ class MainActivity : AppCompatActivity() {
     private val repository by lazy { WayRepository(this) }
     private var subscriptions: List<SubscriptionDto> = emptyList()
     private var serverGuids: List<String> = emptyList()
+    private val serverLatency = mutableMapOf<String, Long>()
     private var loginJob: Job? = null
+
+    private enum class Page { HOME, SERVERS, SUPPORT, SETTINGS }
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == RESULT_OK) startVpnCore()
@@ -70,6 +82,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         enforceWayVpnSettings()
         setupActions()
+        showPage(Page.HOME)
+        handleAuthReturn(intent)
         handlePaymentReturn(intent)
         requestNotificationPermission()
 
@@ -94,16 +108,21 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleAuthReturn(intent)
         handlePaymentReturn(intent)
     }
 
     override fun onResume() {
         super.onResume()
-        lifecycleScope.launch { checkLastPayment() }
+        lifecycleScope.launch {
+            checkLastPayment()
+            repository.pendingLogin()?.let(::pollLogin)
+        }
     }
 
     private fun setupActions() {
         binding.loginButton.setOnClickListener { lifecycleScope.launch { beginLogin() } }
+        binding.keyLoginButton.setOnClickListener { lifecycleScope.launch { loginWithKey() } }
         binding.connectButton.setOnClickListener { lifecycleScope.launch { toggleConnection() } }
         binding.syncButton.setOnClickListener { lifecycleScope.launch { syncProfile(true) } }
         binding.paymentButton.setOnClickListener { showPaymentChoices() }
@@ -111,6 +130,17 @@ class MainActivity : AppCompatActivity() {
         binding.vpnSettingsButton.setOnClickListener { openVpnSettings() }
         binding.updateButton.setOnClickListener { lifecycleScope.launch { checkUpdates() } }
         binding.logoutButton.setOnClickListener { confirmLogout() }
+        binding.pingAllButton.setOnClickListener { lifecycleScope.launch { measureAllServers() } }
+        binding.navHome.setOnClickListener { showPage(Page.HOME) }
+        binding.navServers.setOnClickListener { showPage(Page.SERVERS) }
+        binding.navSupport.setOnClickListener { showPage(Page.SUPPORT) }
+        binding.navSettings.setOnClickListener { showPage(Page.SETTINGS) }
+        binding.supportTelegramButton.setOnClickListener {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/WaySPN_robot")))
+        }
+        binding.copyKeyButton.setOnClickListener { copyAccessKey() }
+        binding.qrKeyButton.setOnClickListener { showAccessKeyQr() }
+        binding.rotateKeyButton.setOnClickListener { confirmRotateAccessKey() }
 
         binding.subscriptionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -161,6 +191,8 @@ class MainActivity : AppCompatActivity() {
     private fun showLogin() {
         binding.loginPanel.visibility = View.VISIBLE
         binding.accountPanel.visibility = View.GONE
+        binding.loginButton.isEnabled = true
+        binding.keyLoginButton.isEnabled = true
     }
 
     private suspend fun showAccountAndLoad() {
@@ -169,8 +201,11 @@ class MainActivity : AppCompatActivity() {
         try {
             val me = repository.me()
             binding.userName.text = me.username?.let { "@$it" } ?: "Telegram ID ${me.tg_id}"
+            binding.accessKeyText.text = repository.ensureAccountAccessKey()
+            binding.deviceIdText.text = "Device ID: ${repository.secureStore.installationHwid()}\nWay VPN ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
             loadSubscriptions()
             refreshServerSpinner()
+            showPage(Page.HOME)
         } catch (error: Exception) {
             if (error is WayApiException && error.status == 401) {
                 repository.logout()
@@ -186,8 +221,8 @@ class MainActivity : AppCompatActivity() {
         binding.loginStatus.text = "Создаём одноразовый запрос входа…"
         try {
             val request = repository.beginLogin()
-            CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(request.telegramUrl))
-            binding.loginStatus.text = "Подтвердите вход отдельной кнопкой в боте и вернитесь в Way VPN."
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(request.telegramUrl)))
+            binding.loginStatus.text = "Подтвердите вход в боте, затем нажмите «Вернуться в Way VPN»."
             pollLogin(request)
         } catch (error: Exception) {
             binding.loginButton.isEnabled = true
@@ -195,11 +230,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private suspend fun loginWithKey() {
+        val key = binding.accessKeyInput.text?.toString().orEmpty()
+        if (key.isBlank()) {
+            binding.loginStatus.text = "Введите ключ доступа с другого вашего устройства."
+            return
+        }
+        binding.keyLoginButton.isEnabled = false
+        binding.loginButton.isEnabled = false
+        binding.loginStatus.text = "Проверяем ключ доступа…"
+        try {
+            repository.loginWithAccessKey(key)
+            showAccountAndLoad()
+        } catch (error: Exception) {
+            binding.loginStatus.text = error.message ?: "Не удалось войти по ключу"
+            binding.keyLoginButton.isEnabled = true
+            binding.loginButton.isEnabled = true
+        }
+    }
+
     private fun pollLogin(request: LoginRequest) {
         if (loginJob?.isActive == true) return
         binding.loginButton.isEnabled = false
         loginJob = lifecycleScope.launch {
-            repeat(150) {
+            repeat(100) {
                 try {
                     if (repository.finishLogin(request)) {
                         binding.loginButton.isEnabled = true
@@ -215,6 +269,15 @@ class MainActivity : AppCompatActivity() {
             }
             binding.loginStatus.text = "Ссылка входа истекла. Создайте новую."
             binding.loginButton.isEnabled = true
+        }
+    }
+
+    private fun handleAuthReturn(intent: Intent?) {
+        if (intent?.data?.host == "wayspn.ru" && intent.data?.path == "/mobile/auth-return") {
+            lifecycleScope.launch {
+                repository.pendingLogin()?.let(::pollLogin)
+                    ?: showStatus("Запрос входа уже завершён или истёк")
+            }
         }
     }
 
@@ -296,6 +359,8 @@ class MainActivity : AppCompatActivity() {
                 } ?: -1
                 serverFingerprint(guid) to delay
             }
+        serverLatency.clear()
+        guids.zip(measured).forEach { (guid, result) -> serverLatency[guid] = result.second }
         val selectedFingerprint = NodeSelector.select(remembered, measured)
         val selected = guids.firstOrNull { serverFingerprint(it) == selectedFingerprint } ?: guids.first()
         MmkvManager.setSelectServer(selected)
@@ -316,6 +381,121 @@ class MainActivity : AppCompatActivity() {
         }
         val selected = serverGuids.indexOf(MmkvManager.getSelectServer()).takeIf { it >= 0 } ?: 0
         if (serverGuids.isNotEmpty()) binding.serverSpinner.setSelection(selected, false)
+        renderServerList()
+        renderSelectedServer()
+    }
+
+    private suspend fun measureAllServers() {
+        if (serverGuids.isEmpty()) {
+            if (!syncProfile(false)) return
+        }
+        binding.pingAllButton.isEnabled = false
+        binding.pingAllButton.text = "Проверяем…"
+        val measured = withContext(Dispatchers.IO) {
+            serverGuids.associateWith { guid ->
+                val config = MmkvManager.decodeServerConfig(guid)
+                config?.serverPort?.toIntOrNull()?.let { port ->
+                    SpeedtestManager.socketConnectTime(config.server.orEmpty(), port, 1_500)
+                } ?: -1L
+            }
+        }
+        serverLatency.clear()
+        serverLatency.putAll(measured)
+        renderServerList()
+        renderSelectedServer()
+        binding.pingAllButton.text = "Пинг"
+        binding.pingAllButton.isEnabled = true
+    }
+
+    private fun renderServerList() {
+        val container = binding.serverListContainer
+        container.removeAllViews()
+        if (serverGuids.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "Серверы появятся после обновления профиля"
+                setTextColor(Color.parseColor("#9499A5"))
+                textSize = 16f
+                setPadding(dp(8), dp(24), dp(8), dp(24))
+            })
+            return
+        }
+
+        val selectedGuid = MmkvManager.getSelectServer()
+        serverGuids.forEach { guid ->
+            val config = MmkvManager.decodeServerConfig(guid) ?: return@forEach
+            val latency = serverLatency[guid]
+            val selected = guid == selectedGuid
+            val card = com.google.android.material.card.MaterialCardView(this).apply {
+                radius = dp(20).toFloat()
+                setCardBackgroundColor(Color.parseColor(if (selected) "#26332F" else "#1B1E25"))
+                strokeWidth = if (selected) dp(1) else 0
+                strokeColor = Color.parseColor("#39E6A5")
+                isClickable = true
+                isFocusable = true
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10)
+                }
+                setOnClickListener {
+                    MmkvManager.setSelectServer(guid)
+                    lifecycleScope.launch { repository.secureStore.put(SecureStore.SELECTED_SERVER, serverFingerprint(guid)) }
+                    renderServerList()
+                    renderSelectedServer()
+                }
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(18), dp(16), dp(18), dp(16))
+            }
+            row.addView(TextView(this).apply {
+                text = config.remarks.ifBlank { "Way VPN сервер" }
+                setTextColor(Color.parseColor(if (selected) "#39E6A5" else "#FFFFFF"))
+                textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                append("\n")
+                append(listOfNotNull(
+                    config.configType.name,
+                    config.security?.takeIf(String::isNotBlank),
+                    config.network?.takeIf(String::isNotBlank),
+                ).joinToString(" · "))
+            })
+            row.addView(TextView(this).apply {
+                text = when {
+                    latency == null -> "—"
+                    latency < 0 -> "нет ответа"
+                    else -> "${latency} мс"
+                }
+                setTextColor(Color.parseColor(latencyColor(latency)))
+                textSize = 14f
+            })
+            card.addView(row)
+            container.addView(card)
+        }
+    }
+
+    private fun renderSelectedServer() {
+        val guid = MmkvManager.getSelectServer()
+        val config = guid?.let(MmkvManager::decodeServerConfig)
+        binding.currentServerName.text = config?.remarks?.ifBlank { "Way VPN сервер" } ?: "Автовыбор сервера"
+        val details = config?.let {
+            listOfNotNull(
+                it.configType.name,
+                it.security?.takeIf(String::isNotBlank),
+                it.network?.takeIf(String::isNotBlank),
+                serverLatency[guid]?.takeIf { value -> value >= 0 }?.let { value -> "${value} мс" },
+            ).joinToString(" · ")
+        } ?: "Будет выбран узел с минимальной задержкой"
+        binding.currentServerDetails.text = details
+        binding.protocolInfo.text = "Протокол:  ${config?.configType?.name ?: "—"}"
+        binding.encryptionInfo.text = "Защита:  ${config?.security?.ifBlank { "Xray" } ?: "—"}"
+    }
+
+    private fun latencyColor(value: Long?): String = when {
+        value == null || value < 0 -> "#777C87"
+        value < 180 -> "#39E6A5"
+        value < 400 -> "#F2B84B"
+        else -> "#FF5B78"
     }
 
     private suspend fun toggleConnection() {
@@ -389,14 +569,77 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateConnectionState() {
         val running = CoreServiceManager.isRunning()
-        binding.connectionStatus.text = if (running) "Подключено" else "Не подключено"
-        binding.connectButton.text = if (running) "Отключить" else "Подключить"
-        binding.connectButton.setBackgroundColor(getColor(if (running) R.color.color_fab_active else R.color.color_fab_inactive))
+        binding.connectionStatus.text = if (running) "Статус:  Подключено" else "Статус:  Не подключено"
+        binding.connectionStatus.setTextColor(Color.parseColor(if (running) "#39E6A5" else "#9499A5"))
+        binding.connectButton.text = if (running) "W\nОТКЛЮЧИТЬ" else "W\nПОДКЛЮЧИТЬ"
+        binding.connectButton.setBackgroundColor(Color.parseColor(if (running) "#39E6A5" else "#6C717D"))
+        if (running) renderSelectedServer()
     }
 
     private fun showStatus(message: String) {
         binding.connectionStatus.text = message
     }
+
+    private fun showPage(page: Page) {
+        binding.homePage.visibility = if (page == Page.HOME) View.VISIBLE else View.GONE
+        binding.serversPage.visibility = if (page == Page.SERVERS) View.VISIBLE else View.GONE
+        binding.supportPage.visibility = if (page == Page.SUPPORT) View.VISIBLE else View.GONE
+        binding.settingsPage.visibility = if (page == Page.SETTINGS) View.VISIBLE else View.GONE
+        val active = Color.parseColor("#39E6A5")
+        val inactive = Color.parseColor("#777C87")
+        binding.navHome.setTextColor(if (page == Page.HOME) active else inactive)
+        binding.navServers.setTextColor(if (page == Page.SERVERS) active else inactive)
+        binding.navSupport.setTextColor(if (page == Page.SUPPORT) active else inactive)
+        binding.navSettings.setTextColor(if (page == Page.SETTINGS) active else inactive)
+    }
+
+    private fun copyAccessKey() {
+        val key = binding.accessKeyText.text?.toString().orEmpty()
+        if (!key.startsWith("WAY-")) return
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Way VPN access key", key))
+        showStatus("Ключ доступа скопирован")
+    }
+
+    private fun showAccessKeyQr() {
+        val key = binding.accessKeyText.text?.toString().orEmpty()
+        if (!key.startsWith("WAY-")) return
+        val bitmap = QRCodeDecoder.createQRCode(key, 900) ?: run {
+            showStatus("Не удалось создать QR-код")
+            return
+        }
+        val image = ImageView(this).apply {
+            setImageBitmap(bitmap)
+            adjustViewBounds = true
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ключ доступа Way VPN")
+            .setMessage("Показывайте этот QR-код только своим устройствам.")
+            .setView(image)
+            .setPositiveButton("Закрыть", null)
+            .show()
+    }
+
+    private fun confirmRotateAccessKey() {
+        AlertDialog.Builder(this)
+            .setTitle("Заменить ключ доступа?")
+            .setMessage("Старый ключ перестанет подходить для новых входов. Уже открытые сессии на ваших устройствах сохранятся.")
+            .setPositiveButton("Заменить") { _, _ ->
+                lifecycleScope.launch {
+                    runCatching { repository.rotateAccountAccessKey() }
+                        .onSuccess {
+                            binding.accessKeyText.text = it
+                            showStatus("Ключ доступа заменён")
+                        }
+                        .onFailure { showStatus(it.message ?: "Не удалось заменить ключ") }
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
     private suspend fun showDevices() {
         val subscription = selectedSubscription() ?: return

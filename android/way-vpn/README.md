@@ -8,6 +8,7 @@ Way VPN is a restricted Russian-language Android client for Way SPN. It is a GPL
 - Full VPN mode with IPv4, IPv6 and DNS routed through TUN; no app split tunnelling or local proxy sharing.
 - Refresh token, installation HWID and offline profile are encrypted with AES-GCM keys from Android Keystore. MMKV runtime profiles use a separately wrapped random key.
 - Random 32-character installation HWID; Android ID, IMEI and advertising identifiers are not used.
+- A 120-bit account access key can create a separate encrypted session on another owned device; Remnawave still receives a distinct installation HWID for every profile download.
 - No analytics, ads, cleartext HTTP, backup, arbitrary subscription URL, configuration export or reachable QR scanner.
 - Updates require HTTPS, the manifest SHA-256 and the currently installed signing certificate.
 
