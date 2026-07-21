@@ -53,6 +53,10 @@ class WaySecurityTest {
         assertEquals(key, AccountAccessKey.normalize(" ${key.lowercase()} "))
         assertTrue(AccountAccessKey.isValid("0RU56PWo-tACBZuo"))
         assertEquals("0RU56PWo-tACBZuo", AccountAccessKey.normalize(" 0RU56PWo-tACBZuo "))
+        val subscriptionUrl = "https://sub.wayspn.online/LotbHJ8UExGg6pS-"
+        assertTrue(AccountAccessKey.isValid(subscriptionUrl))
+        assertEquals(subscriptionUrl, AccountAccessKey.normalize(" $subscriptionUrl\n"))
+        assertFalse(AccountAccessKey.isValid("https://evil.example/LotbHJ8UExGg6pS-"))
         assertFalse(AccountAccessKey.isValid("WAY-TOO-SHORT"))
         assertFalse(AccountAccessKey.isValid("WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXY0"))
     }

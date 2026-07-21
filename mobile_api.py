@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.2-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.2-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.2-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.2-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.1-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.1-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.1-gpl-source.zip": "application/zip",
@@ -131,13 +135,23 @@ async def _mobile_session(request: Request):
     return session
 
 
-async def _owned_subscription(subscription_id: int, tg_id: int):
-    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+def _scoped_subscription_id(session) -> int | None:
+    value = session.get("scoped_subscription_id")
+    return int(value) if value is not None else None
+
+
+async def _owned_subscription(subscription_id: int, session):
+    scoped_subscription_id = _scoped_subscription_id(session)
+    if scoped_subscription_id is not None and scoped_subscription_id != int(subscription_id):
+        raise HTTPException(status_code=404, detail={"code": "subscription_not_found", "message": "Подписка не найдена"})
+    subscription = await db.get_subscription_by_id(subscription_id, int(session["tg_id"]))
     if (
         not subscription
-        or subscription.get("generation") != "v2"
-        or not subscription.get("is_visible")
         or not subscription.get("remnawave_uuid")
+        or (
+            scoped_subscription_id is None
+            and (subscription.get("generation") != "v2" or not subscription.get("is_visible"))
+        )
     ):
         raise HTTPException(status_code=404, detail={"code": "subscription_not_found", "message": "Подписка не найдена"})
     return subscription
@@ -285,6 +299,11 @@ async def auth_logout(session=Depends(_mobile_session)):
 @router.post("/auth/access-key")
 async def auth_access_key(request: Request, session=Depends(_mobile_session)):
     _rate_limit(request, f"access-key:{int(session['tg_id'])}", 5, 60 * 60)
+    if _scoped_subscription_id(session) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "subscription_session", "message": "Эта сессия ограничена одной подпиской"},
+        )
     access_key = await issue_access_key(int(session["tg_id"]))
     return JSONResponse(
         {"access_key": access_key},
@@ -294,9 +313,14 @@ async def auth_access_key(request: Request, session=Depends(_mobile_session)):
 
 @router.get("/me")
 async def mobile_me(session=Depends(_mobile_session)):
-    user = await db.get_user(int(session["tg_id"]))
+    scoped_subscription_id = _scoped_subscription_id(session)
+    user = await db.get_user(int(session["tg_id"])) if scoped_subscription_id is None else None
     return JSONResponse(
-        {"tg_id": int(session["tg_id"]), "username": user.get("username") if user else None},
+        {
+            "tg_id": int(session["tg_id"]) if scoped_subscription_id is None else 0,
+            "username": user.get("username") if user else None,
+            "auth_scope": "subscription" if scoped_subscription_id is not None else "account",
+        },
         headers={"Cache-Control": "no-store"},
     )
 
@@ -322,7 +346,12 @@ async def mobile_catalog(session=Depends(_mobile_session)):
 
 @router.get("/subscriptions")
 async def mobile_subscriptions(session=Depends(_mobile_session)):
-    subscriptions = await db.get_visible_subscriptions(int(session["tg_id"]))
+    scoped_subscription_id = _scoped_subscription_id(session)
+    if scoped_subscription_id is None:
+        subscriptions = await db.get_visible_subscriptions(int(session["tg_id"]))
+    else:
+        scoped = await db.get_subscription_by_id(scoped_subscription_id, int(session["tg_id"]))
+        subscriptions = [scoped] if scoped and scoped.get("remnawave_uuid") else []
     return JSONResponse({"subscriptions": [await _serialize_subscription(item) for item in subscriptions]})
 
 
@@ -332,7 +361,7 @@ async def mobile_subscription_profile(subscription_id: int, request: Request, se
     hwid = str(body.get("hwid") or "")
     if not HWID_RE.fullmatch(hwid):
         raise HTTPException(status_code=400, detail={"code": "invalid_hwid", "message": "Некорректный HWID"})
-    subscription = await _owned_subscription(subscription_id, int(session["tg_id"]))
+    subscription = await _owned_subscription(subscription_id, session)
     if not subscription.get("subscription_until") or subscription["subscription_until"] <= datetime.utcnow():
         raise HTTPException(status_code=403, detail={"code": "subscription_expired", "message": "Срок подписки истёк"})
 
@@ -379,7 +408,7 @@ async def mobile_subscription_profile(subscription_id: int, request: Request, se
 
 @router.get("/subscriptions/{subscription_id}/devices")
 async def mobile_subscription_devices(subscription_id: int, session=Depends(_mobile_session)):
-    subscription = await _owned_subscription(subscription_id, int(session["tg_id"]))
+    subscription = await _owned_subscription(subscription_id, session)
     devices = await remnawave_get_hwid_devices(None, subscription["remnawave_uuid"])
     if devices is None:
         raise HTTPException(status_code=502, detail="Could not fetch devices")
@@ -390,7 +419,7 @@ async def mobile_subscription_devices(subscription_id: int, session=Depends(_mob
 async def mobile_delete_subscription_device(subscription_id: int, hwid: str, session=Depends(_mobile_session)):
     if not HWID_RE.fullmatch(hwid):
         raise HTTPException(status_code=400, detail={"code": "invalid_hwid", "message": "Некорректный HWID"})
-    subscription = await _owned_subscription(subscription_id, int(session["tg_id"]))
+    subscription = await _owned_subscription(subscription_id, session)
     if not await remnawave_delete_hwid_device(None, subscription["remnawave_uuid"], hwid):
         raise HTTPException(status_code=502, detail="Could not delete device")
     return JSONResponse({"ok": True})
@@ -414,11 +443,16 @@ async def mobile_create_subscription_payment(request: Request, session=Depends(_
     target, subscription_id = body.get("payment_target", "new"), body.get("subscription_id")
     if code not in TARIFFS or provider not in {"cryptobot", "yookassa"} or target not in {"new", "renew"}:
         raise HTTPException(status_code=400, detail="Invalid tariff or provider")
+    if _scoped_subscription_id(session) is not None and target != "renew":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "subscription_session", "message": "По этой ссылке можно продлить только текущую подписку"},
+        )
     tariff = TARIFFS[code]
     if target == "renew":
         if not subscription_id:
             raise HTTPException(status_code=400, detail="subscription_id is required")
-        subscription = await _owned_subscription(int(subscription_id), tg_id)
+        subscription = await _owned_subscription(int(subscription_id), session)
         if not subscription.get("is_renewable") or subscription.get("plan_kind") != tariff["kind"]:
             raise HTTPException(status_code=400, detail="Invalid subscription")
         target_index = subscription.get("type_index")
@@ -451,7 +485,7 @@ async def mobile_create_traffic_payment(request: Request, session=Depends(_mobil
     package = BYPASS_TRAFFIC_PACKAGES.get(package_code)
     if provider not in {"cryptobot", "yookassa"} or not package or not subscription_id:
         raise HTTPException(status_code=400, detail="Invalid traffic payment")
-    subscription = await _owned_subscription(int(subscription_id), tg_id)
+    subscription = await _owned_subscription(int(subscription_id), session)
     if subscription.get("plan_kind") != "bypass" or not subscription.get("is_renewable"):
         raise HTTPException(status_code=400, detail="Invalid bypass subscription")
     discounts = await db.get_active_discounts()
@@ -482,7 +516,7 @@ async def mobile_create_device_payment(request: Request, session=Depends(_mobile
         device_count = 0
     if provider not in {"cryptobot", "yookassa"} or not subscription_id or device_count <= 0:
         raise HTTPException(status_code=400, detail="Invalid device payment")
-    subscription = await _owned_subscription(int(subscription_id), tg_id)
+    subscription = await _owned_subscription(int(subscription_id), session)
     if not subscription.get("is_renewable") or not subscription.get("subscription_until") or subscription["subscription_until"] <= datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid subscription")
     active_addons = await db.get_active_device_addon_count(int(subscription_id))
@@ -508,7 +542,15 @@ async def mobile_create_device_payment(request: Request, session=Depends(_mobile
 @router.get("/payments/{invoice_id}")
 async def mobile_payment_status(invoice_id: str, session=Depends(_mobile_session)):
     payment = await db.get_payment_by_invoice(invoice_id)
-    if not payment or int(payment["tg_id"]) != int(session["tg_id"]):
+    scoped_subscription_id = _scoped_subscription_id(session)
+    if (
+        not payment
+        or int(payment["tg_id"]) != int(session["tg_id"])
+        or (
+            scoped_subscription_id is not None
+            and int(payment.get("subscription_id") or 0) != scoped_subscription_id
+        )
+    ):
         raise HTTPException(status_code=404, detail="Payment not found")
     summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None
     return JSONResponse({"invoice_id": invoice_id, "status": payment["status"], "summary": summary})
@@ -556,9 +598,9 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Надёжный возврат в приложение после подтверждения через Telegram",
-            "Добавлена ручная проверка подтверждённого входа",
-            "Исправлена проверка компактных и старых ключей доступа",
+            "Добавлен вход по полной ссылке sub.wayspn.online",
+            "Исправлена гонка при завершении входа через Telegram",
+            "Сессия по ссылке безопасно ограничена одной подпиской",
         ],
     }, headers={"Cache-Control": "no-store"})
 

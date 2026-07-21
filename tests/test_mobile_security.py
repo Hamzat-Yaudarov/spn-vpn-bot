@@ -52,8 +52,9 @@ class _Pool:
 
 
 class _AccessKeyConnection:
-    def __init__(self, tg_id=1001):
+    def __init__(self, tg_id=1001, key_exists=True):
         self.tg_id = tg_id
+        self.key_exists = key_exists
         self.sessions = []
 
     def transaction(self):
@@ -61,7 +62,7 @@ class _AccessKeyConnection:
 
     async def fetchrow(self, query, *params):
         if "FROM mobile_access_keys" in query:
-            return {"tg_id": self.tg_id}
+            return {"tg_id": self.tg_id} if self.key_exists else None
         return None
 
     async def execute(self, query, *params):
@@ -139,6 +140,37 @@ class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(connection.sessions), 1)
         self.assertEqual(connection.sessions[0][1], 1001)
 
+    async def test_subscription_url_creates_subscription_scoped_session(self):
+        connection = _AccessKeyConnection(key_exists=False)
+        subscription_uuid = str(uuid.uuid4())
+        subscription = {
+            "id": 77,
+            "tg_id": 1001,
+            "generation": "v2",
+            "is_visible": True,
+            "remnawave_uuid": subscription_uuid,
+        }
+        with (
+            patch("services.mobile_auth.remnawave_resolve_user_uuid_by_short_uuid", new=AsyncMock(return_value=subscription_uuid)),
+            patch("services.mobile_auth.db.get_subscription_by_uuid", new=AsyncMock(return_value=subscription)),
+            patch("services.mobile_auth.db.get_pool", new=AsyncMock(return_value=_Pool(connection))),
+        ):
+            tokens = await mobile_auth.exchange_access_key(
+                "https://sub.wayspn.online/LotbHJ8UExGg6pS-",
+                "Pixel 10",
+            )
+        self.assertIn("access_token", tokens)
+        self.assertEqual(connection.sessions[0][1], 1001)
+        self.assertEqual(connection.sessions[0][2], 77)
+
+    async def test_subscription_url_rejects_wrong_host_without_lookup(self):
+        resolver = AsyncMock()
+        with patch("services.mobile_auth.remnawave_resolve_user_uuid_by_short_uuid", new=resolver):
+            with self.assertRaises(mobile_auth.MobileAuthError) as error:
+                await mobile_auth.exchange_access_key("https://evil.example/LotbHJ8UExGg6pS-")
+        self.assertEqual(error.exception.code, "invalid_subscription_url")
+        resolver.assert_not_awaited()
+
     async def test_invalid_access_key_is_rejected_without_database_lookup(self):
         with self.assertRaises(mobile_auth.MobileAuthError) as error:
             await mobile_auth.exchange_access_key("WAY-TOO-SHORT")
@@ -148,8 +180,12 @@ class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
 class MobileProfileSecurityTests(unittest.TestCase):
     def test_subscription_proxy_rejects_ssrf_hosts_and_http(self):
         self.assertEqual(
-            remnawave.validate_public_subscription_url("https://sub.wayspn.online/sub/abc"),
-            "https://sub.wayspn.online/sub/abc",
+            remnawave.validate_public_subscription_url("https://sub.wayspn.online/sub/abcdefgh"),
+            "https://sub.wayspn.online/sub/abcdefgh",
+        )
+        self.assertEqual(
+            remnawave.validate_public_subscription_url("https://sub.wayspn.online/LotbHJ8UExGg6pS-"),
+            "https://sub.wayspn.online/LotbHJ8UExGg6pS-",
         )
         for value in (
             "http://sub.wayspn.online/sub/abc",
@@ -173,6 +209,34 @@ class MobileProfileSecurityTests(unittest.TestCase):
         encoded = base64.b64encode(b"vless://one\nvmess://blocked\n")
         decoded = base64.b64decode(mobile_api._filter_profile(encoded)).decode()
         self.assertEqual(decoded, "vless://one\n")
+
+
+class MobileSessionScopeTests(unittest.IsolatedAsyncioTestCase):
+    @patch("mobile_api.db.get_subscription_by_id", new_callable=AsyncMock)
+    async def test_subscription_session_cannot_access_another_subscription(self, get_subscription):
+        with self.assertRaises(HTTPException) as error:
+            await mobile_api._owned_subscription(
+                78,
+                {"tg_id": 1001, "scoped_subscription_id": 77},
+            )
+        self.assertEqual(error.exception.status_code, 404)
+        get_subscription.assert_not_awaited()
+
+    @patch("mobile_api.db.get_subscription_by_id", new_callable=AsyncMock)
+    async def test_subscription_session_can_access_its_own_subscription(self, get_subscription):
+        expected = {
+            "id": 77,
+            "tg_id": 1001,
+            "generation": "v2",
+            "is_visible": True,
+            "remnawave_uuid": uuid.uuid4(),
+        }
+        get_subscription.return_value = expected
+        actual = await mobile_api._owned_subscription(
+            77,
+            {"tg_id": 1001, "scoped_subscription_id": 77},
+        )
+        self.assertEqual(actual, expected)
 
 
 class CryptoWebhookSignatureTests(unittest.TestCase):

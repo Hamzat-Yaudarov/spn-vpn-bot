@@ -16,6 +16,11 @@ from config import (
     MOBILE_AUTH_CHALLENGE_MINUTES,
     MOBILE_REFRESH_TOKEN_DAYS,
 )
+from services.remnawave import (
+    SUBSCRIPTION_SHORT_UUID_RE,
+    extract_public_subscription_short_uuid,
+    remnawave_resolve_user_uuid_by_short_uuid,
+)
 
 
 CODE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
@@ -154,7 +159,12 @@ def _token_response(session_id: uuid.UUID, access_token: str, refresh_token: str
     }
 
 
-async def _create_session(conn, tg_id: int, device_name: str | None) -> dict:
+async def _create_session(
+    conn,
+    tg_id: int,
+    device_name: str | None,
+    scoped_subscription_id: int | None = None,
+) -> dict:
     session_id = uuid.uuid4()
     access_token = secrets.token_urlsafe(48)
     refresh_token = secrets.token_urlsafe(48)
@@ -163,12 +173,13 @@ async def _create_session(conn, tg_id: int, device_name: str | None) -> dict:
     await conn.execute(
         """
         INSERT INTO mobile_sessions
-            (id, tg_id, device_name, access_token_hash, access_expires_at,
+            (id, tg_id, scoped_subscription_id, device_name, access_token_hash, access_expires_at,
              refresh_token_hash, refresh_expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """,
         session_id,
         int(tg_id),
+        int(scoped_subscription_id) if scoped_subscription_id is not None else None,
         (device_name or "")[:120] or None,
         hash_secret(access_token),
         access_expires,
@@ -197,30 +208,68 @@ async def issue_access_key(tg_id: int) -> str:
 
 
 async def exchange_access_key(access_key: str, device_name: str | None = None) -> dict:
-    """Создать отдельную мобильную сессию для установки по ключу аккаунта."""
+    """Войти по ключу аккаунта или по URL конкретной Remnawave-подписки."""
     normalized = normalize_access_key(access_key)
-    if not ACCESS_KEY_RE.fullmatch(normalized):
-        raise MobileAuthError("invalid_access_key", "Некорректный ключ доступа", 401)
+    account_key_candidate = bool(ACCESS_KEY_RE.fullmatch(normalized))
+    subscription_short_uuid = None
+    if normalized.lower().startswith(("http://", "https://")):
+        try:
+            subscription_short_uuid = extract_public_subscription_short_uuid(normalized)
+        except ValueError as exc:
+            raise MobileAuthError(
+                "invalid_subscription_url",
+                "Некорректная ссылка подписки Way VPN",
+                401,
+            ) from exc
+    elif not normalized.upper().startswith("WAY-") and SUBSCRIPTION_SHORT_UUID_RE.fullmatch(normalized):
+        subscription_short_uuid = normalized
+
+    if not account_key_candidate and not subscription_short_uuid:
+        raise MobileAuthError("invalid_access_key", "Введите ключ или ссылку подписки Way VPN", 401)
+
+    if account_key_candidate:
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT tg_id
+                    FROM mobile_access_keys
+                    WHERE key_hash = $1 AND revoked_at IS NULL
+                    FOR UPDATE
+                    """,
+                    hash_secret(normalized),
+                )
+                if row:
+                    await conn.execute(
+                        "UPDATE mobile_access_keys SET last_used_at = now() WHERE tg_id = $1",
+                        int(row["tg_id"]),
+                    )
+                    return await _create_session(conn, int(row["tg_id"]), device_name)
+
+    if not subscription_short_uuid:
+        raise MobileAuthError("invalid_access_key", "Ключ доступа не найден или был заменён", 401)
+    try:
+        remnawave_uuid = await remnawave_resolve_user_uuid_by_short_uuid(subscription_short_uuid)
+    except RuntimeError as exc:
+        raise MobileAuthError(
+            "subscription_validation_unavailable",
+            "Не удалось проверить подписку. Повторите позже",
+            502,
+        ) from exc
+    subscription = await db.get_subscription_by_uuid(remnawave_uuid) if remnawave_uuid else None
+    if not subscription or not subscription.get("remnawave_uuid"):
+        raise MobileAuthError("invalid_access_key", "Подписка не найдена в Way VPN", 401)
 
     pool = await db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                SELECT tg_id
-                FROM mobile_access_keys
-                WHERE key_hash = $1 AND revoked_at IS NULL
-                FOR UPDATE
-                """,
-                hash_secret(normalized),
+            return await _create_session(
+                conn,
+                int(subscription["tg_id"]),
+                device_name,
+                scoped_subscription_id=int(subscription["id"]),
             )
-            if not row:
-                raise MobileAuthError("invalid_access_key", "Ключ доступа не найден или был заменён", 401)
-            await conn.execute(
-                "UPDATE mobile_access_keys SET last_used_at = now() WHERE tg_id = $1",
-                int(row["tg_id"]),
-            )
-            return await _create_session(conn, int(row["tg_id"]), device_name)
 
 
 async def exchange_challenge(challenge_id: str, verifier: str) -> dict:
@@ -304,7 +353,7 @@ async def authenticate_access_token(access_token: str):
         WHERE access_token_hash = $1
           AND access_expires_at > now() AT TIME ZONE 'UTC'
           AND revoked_at IS NULL
-        RETURNING id, tg_id, device_name, access_expires_at
+        RETURNING id, tg_id, scoped_subscription_id, device_name, access_expires_at
         """,
         (hash_secret((access_token or "").strip()),),
         fetch_one=True,

@@ -4,6 +4,7 @@ package com.v2ray.ang.way
 object AccountAccessKey {
     private val wayPattern = Regex("^WAY-(?:[A-Z2-7]{4}-){5}[A-Z2-7]{4}$")
     private val compactPattern = Regex("^[A-Za-z0-9_-]{16,64}$")
+    private val subscriptionUrlPattern = Regex("^https://sub\\.wayspn\\.online/(?:sub/)?[A-Za-z0-9_-]{8,128}/?$")
     private val unicodeDashes = Regex("[‐‑‒–—−]")
 
     fun normalize(value: String): String {
@@ -12,6 +13,10 @@ object AccountAccessKey {
     }
 
     fun isValid(value: String): Boolean = normalize(value).let {
-        if (it.startsWith("WAY-")) wayPattern.matches(it) else compactPattern.matches(it)
+        when {
+            it.startsWith("WAY-") -> wayPattern.matches(it)
+            it.startsWith("https://") -> subscriptionUrlPattern.matches(it)
+            else -> compactPattern.matches(it)
+        }
     }
 }

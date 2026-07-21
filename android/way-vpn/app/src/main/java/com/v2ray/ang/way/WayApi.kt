@@ -29,7 +29,7 @@ data class TokenResponse(
 
 data class AccessKeyResponse(val access_key: String)
 
-data class MeResponse(val tg_id: Long, val username: String?)
+data class MeResponse(val tg_id: Long, val username: String?, val auth_scope: String? = null)
 
 data class TrafficDto(
     val enabled: Boolean,

@@ -35,6 +35,7 @@ import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.util.QRCodeDecoder
+import com.v2ray.ang.way.AccountAccessKey
 import com.v2ray.ang.way.DeviceDto
 import com.v2ray.ang.way.LoginRequest
 import com.v2ray.ang.way.NodeSelector
@@ -68,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private var serverGuids: List<String> = emptyList()
     private val serverLatency = mutableMapOf<String, Long>()
     private var loginJob: Job? = null
+    private var subscriptionScopedSession = false
 
     private enum class Page { HOME, SERVERS, SUPPORT, SETTINGS }
 
@@ -190,6 +192,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showLogin() {
+        subscriptionScopedSession = false
         binding.loginPanel.visibility = View.VISIBLE
         binding.accountPanel.visibility = View.GONE
         binding.loginButton.isEnabled = true
@@ -203,8 +206,15 @@ class MainActivity : AppCompatActivity() {
         binding.accountPanel.visibility = View.VISIBLE
         try {
             val me = repository.me()
-            binding.userName.text = me.username?.let { "@$it" } ?: "Telegram ID ${me.tg_id}"
+            val subscriptionSession = me.auth_scope == "subscription"
+            subscriptionScopedSession = subscriptionSession
+            binding.userName.text = if (subscriptionSession) {
+                "Вход по ссылке подписки"
+            } else {
+                me.username?.let { "@$it" } ?: "Telegram ID ${me.tg_id}"
+            }
             binding.accessKeyText.text = repository.ensureAccountAccessKey()
+            binding.rotateKeyButton.visibility = if (subscriptionSession) View.GONE else View.VISIBLE
             binding.deviceIdText.text = "Device ID: ${repository.secureStore.installationHwid()}\nWay VPN ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
             loadSubscriptions()
             refreshServerSpinner()
@@ -238,7 +248,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun loginWithKey() {
         val key = binding.accessKeyInput.text?.toString().orEmpty()
         if (key.isBlank()) {
-            binding.loginStatus.text = "Введите ключ доступа с другого вашего устройства."
+            binding.loginStatus.text = "Введите ключ или полную ссылку подписки Way VPN."
             return
         }
         binding.keyLoginButton.isEnabled = false
@@ -287,6 +297,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun checkPendingLoginNow() {
+        if (loginJob?.isActive == true) {
+            binding.loginStatus.text = "Подтверждение получено. Завершаем безопасный вход…"
+            return
+        }
         val request = repository.pendingLogin()
         if (request == null) {
             binding.loginStatus.text = "Нет активного запроса. Нажмите «Войти через Telegram» ещё раз."
@@ -295,8 +309,6 @@ class MainActivity : AppCompatActivity() {
             binding.checkLoginButton.visibility = View.GONE
             return
         }
-        loginJob?.cancel()
-        loginJob = null
         binding.checkLoginButton.isEnabled = false
         binding.loginStatus.text = "Проверяем подтверждение…"
         try {
@@ -641,15 +653,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun copyAccessKey() {
         val key = binding.accessKeyText.text?.toString().orEmpty()
-        if (!key.startsWith("WAY-")) return
+        if (!AccountAccessKey.isValid(key)) return
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Way VPN access key", key))
-        showStatus("Ключ доступа скопирован")
+        clipboard.setPrimaryClip(ClipData.newPlainText("Way VPN access", key))
+        showStatus("Ключ или ссылка скопированы")
     }
 
     private fun showAccessKeyQr() {
         val key = binding.accessKeyText.text?.toString().orEmpty()
-        if (!key.startsWith("WAY-")) return
+        if (!AccountAccessKey.isValid(key)) return
         val bitmap = QRCodeDecoder.createQRCode(key, 900) ?: run {
             showStatus("Не удалось создать QR-код")
             return
@@ -660,7 +672,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(20), dp(20), dp(20), dp(20))
         }
         AlertDialog.Builder(this)
-            .setTitle("Ключ доступа Way VPN")
+            .setTitle("Доступ Way VPN")
             .setMessage("Показывайте этот QR-код только своим устройствам.")
             .setView(image)
             .setPositiveButton("Закрыть", null)
@@ -733,12 +745,14 @@ class MainActivity : AppCompatActivity() {
             choices += PaymentChoice("Продлить выбранную на 1 месяц", "${selected.plan_kind}_1m", selected.id)
             choices += PaymentChoice("Продлить выбранную на 3 месяца", "${selected.plan_kind}_3m", selected.id)
         }
-        choices += listOf(
-            PaymentChoice("Новая обычная — 1 месяц", "regular_1m", null),
-            PaymentChoice("Новая обычная — 3 месяца", "regular_3m", null),
-            PaymentChoice("Новая с антиглушилкой — 1 месяц", "bypass_1m", null),
-            PaymentChoice("Новая с антиглушилкой — 3 месяца", "bypass_3m", null),
-        )
+        if (!subscriptionScopedSession) {
+            choices += listOf(
+                PaymentChoice("Новая обычная — 1 месяц", "regular_1m", null),
+                PaymentChoice("Новая обычная — 3 месяца", "regular_3m", null),
+                PaymentChoice("Новая с антиглушилкой — 1 месяц", "bypass_1m", null),
+                PaymentChoice("Новая с антиглушилкой — 3 месяца", "bypass_3m", null),
+            )
+        }
         AlertDialog.Builder(this).setTitle("Купить или продлить").setItems(choices.map { it.title }.toTypedArray()) { _, index ->
             choosePaymentProvider(choices[index])
         }.setNegativeButton("Отмена", null).show()

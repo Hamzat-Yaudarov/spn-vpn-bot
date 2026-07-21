@@ -1,8 +1,10 @@
 package com.v2ray.ang.way
 
 import android.content.Context
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.security.SecureRandom
 
 
@@ -12,6 +14,7 @@ class WayRepository(context: Context) {
     private val api = WayApi()
     val secureStore = SecureStore(context.applicationContext)
     private val refreshMutex = Mutex()
+    private val loginExchangeMutex = Mutex()
 
     private fun verifier(): String = ByteArray(48).also(SecureRandom()::nextBytes).let {
         java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(it)
@@ -32,14 +35,23 @@ class WayRepository(context: Context) {
     }
 
     suspend fun finishLogin(request: LoginRequest): Boolean {
-        return try {
-            val tokens = api.exchange(request.challengeId, request.verifier)
-            saveTokens(tokens)
-            secureStore.put(SecureStore.PENDING_CHALLENGE, null)
-            secureStore.put(SecureStore.PENDING_VERIFIER, null)
-            true
-        } catch (error: WayApiException) {
-            if (error.errorCode == "authorization_pending") false else throw error
+        return loginExchangeMutex.withLock {
+            if (accessToken() != null) {
+                secureStore.put(SecureStore.PENDING_CHALLENGE, null)
+                secureStore.put(SecureStore.PENDING_VERIFIER, null)
+                return@withLock true
+            }
+            withContext(NonCancellable) {
+                try {
+                    val tokens = api.exchange(request.challengeId, request.verifier)
+                    saveTokens(tokens)
+                    secureStore.put(SecureStore.PENDING_CHALLENGE, null)
+                    secureStore.put(SecureStore.PENDING_VERIFIER, null)
+                    true
+                } catch (error: WayApiException) {
+                    if (error.errorCode == "authorization_pending") false else throw error
+                }
+            }
         }
     }
 

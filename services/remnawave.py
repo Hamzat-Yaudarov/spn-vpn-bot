@@ -1,11 +1,14 @@
 import aiohttp
+import hmac
 import json
 import logging
+import re
 import secrets
 import ssl
 import string
+import uuid
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from config import (
     REMNAWAVE_BASE_URL,
     REMNAWAVE_API_TOKEN,
@@ -18,6 +21,7 @@ from utils import retry_with_backoff, safe_api_call
 
 
 MAX_SUBSCRIPTION_PROFILE_BYTES = 4 * 1024 * 1024
+SUBSCRIPTION_SHORT_UUID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
 def _verified_connector() -> aiohttp.TCPConnector:
@@ -26,8 +30,8 @@ def _verified_connector() -> aiohttp.TCPConnector:
     return aiohttp.TCPConnector(ssl=context)
 
 
-def validate_public_subscription_url(sub_url: str) -> str:
-    """Разрешить проксирование только на закреплённый HTTPS subscription-host."""
+def extract_public_subscription_short_uuid(sub_url: str) -> str:
+    """Извлечь short UUID только из URL закреплённого HTTPS subscription-host."""
     configured = urlsplit(SUBSCRIPTION_PUBLIC_BASE_URL)
     candidate = urlsplit(sub_url)
     configured_port = configured.port or 443
@@ -40,10 +44,55 @@ def validate_public_subscription_url(sub_url: str) -> str:
         or candidate_port != configured_port
         or candidate.username
         or candidate.password
-        or not candidate.path.startswith("/sub/")
+        or candidate.query
+        or candidate.fragment
     ):
         raise ValueError("Subscription URL is outside the configured HTTPS host")
-    return urlunsplit(("https", candidate.netloc, candidate.path, candidate.query, ""))
+
+    path_parts = [part for part in candidate.path.split("/") if part]
+    if len(path_parts) == 1:
+        short_uuid = path_parts[0]
+    elif len(path_parts) == 2 and path_parts[0] == "sub":
+        short_uuid = path_parts[1]
+    else:
+        raise ValueError("Subscription URL path is invalid")
+    if not SUBSCRIPTION_SHORT_UUID_RE.fullmatch(short_uuid):
+        raise ValueError("Subscription short UUID is invalid")
+    return short_uuid
+
+
+def validate_public_subscription_url(sub_url: str) -> str:
+    """Разрешить проксирование только на закреплённый HTTPS subscription-host."""
+    extract_public_subscription_short_uuid(sub_url)
+    candidate = urlsplit(sub_url)
+    return urlunsplit(("https", candidate.netloc, candidate.path, "", ""))
+
+
+async def remnawave_resolve_user_uuid_by_short_uuid(short_uuid: str) -> str | None:
+    """Проверить subscription short UUID через административный API без его логирования."""
+    short_uuid = (short_uuid or "").strip()
+    if not SUBSCRIPTION_SHORT_UUID_RE.fullmatch(short_uuid):
+        return None
+    url = f"{REMNAWAVE_BASE_URL.rstrip('/')}/users/by-short-uuid/{quote(short_uuid, safe='')}"
+    headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
+    timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as session:
+            async with session.get(url, headers=headers, allow_redirects=False) as response:
+                if response.status == 404:
+                    return None
+                if response.status != 200:
+                    raise RuntimeError("Remnawave rejected subscription credential validation")
+                data = await response.json()
+    except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+        raise RuntimeError("Remnawave subscription credential validation failed") from exc
+    user = data.get("response") if isinstance(data, dict) else None
+    if not isinstance(user, dict) or not hmac.compare_digest(str(user.get("shortUuid") or ""), short_uuid):
+        return None
+    try:
+        return str(uuid.UUID(str(user.get("uuid") or "")))
+    except (TypeError, ValueError):
+        return None
 
 
 async def remnawave_fetch_subscription_profile(sub_url: str, device_headers: dict[str, str]) -> dict:

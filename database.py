@@ -697,6 +697,7 @@ async def run_migrations():
                 CREATE TABLE IF NOT EXISTS mobile_sessions (
                     id UUID PRIMARY KEY,
                     tg_id BIGINT NOT NULL,
+                    scoped_subscription_id BIGINT,
                     device_name TEXT,
                     access_token_hash TEXT UNIQUE NOT NULL,
                     access_expires_at TIMESTAMP NOT NULL,
@@ -815,6 +816,8 @@ async def run_migrations():
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tracking_code TEXT;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_requested_at TIMESTAMP;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_status TEXT;",
+                "ALTER TABLE mobile_sessions ADD COLUMN IF NOT EXISTS scoped_subscription_id BIGINT;",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_scope ON mobile_sessions(scoped_subscription_id, revoked_at);",
             ]
 
             for query in alter_queries:
