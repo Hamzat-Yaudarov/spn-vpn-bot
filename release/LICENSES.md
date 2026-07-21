@@ -1,4 +1,4 @@
-# Way VPN 1.1.2 licenses
+# Way VPN 1.1.3 licenses
 
 - Way VPN Android client and v2rayNG derivative: GPL-3.0.
 - Xray-core: MPL-2.0.

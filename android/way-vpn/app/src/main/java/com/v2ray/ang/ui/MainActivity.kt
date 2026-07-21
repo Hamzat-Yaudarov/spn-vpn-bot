@@ -90,7 +90,7 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermission()
 
         lifecycleScope.launch {
-            if (repository.accessToken() != null || repository.secureStore.get(SecureStore.REFRESH_TOKEN) != null) {
+            if (repository.hasLogin()) {
                 showAccountAndLoad()
             } else {
                 showLogin()
@@ -206,17 +206,23 @@ class MainActivity : AppCompatActivity() {
         binding.accountPanel.visibility = View.VISIBLE
         try {
             val me = repository.me()
-            val subscriptionSession = me.auth_scope == "subscription"
+            val directSubscription = me.auth_scope == "direct_subscription"
+            val subscriptionSession = me.auth_scope == "subscription" || directSubscription
             subscriptionScopedSession = subscriptionSession
             binding.userName.text = if (subscriptionSession) {
-                "Вход по ссылке подписки"
+                if (directSubscription) "Прямая HTTPS-подписка" else "Вход по ссылке подписки"
             } else {
                 me.username?.let { "@$it" } ?: "Telegram ID ${me.tg_id}"
             }
             binding.accessKeyText.text = repository.ensureAccountAccessKey()
             binding.rotateKeyButton.visibility = if (subscriptionSession) View.GONE else View.VISIBLE
+            binding.paymentButton.visibility = if (directSubscription) View.GONE else View.VISIBLE
+            binding.devicesButton.visibility = if (directSubscription) View.GONE else View.VISIBLE
             binding.deviceIdText.text = "Device ID: ${repository.secureStore.installationHwid()}\nWay VPN ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
             loadSubscriptions()
+            if (directSubscription && MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty()) {
+                restoreOfflineProfile()
+            }
             refreshServerSpinner()
             showPage(Page.HOME)
         } catch (error: Exception) {
@@ -362,8 +368,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSubscription(subscription: SubscriptionDto) {
         val expiry = subscription.subscription_until?.let(::formatDate) ?: "неизвестно"
-        binding.subscriptionExpiry.text = "Действует до $expiry · устройств ${subscription.devices.limit}"
-        binding.trafficInfo.text = if (subscription.traffic.enabled) {
+        binding.subscriptionExpiry.text = if (subscription.plan_kind == "external") {
+            "Действует до $expiry · внешняя подписка"
+        } else {
+            "Действует до $expiry · устройств ${subscription.devices.limit}"
+        }
+        binding.trafficInfo.text = if (subscription.plan_kind == "external") {
+            "Трафик и устройства управляются сервером подписки"
+        } else if (subscription.traffic.enabled) {
             "Трафик: ${formatBytes(subscription.traffic.used_bytes)} из ${formatBytes(subscription.traffic.limit_bytes)}"
         } else {
             "Трафик без учёта лимита"
@@ -562,7 +574,10 @@ class MainActivity : AppCompatActivity() {
             showStatus("Отключение…")
             return
         }
-        if (MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty()) {
+        val profileUsable = WayRuntimePolicy.isProfileUsable(
+            MmkvManager.decodeSettingsLong(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, 0L)
+        )
+        if (MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty() || !profileUsable) {
             val online = syncProfile(false)
             if (!online && !restoreOfflineProfile()) return
         }
@@ -580,6 +595,7 @@ class MainActivity : AppCompatActivity() {
             return false
         }
         return runCatching {
+            MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, expiryEpoch)
             importAndSelectProfile(profile)
             showStatus("Используется последний зашифрованный профиль")
             true

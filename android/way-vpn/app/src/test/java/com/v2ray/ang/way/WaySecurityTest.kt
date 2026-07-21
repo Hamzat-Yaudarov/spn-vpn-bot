@@ -56,8 +56,20 @@ class WaySecurityTest {
         val subscriptionUrl = "https://sub.wayspn.online/LotbHJ8UExGg6pS-"
         assertTrue(AccountAccessKey.isValid(subscriptionUrl))
         assertEquals(subscriptionUrl, AccountAccessKey.normalize(" $subscriptionUrl\n"))
-        assertFalse(AccountAccessKey.isValid("https://evil.example/LotbHJ8UExGg6pS-"))
+        assertTrue(AccountAccessKey.isValid("https://another-vpn.example/sub/LotbHJ8UExGg6pS-"))
+        assertFalse(AccountAccessKey.isValid("http://sub.wayspn.online/LotbHJ8UExGg6pS-"))
+        assertFalse(AccountAccessKey.isValid("https://user:password@sub.wayspn.online/LotbHJ8UExGg6pS-"))
         assertFalse(AccountAccessKey.isValid("WAY-TOO-SHORT"))
         assertFalse(AccountAccessKey.isValid("WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXY0"))
+    }
+
+    @Test
+    fun remnawaveExpiryHeaderIsParsedWithoutTrustingOtherFields() {
+        assertEquals(
+            "2027-01-15T08:00:00Z",
+            SubscriptionResponseHeaders.expiryIso("upload=1; download=2; total=3; expire=1800000000"),
+        )
+        assertEquals(null, SubscriptionResponseHeaders.expiryIso("upload=1; expire=0"))
+        assertEquals(null, SubscriptionResponseHeaders.expiryIso("expire=not-a-number"))
     }
 }

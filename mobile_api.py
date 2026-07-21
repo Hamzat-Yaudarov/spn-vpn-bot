@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.3-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.3-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.3-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.3-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.2-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.2-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.2-gpl-source.zip": "application/zip",
@@ -598,9 +602,10 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Добавлен вход по полной ссылке sub.wayspn.online",
-            "Исправлена гонка при завершении входа через Telegram",
-            "Сессия по ссылке безопасно ограничена одной подпиской",
+            "Любая HTTPS-подписка загружается напрямую без проверки в базе Way VPN",
+            "Поддержаны подписки из других Remnawave-панелей и VPN-сервисов",
+            "Ссылка и последний профиль хранятся зашифрованно на устройстве",
+            "HTTP-ссылки, небезопасные редиректы и профили больше 4 МБ отклоняются",
         ],
     }, headers={"Cache-Control": "no-store"})
 

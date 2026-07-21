@@ -43,7 +43,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
                 android:gravity="center"
-                android:text="Войдите через Telegram или вставьте полную ссылку подписки Way VPN."
+                android:text="Войдите через Telegram или вставьте любую HTTPS-ссылку подписки — в том числе из другой панели."
                 android:textColor="#9499A5"
                 android:textSize="16sp" />
 
@@ -85,7 +85,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
-                android:hint="https://sub.wayspn.online/…"
+                android:hint="https://сервер-подписки/ключ"
                 app:boxBackgroundColor="#1B1E25"
                 app:boxBackgroundMode="filled"
                 app:boxCornerRadiusBottomEnd="18dp"

@@ -6,6 +6,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 
 data class LoginRequest(val challengeId: String, val verifier: String, val telegramUrl: String, val pollSeconds: Int)
@@ -15,6 +17,8 @@ class WayRepository(context: Context) {
     val secureStore = SecureStore(context.applicationContext)
     private val refreshMutex = Mutex()
     private val loginExchangeMutex = Mutex()
+
+    private fun onlineOnlyFallbackExpiry(): String = Instant.now().plus(24, ChronoUnit.HOURS).toString()
 
     private fun verifier(): String = ByteArray(48).also(SecureRandom()::nextBytes).let {
         java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(it)
@@ -57,6 +61,19 @@ class WayRepository(context: Context) {
 
     suspend fun loginWithAccessKey(value: String) {
         val normalized = AccountAccessKey.normalize(value)
+        if (AccountAccessKey.isSubscriptionUrl(normalized)) {
+            val response = api.directSubscriptionProfile(normalized, secureStore.installationHwid())
+            val filtered = WayProfilePolicy.filterSupported(response.content)
+            val expiresAt = response.expiresAt ?: onlineOnlyFallbackExpiry()
+            secureStore.put(SecureStore.ACCESS_TOKEN, null)
+            secureStore.put(SecureStore.REFRESH_TOKEN, null)
+            secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
+            secureStore.put(SecureStore.LAST_PROFILE, filtered)
+            secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
+            secureStore.put(SecureStore.PENDING_CHALLENGE, null)
+            secureStore.put(SecureStore.PENDING_VERIFIER, null)
+            return
+        }
         val tokens = api.exchangeAccessKey(normalized)
         saveTokens(tokens)
         secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
@@ -65,6 +82,11 @@ class WayRepository(context: Context) {
     }
 
     suspend fun accountAccessKey(): String? = secureStore.get(SecureStore.ACCOUNT_ACCESS_KEY)
+
+    suspend fun isDirectSubscription(): Boolean = accountAccessKey()?.let(AccountAccessKey::isSubscriptionUrl) == true
+
+    suspend fun hasLogin(): Boolean =
+        accessToken() != null || secureStore.get(SecureStore.REFRESH_TOKEN) != null || isDirectSubscription()
 
     suspend fun ensureAccountAccessKey(): String {
         accountAccessKey()?.takeIf(AccountAccessKey::isValid)?.let { return AccountAccessKey.normalize(it) }
@@ -102,13 +124,46 @@ class WayRepository(context: Context) {
         }
     }
 
-    suspend fun me(): MeResponse = authorized(api::me)
-    suspend fun subscriptions(): List<SubscriptionDto> = authorized { api.subscriptions(it).subscriptions }
-    suspend fun profile(subscriptionId: Long): ProfileResponse = authorized {
-        api.profile(it, subscriptionId, secureStore.installationHwid())
+    suspend fun me(): MeResponse = if (isDirectSubscription()) {
+        MeResponse(0, null, "direct_subscription")
+    } else authorized(api::me)
+
+    suspend fun subscriptions(): List<SubscriptionDto> = if (isDirectSubscription()) {
+        val expiresAt = secureStore.get(SecureStore.PROFILE_EXPIRES_AT)
+        val active = WayRuntimePolicy.parseExpiry(expiresAt)?.let(WayRuntimePolicy::isProfileUsable) ?: true
+        listOf(
+            SubscriptionDto(
+                id = 0,
+                title = "Внешняя подписка",
+                plan_kind = "external",
+                type_index = 1,
+                status = if (active) "active" else "expired",
+                subscription_until = expiresAt,
+                offline_allowed_until = expiresAt,
+                traffic = TrafficDto(false, 0, 0, null),
+                devices = DevicesSummaryDto(0, 0),
+            )
+        )
+    } else authorized { api.subscriptions(it).subscriptions }
+
+    suspend fun profile(subscriptionId: Long): ProfileResponse = accountAccessKey()
+        ?.takeIf(AccountAccessKey::isSubscriptionUrl)
+        ?.let {
+            api.directSubscriptionProfile(it, secureStore.installationHwid()).let { response ->
+                response.copy(expiresAt = response.expiresAt ?: onlineOnlyFallbackExpiry())
+            }
+        }
+        ?: authorized { api.profile(it, subscriptionId, secureStore.installationHwid()) }
+
+    suspend fun devices(subscriptionId: Long): List<DeviceDto> {
+        if (isDirectSubscription()) throw WayApiException(403, "external_subscription", "Устройствами управляет сервер этой подписки")
+        return authorized { api.devices(it, subscriptionId).devices }
     }
-    suspend fun devices(subscriptionId: Long): List<DeviceDto> = authorized { api.devices(it, subscriptionId).devices }
-    suspend fun deleteDevice(subscriptionId: Long, hwid: String) = authorized { api.deleteDevice(it, subscriptionId, hwid) }
+
+    suspend fun deleteDevice(subscriptionId: Long, hwid: String) {
+        if (isDirectSubscription()) throw WayApiException(403, "external_subscription", "Устройствами управляет сервер этой подписки")
+        authorized { api.deleteDevice(it, subscriptionId, hwid) }
+    }
     suspend fun createSubscriptionPayment(tariffCode: String, provider: String, subscriptionId: Long?): PaymentResponse = authorized {
         api.createPayment(it, mapOf(
             "tariff_code" to tariffCode,

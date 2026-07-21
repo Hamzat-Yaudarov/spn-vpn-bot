@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.MessageDigest
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 
@@ -77,6 +78,18 @@ data class UpdateManifest(
 
 data class ProfileResponse(val content: String, val expiresAt: String?)
 
+object SubscriptionResponseHeaders {
+    private val expirePattern = Regex("(?:^|;)\\s*expire=(\\d+)(?:;|$)", RegexOption.IGNORE_CASE)
+
+    fun expiryIso(subscriptionUserInfo: String?): String? {
+        val epoch = expirePattern.find(subscriptionUserInfo.orEmpty())
+            ?.groupValues?.getOrNull(1)?.toLongOrNull()
+            ?.takeIf { it > 0 }
+            ?: return null
+        return runCatching { Instant.ofEpochSecond(epoch).toString() }.getOrNull()
+    }
+}
+
 class WayApiException(val status: Int, val errorCode: String, override val message: String) : Exception(message)
 
 class WayApi {
@@ -87,6 +100,10 @@ class WayApi {
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
         .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+    private val subscriptionClient = client.newBuilder()
+        .followRedirects(true)
         .followSslRedirects(false)
         .build()
     private val apiBase = BuildConfig.WAY_API_BASE_URL.trimEnd('/').also {
@@ -172,6 +189,49 @@ class WayApi {
                 throw WayApiException(response.code, code, "Не удалось получить профиль")
             }
             ProfileResponse(content, response.header("X-Way-Subscription-Expires-At"))
+        }
+    }
+
+    suspend fun directSubscriptionProfile(subscriptionUrl: String, hwid: String): ProfileResponse = withContext(Dispatchers.IO) {
+        if (!AccountAccessKey.isSubscriptionUrl(subscriptionUrl)) {
+            throw WayApiException(400, "invalid_subscription_url", "Некорректная HTTPS-ссылка подписки")
+        }
+        val request = Request.Builder()
+            .url(AccountAccessKey.normalize(subscriptionUrl))
+            .header("Accept", "text/plain, application/octet-stream;q=0.9, */*;q=0.1")
+            .header("x-hwid", hwid)
+            .header("x-device-os", "Android")
+            .header("x-ver-os", Build.VERSION.RELEASE)
+            .header("x-device-model", "${Build.MANUFACTURER} ${Build.MODEL}".take(120))
+            .header("User-Agent", "WayVPN/${BuildConfig.VERSION_NAME} Android/${Build.VERSION.RELEASE}")
+            .get()
+            .build()
+        subscriptionClient.newCall(request).execute().use { response ->
+            if (!response.request.url.isHttps) {
+                throw WayApiException(400, "insecure_subscription_redirect", "Сервер подписки перенаправил на небезопасный адрес")
+            }
+            if (!response.isSuccessful) {
+                throw WayApiException(
+                    response.code,
+                    "subscription_http_${response.code}",
+                    "Сервер подписки отклонил ссылку (HTTP ${response.code})",
+                )
+            }
+            val body = response.body
+            val maxBytes = 4L * 1024L * 1024L
+            if (body.contentLength() > maxBytes) {
+                throw WayApiException(413, "subscription_too_large", "Профиль подписки слишком большой")
+            }
+            val bytes = body.source().readByteArray(maxBytes + 1)
+            if (bytes.size > maxBytes) {
+                throw WayApiException(413, "subscription_too_large", "Профиль подписки слишком большой")
+            }
+            val expiry = response.header("X-Way-Subscription-Expires-At")
+                ?.takeIf(String::isNotBlank)
+                ?: SubscriptionResponseHeaders.expiryIso(
+                    response.header("Subscription-Userinfo") ?: response.header("X-Subscription-Userinfo")
+                )
+            ProfileResponse(bytes.toString(Charsets.UTF_8), expiry)
         }
     }
 
