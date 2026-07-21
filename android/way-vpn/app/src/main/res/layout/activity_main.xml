@@ -60,6 +60,19 @@
                 app:backgroundTint="#39E6A5"
                 app:cornerRadius="20dp" />
 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/check_login_button"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:layout_marginTop="12dp"
+                android:text="Я подтвердил — проверить вход"
+                android:textAllCaps="false"
+                android:textColor="#39E6A5"
+                android:visibility="gone"
+                app:cornerRadius="18dp"
+                app:strokeColor="#39E6A5" />
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

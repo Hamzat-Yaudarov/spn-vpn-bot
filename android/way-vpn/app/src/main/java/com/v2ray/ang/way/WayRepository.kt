@@ -45,7 +45,6 @@ class WayRepository(context: Context) {
 
     suspend fun loginWithAccessKey(value: String) {
         val normalized = AccountAccessKey.normalize(value)
-        require(AccountAccessKey.isValid(normalized)) { "Некорректный ключ доступа Way VPN" }
         val tokens = api.exchangeAccessKey(normalized)
         saveTokens(tokens)
         secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)

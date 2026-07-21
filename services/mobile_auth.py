@@ -19,7 +19,7 @@ from config import (
 
 
 CODE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
-ACCESS_KEY_RE = re.compile(r"^WAY-(?:[A-Z2-7]{4}-){5}[A-Z2-7]{4}$")
+ACCESS_KEY_RE = re.compile(r"^(?:WAY-(?:[A-Z2-7]{4}-){5}[A-Z2-7]{4}|(?!(?:WAY-))[A-Za-z0-9_-]{16,64})$")
 
 
 class MobileAuthError(Exception):
@@ -40,13 +40,19 @@ def hash_secret(value: str) -> str:
 
 def normalize_access_key(value: str) -> str:
     """Нормализовать ключ без ослабления его формата."""
-    return re.sub(r"\s+", "", (value or "").strip().upper())
+    normalized = re.sub(r"\s+", "", (value or "").strip())
+    normalized = re.sub(r"[‐‑‒–—−]", "-", normalized)
+    if normalized.upper().startswith("WAY-"):
+        return normalized.upper()
+    return normalized
 
 
 def generate_access_key() -> str:
-    """120-битный ключ аккаунта, пригодный для ручного ввода и QR."""
-    encoded = base64.b32encode(secrets.token_bytes(15)).decode("ascii").rstrip("=")
-    return "WAY-" + "-".join(encoded[index:index + 4] for index in range(0, len(encoded), 4))
+    """128-битный компактный ключ аккаунта, пригодный для ручного ввода и QR."""
+    while True:
+        access_key = secrets.token_urlsafe(16)
+        if not access_key.upper().startswith("WAY-"):
+            return access_key
 
 
 def code_challenge_for_verifier(verifier: str) -> str:

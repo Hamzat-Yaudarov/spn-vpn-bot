@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.1-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.1-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.1-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.1-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.0-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.0-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.0-gpl-source.zip": "application/zip",
@@ -552,9 +556,9 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Исправлено завершение входа через Telegram",
-            "Вход по ключу аккаунта на нескольких своих устройствах",
-            "Новый интерфейс: Главная, Серверы, Поддержка и Настройки",
+            "Надёжный возврат в приложение после подтверждения через Telegram",
+            "Добавлена ручная проверка подтверждённого входа",
+            "Исправлена проверка компактных и старых ключей доступа",
         ],
     }, headers={"Cache-Control": "no-store"})
 
@@ -576,8 +580,11 @@ async def mobile_auth_return():
     package = html.escape(ANDROID_PACKAGE_ID, quote=True)
     return HTMLResponse(f"""<!doctype html>
 <html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>Way VPN — вход подтверждён</title><style>body{{font-family:sans-serif;background:#0b0d12;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:420px;padding:28px}}a{{display:block;padding:15px;border-radius:18px;background:#39e6a5;color:#07110c;text-align:center;text-decoration:none;font-weight:700}}</style></head>
+<title>Way VPN — вход подтверждён</title><style>body{{font-family:sans-serif;background:#0b0d12;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0}}main{{max-width:420px;padding:28px}}a{{display:block;margin-top:12px;padding:15px;border-radius:18px;background:#39e6a5;color:#07110c;text-align:center;text-decoration:none;font-weight:700}}</style></head>
 <body><main><h1>Вход подтверждён</h1><p>Откройте Way VPN — приложение безопасно завершит обмен одноразового запроса.</p>
-<a href=\"intent://wayspn.ru/mobile/auth-return#Intent;scheme=https;package={package};end\">Открыть Way VPN</a></main></body></html>""",
+<a href=\"wayvpn://auth-return\">Открыть Way VPN</a>
+<a href=\"intent://auth-return#Intent;scheme=wayvpn;package={package};end\">Открыть через Android</a>
+<script>setTimeout(function(){{window.location.href='wayvpn://auth-return'}},150);</script>
+</main></body></html>""",
         headers={"Cache-Control": "no-store"},
     )

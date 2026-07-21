@@ -51,6 +51,8 @@ class WaySecurityTest {
         val key = "WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
         assertTrue(AccountAccessKey.isValid("  ${key.lowercase()} \n"))
         assertEquals(key, AccountAccessKey.normalize(" ${key.lowercase()} "))
+        assertTrue(AccountAccessKey.isValid("0RU56PWo-tACBZuo"))
+        assertEquals("0RU56PWo-tACBZuo", AccountAccessKey.normalize(" 0RU56PWo-tACBZuo "))
         assertFalse(AccountAccessKey.isValid("WAY-TOO-SHORT"))
         assertFalse(AccountAccessKey.isValid("WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXY0"))
     }

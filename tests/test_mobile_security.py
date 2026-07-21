@@ -115,10 +115,13 @@ class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
                 await mobile_auth.exchange_challenge(str(uuid.uuid4()), "E" * 64)
         self.assertEqual(error.exception.code, "invalid_verifier")
 
-    def test_access_key_has_strict_human_readable_format(self):
+    def test_access_key_supports_compact_and_legacy_formats(self):
         access_key = mobile_auth.generate_access_key()
         self.assertRegex(access_key, mobile_auth.ACCESS_KEY_RE)
-        self.assertEqual(mobile_auth.normalize_access_key(f"  {access_key.lower()} \n"), access_key)
+        self.assertEqual(mobile_auth.normalize_access_key(f"  {access_key} \n"), access_key)
+        legacy = "WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
+        self.assertEqual(mobile_auth.normalize_access_key(legacy.lower()), legacy)
+        self.assertNotRegex("WAY-ABCD-EFGH-JKLM-NPQR-STUV-WXY0", mobile_auth.ACCESS_KEY_RE)
 
     @patch("services.mobile_auth.db.db_execute", new_callable=AsyncMock)
     async def test_access_key_is_stored_only_as_hash(self, execute):
@@ -202,6 +205,7 @@ class PublicReleaseTests(unittest.IsolatedAsyncioTestCase):
         response = await mobile_api.mobile_auth_return()
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertIn(mobile_api.ANDROID_PACKAGE_ID.encode(), response.body)
+        self.assertIn(b"wayvpn://auth-return", response.body)
 
 
 if __name__ == "__main__":

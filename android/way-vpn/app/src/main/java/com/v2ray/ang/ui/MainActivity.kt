@@ -122,6 +122,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupActions() {
         binding.loginButton.setOnClickListener { lifecycleScope.launch { beginLogin() } }
+        binding.checkLoginButton.setOnClickListener { lifecycleScope.launch { checkPendingLoginNow() } }
         binding.keyLoginButton.setOnClickListener { lifecycleScope.launch { loginWithKey() } }
         binding.connectButton.setOnClickListener { lifecycleScope.launch { toggleConnection() } }
         binding.syncButton.setOnClickListener { lifecycleScope.launch { syncProfile(true) } }
@@ -193,6 +194,8 @@ class MainActivity : AppCompatActivity() {
         binding.accountPanel.visibility = View.GONE
         binding.loginButton.isEnabled = true
         binding.keyLoginButton.isEnabled = true
+        binding.checkLoginButton.isEnabled = true
+        binding.checkLoginButton.visibility = View.GONE
     }
 
     private suspend fun showAccountAndLoad() {
@@ -223,9 +226,11 @@ class MainActivity : AppCompatActivity() {
             val request = repository.beginLogin()
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(request.telegramUrl)))
             binding.loginStatus.text = "Подтвердите вход в боте, затем нажмите «Вернуться в Way VPN»."
+            binding.checkLoginButton.visibility = View.VISIBLE
             pollLogin(request)
         } catch (error: Exception) {
             binding.loginButton.isEnabled = true
+            binding.checkLoginButton.visibility = View.GONE
             binding.loginStatus.text = error.message ?: "Не удалось начать вход"
         }
     }
@@ -252,31 +257,72 @@ class MainActivity : AppCompatActivity() {
     private fun pollLogin(request: LoginRequest) {
         if (loginJob?.isActive == true) return
         binding.loginButton.isEnabled = false
+        binding.checkLoginButton.visibility = View.VISIBLE
         loginJob = lifecycleScope.launch {
             repeat(100) {
                 try {
                     if (repository.finishLogin(request)) {
                         binding.loginButton.isEnabled = true
+                        binding.checkLoginButton.visibility = View.GONE
                         showAccountAndLoad()
                         return@launch
                     }
                 } catch (error: Exception) {
-                    binding.loginStatus.text = error.message ?: "Запрос входа завершён"
-                    binding.loginButton.isEnabled = true
-                    return@launch
+                    val transient = error is WayApiException && (error.status == 429 || error.status >= 500)
+                    if (transient) {
+                        binding.loginStatus.text = "Сервер временно занят. Продолжаем проверять вход…"
+                    } else {
+                        binding.loginStatus.text = error.message ?: "Запрос входа завершён"
+                        binding.loginButton.isEnabled = true
+                        binding.checkLoginButton.visibility = View.GONE
+                        return@launch
+                    }
                 }
                 delay(request.pollSeconds.coerceAtLeast(2) * 1_000L)
             }
             binding.loginStatus.text = "Ссылка входа истекла. Создайте новую."
             binding.loginButton.isEnabled = true
+            binding.checkLoginButton.visibility = View.GONE
+        }
+    }
+
+    private suspend fun checkPendingLoginNow() {
+        val request = repository.pendingLogin()
+        if (request == null) {
+            binding.loginStatus.text = "Нет активного запроса. Нажмите «Войти через Telegram» ещё раз."
+            binding.loginButton.isEnabled = true
+            binding.checkLoginButton.isEnabled = true
+            binding.checkLoginButton.visibility = View.GONE
+            return
+        }
+        loginJob?.cancel()
+        loginJob = null
+        binding.checkLoginButton.isEnabled = false
+        binding.loginStatus.text = "Проверяем подтверждение…"
+        try {
+            if (repository.finishLogin(request)) {
+                binding.checkLoginButton.isEnabled = true
+                binding.checkLoginButton.visibility = View.GONE
+                showAccountAndLoad()
+            } else {
+                binding.loginStatus.text = "Бот ещё не получил подтверждение. Подтвердите вход и повторите проверку."
+                binding.checkLoginButton.isEnabled = true
+                pollLogin(request)
+            }
+        } catch (error: Exception) {
+            binding.loginStatus.text = error.message ?: "Не удалось проверить вход"
+            binding.loginButton.isEnabled = true
+            binding.checkLoginButton.isEnabled = true
         }
     }
 
     private fun handleAuthReturn(intent: Intent?) {
-        if (intent?.data?.host == "wayspn.ru" && intent.data?.path == "/mobile/auth-return") {
+        val uri = intent?.data
+        val isHttpsReturn = uri?.scheme == "https" && uri.host == "wayspn.ru" && uri.path == "/mobile/auth-return"
+        val isCustomReturn = uri?.scheme == "wayvpn" && uri.host == "auth-return"
+        if (isHttpsReturn || isCustomReturn) {
             lifecycleScope.launch {
-                repository.pendingLogin()?.let(::pollLogin)
-                    ?: showStatus("Запрос входа уже завершён или истёк")
+                checkPendingLoginNow()
             }
         }
     }

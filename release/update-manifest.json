@@ -1,14 +1,14 @@
 {
-  "versionCode": 2,
-  "versionName": "1.1.0",
+  "versionCode": 3,
+  "versionName": "1.1.1",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.0-universal-release.apk",
-  "sha256": "ad09c2593372346ee4dcac193df3d0dc0f32f0c1ea7eef9ccee11278235efd05",
+  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.1-universal-release.apk",
+  "sha256": "5cb3eb02798694735bae776f186ecda3068fe77bc9ef787da844bfc3aeb219d4",
   "signingCertSha256": "980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957",
   "releaseNotes": [
-    "Исправлено завершение входа через Telegram",
-    "Добавлен вход по ключу аккаунта на нескольких своих устройствах",
-    "Новый интерфейс: Главная, Серверы, Поддержка и Настройки",
+    "Надёжный возврат в приложение после подтверждения через Telegram",
+    "Добавлена ручная проверка подтверждённого входа",
+    "Исправлена проверка компактных и старых ключей доступа",
     "Отдельный HWID каждой установки сохраняет лимит устройств Remnawave"
   ]
 }
