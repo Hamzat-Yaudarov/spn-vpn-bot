@@ -217,7 +217,7 @@ async def process_promo_input(message: Message, state: FSMContext):
             new_until = now + timedelta(days=days)
             logger.info(f"User {tg_id} has no active subscription, creating new one with {days} days until {new_until}")
 
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             remna_username = subscription.get("remnawave_username") or _build_v2_remnawave_username(

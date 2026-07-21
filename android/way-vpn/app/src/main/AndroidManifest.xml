@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        android:minSdkVersion="34" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
+    <uses-feature android:name="android.hardware.camera" tools:node="remove" />
+    <uses-feature android:name="android.hardware.camera.front" tools:node="remove" />
+    <uses-feature android:name="android.hardware.camera.autofocus" tools:node="remove" />
+    <uses-feature android:name="android.hardware.camera.flash" tools:node="remove" />
+    <uses-feature android:name="android.hardware.screen.landscape" tools:node="remove" />
+    <uses-feature android:name="android.hardware.wifi" tools:node="remove" />
+
+    <application
+        android:name=".AngApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/AppThemeDayNight.NoActionBar"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="wayspn.ru"
+                    android:pathPrefix="/mobile/payment-return" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.CoreVpnService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:process=":RunSoLibV2RayDaemon"
+            tools:ignore="VpnServicePolicy">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+                android:value="true" />
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vpn" />
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.cache"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/cache_paths" />
+        </provider>
+
+        <!-- Transitive QR/WorkManager components are not part of the restricted Way VPN UI. -->
+        <activity android:name="io.github.g00fy2.quickie.QRScannerActivity" tools:node="remove" />
+        <activity android:name="com.journeyapps.barcodescanner.CaptureActivity" tools:node="remove" />
+        <service android:name="androidx.camera.core.impl.MetadataHolderService" tools:node="remove" />
+        <service android:name="androidx.work.multiprocess.RemoteWorkManagerService" tools:node="remove" />
+        <service android:name="androidx.work.impl.background.systemjob.SystemJobService" tools:node="remove" />
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService" tools:node="remove" />
+        <service android:name="androidx.room.MultiInstanceInvalidationService" tools:node="remove" />
+        <receiver android:name="androidx.work.impl.utils.ForceStopRunnable$BroadcastReceiver" tools:node="remove" />
+        <receiver android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver" tools:node="remove" />
+        <receiver android:name="androidx.work.impl.diagnostics.DiagnosticsReceiver" tools:node="remove" />
+        <receiver android:name="androidx.profileinstaller.ProfileInstallReceiver" tools:node="remove" />
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+    </application>
+</manifest>

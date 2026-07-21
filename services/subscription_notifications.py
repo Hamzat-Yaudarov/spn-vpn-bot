@@ -297,7 +297,7 @@ async def _send_notifications_for_low_traffic(bot):
         return
 
     sent = 0
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for i, subscription in enumerate(subscriptions):

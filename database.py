@@ -676,6 +676,40 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'discounts' создана или уже существует")
 
+            # Одноразовые Telegram-challenge и мобильные сессии Way VPN.
+            # Секреты сохраняются только как SHA-256 хэши.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS mobile_auth_challenges (
+                    id UUID PRIMARY KEY,
+                    start_token_hash TEXT UNIQUE NOT NULL,
+                    code_challenge TEXT NOT NULL,
+                    device_name TEXT,
+                    candidate_tg_id BIGINT,
+                    approved_tg_id BIGINT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    approved_at TIMESTAMP,
+                    consumed_at TIMESTAMP
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS mobile_sessions (
+                    id UUID PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    device_name TEXT,
+                    access_token_hash TEXT UNIQUE NOT NULL,
+                    access_expires_at TIMESTAMP NOT NULL,
+                    refresh_token_hash TEXT UNIQUE NOT NULL,
+                    refresh_expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    last_seen_at TIMESTAMP NOT NULL DEFAULT now(),
+                    revoked_at TIMESTAMP
+                )
+            """)
+            logging.info("✅ Таблицы мобильной авторизации созданы или уже существуют")
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 2: СОЗДАНИЕ ИНДЕКСОВ (для быстрого поиска)
             # ═══════════════════════════════════════════════════════════
@@ -692,6 +726,12 @@ async def run_migrations():
                 "CREATE INDEX IF NOT EXISTS idx_web_accounts_tracking_code ON web_accounts(tracking_code);",
                 "CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);",
                 "CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_auth_start_token ON mobile_auth_challenges(start_token_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_auth_candidate ON mobile_auth_challenges(candidate_tg_id, expires_at);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_auth_expiry ON mobile_auth_challenges(expires_at);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_access ON mobile_sessions(access_token_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_refresh ON mobile_sessions(refresh_token_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_user ON mobile_sessions(tg_id, revoked_at);",
 
                 # subscriptions индексы
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);",

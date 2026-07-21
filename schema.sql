@@ -46,6 +46,34 @@ CREATE TABLE IF NOT EXISTS web_sessions (
     last_seen_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS mobile_auth_challenges (
+    id UUID PRIMARY KEY,
+    start_token_hash TEXT UNIQUE NOT NULL,
+    code_challenge TEXT NOT NULL,
+    device_name TEXT,
+    candidate_tg_id BIGINT,
+    approved_tg_id BIGINT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    approved_at TIMESTAMP,
+    consumed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mobile_sessions (
+    id UUID PRIMARY KEY,
+    tg_id BIGINT NOT NULL,
+    device_name TEXT,
+    access_token_hash TEXT UNIQUE NOT NULL,
+    access_expires_at TIMESTAMP NOT NULL,
+    refresh_token_hash TEXT UNIQUE NOT NULL,
+    refresh_expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMP NOT NULL DEFAULT now(),
+    revoked_at TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS partnerships (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT UNIQUE NOT NULL,
@@ -265,6 +293,12 @@ CREATE INDEX IF NOT EXISTS idx_web_accounts_service_user ON web_accounts(service
 CREATE INDEX IF NOT EXISTS idx_web_accounts_tracking_code ON web_accounts(tracking_code);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_web_sessions_expiry ON web_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mobile_auth_start_token ON mobile_auth_challenges(start_token_hash);
+CREATE INDEX IF NOT EXISTS idx_mobile_auth_candidate ON mobile_auth_challenges(candidate_tg_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_mobile_auth_expiry ON mobile_auth_challenges(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mobile_sessions_access ON mobile_sessions(access_token_hash);
+CREATE INDEX IF NOT EXISTS idx_mobile_sessions_refresh ON mobile_sessions(refresh_token_hash);
+CREATE INDEX IF NOT EXISTS idx_mobile_sessions_user ON mobile_sessions(tg_id, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);

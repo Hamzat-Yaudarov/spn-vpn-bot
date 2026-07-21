@@ -90,7 +90,7 @@ async def process_due_traffic_resets():
     if not subscriptions:
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for subscription in subscriptions:
@@ -117,7 +117,7 @@ async def reset_all_active_bypass_traffic() -> dict:
     if not subscriptions:
         return result
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for subscription in subscriptions:
@@ -151,7 +151,7 @@ async def process_pending_legacy_limit_removals():
     if not subscriptions:
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for subscription in subscriptions:
@@ -189,7 +189,7 @@ async def process_pending_traffic_limit_sync():
     if not subscriptions:
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for subscription in subscriptions:

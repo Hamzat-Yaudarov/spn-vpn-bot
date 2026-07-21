@@ -182,7 +182,7 @@ async def _get_subscription_access_data(subscription) -> tuple[str | None, str, 
     effective_until = subscription.get('subscription_until')
     sub_url = None
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         if subscription.get('remnawave_uuid'):
@@ -414,7 +414,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         used_bytes = subscription.get('last_known_used_traffic_bytes') or 0
         try:
             if subscription.get('remnawave_uuid'):
-                connector = aiohttp.TCPConnector(ssl=False)
+                connector = aiohttp.TCPConnector()
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                     user_info = await remnawave_get_user_info(session, subscription['remnawave_uuid'])
@@ -479,7 +479,7 @@ async def _show_subscription_devices(callback: CallbackQuery, subscription_id: i
 
     devices = []
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             devices = await remnawave_get_hwid_devices(session, subscription['remnawave_uuid']) or []
@@ -527,7 +527,7 @@ async def _delete_subscription_device(callback: CallbackQuery, subscription_id: 
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         devices = await remnawave_get_hwid_devices(session, subscription['remnawave_uuid']) or []
@@ -553,7 +553,7 @@ async def _delete_all_subscription_devices(callback: CallbackQuery, subscription
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         deleted = await remnawave_delete_all_hwid_devices(session, subscription['remnawave_uuid'])
@@ -854,7 +854,7 @@ async def process_refund_confirm(callback: CallbackQuery):
             return
 
         expired_at = datetime.utcnow() - timedelta(seconds=1)
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             if not await remnawave_set_subscription_expiry(session, subscription["remnawave_uuid"], expired_at):
@@ -1651,7 +1651,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
             await callback.answer("Не удалось определить целевую подписку", show_alert=True)
             return
 
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
@@ -1693,7 +1693,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         else:
             new_until = now + timedelta(days=tariff["days"])
 
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             should_reset_traffic_now = (

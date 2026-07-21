@@ -5,3 +5,11 @@
 .builder/config/data.json
 __pycache__/
 *.pyc
+.android-sdk/
+.gradle-user-home/
+.release-secrets/
+android/way-vpn/local.properties
+android/way-vpn/.gradle/
+android/way-vpn/.kotlin/
+android/way-vpn/app/build/
+android/way-vpn/build/

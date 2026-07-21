@@ -153,7 +153,7 @@ async def process_paid_payment(
         device_limit = effective_device_limit(plan_kind, active_device_addons)
         traffic_limit_bytes = traffic_state.limit_bytes
         traffic_limit_strategy = "NO_RESET"
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
 
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
@@ -412,7 +412,7 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
     active_device_addons = await db.get_active_device_addon_count(subscription_id)
     device_limit = effective_device_limit(subscription.get("plan_kind"), active_device_addons)
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         updated = await remnawave_update_user_profile(
@@ -484,7 +484,7 @@ async def _process_paid_device_addon(bot, tg_id: int, invoice_id: str, payment_r
         active_device_addons + int(purchase.get("device_count") or 0),
     )
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         updated = await remnawave_update_user_profile(

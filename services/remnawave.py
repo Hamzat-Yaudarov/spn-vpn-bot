@@ -2,6 +2,7 @@ import aiohttp
 import json
 import logging
 import secrets
+import ssl
 import string
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
@@ -11,8 +12,66 @@ from config import (
     DEFAULT_SQUAD_UUID,
     API_REQUEST_TIMEOUT,
     SUBSCRIPTION_PUBLIC_BASE_URL,
+    REMNAWAVE_CA_BUNDLE,
 )
 from utils import retry_with_backoff, safe_api_call
+
+
+MAX_SUBSCRIPTION_PROFILE_BYTES = 4 * 1024 * 1024
+
+
+def _verified_connector() -> aiohttp.TCPConnector:
+    """TLS всегда проверяется; частный CA разрешён только явным bundle."""
+    context = ssl.create_default_context(cafile=REMNAWAVE_CA_BUNDLE or None)
+    return aiohttp.TCPConnector(ssl=context)
+
+
+def validate_public_subscription_url(sub_url: str) -> str:
+    """Разрешить проксирование только на закреплённый HTTPS subscription-host."""
+    configured = urlsplit(SUBSCRIPTION_PUBLIC_BASE_URL)
+    candidate = urlsplit(sub_url)
+    configured_port = configured.port or 443
+    candidate_port = candidate.port or 443
+    if (
+        configured.scheme.lower() != "https"
+        or candidate.scheme.lower() != "https"
+        or not configured.hostname
+        or candidate.hostname != configured.hostname
+        or candidate_port != configured_port
+        or candidate.username
+        or candidate.password
+        or not candidate.path.startswith("/sub/")
+    ):
+        raise ValueError("Subscription URL is outside the configured HTTPS host")
+    return urlunsplit(("https", candidate.netloc, candidate.path, candidate.query, ""))
+
+
+async def remnawave_fetch_subscription_profile(sub_url: str, device_headers: dict[str, str]) -> dict:
+    """Получить профиль без раскрытия постоянного subscription URL клиенту."""
+    safe_url = validate_public_subscription_url(sub_url)
+    forwarded = {
+        name: str(device_headers[name])[:256]
+        for name in ("x-hwid", "x-device-os", "x-ver-os", "x-device-model", "user-agent")
+        if device_headers.get(name)
+    }
+    timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
+    async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as session:
+        async with session.get(safe_url, headers=forwarded, allow_redirects=False) as resp:
+            if resp.content_length and resp.content_length > MAX_SUBSCRIPTION_PROFILE_BYTES:
+                raise RuntimeError("Subscription profile is too large")
+            body = await resp.content.read(MAX_SUBSCRIPTION_PROFILE_BYTES + 1)
+            if len(body) > MAX_SUBSCRIPTION_PROFILE_BYTES:
+                raise RuntimeError("Subscription profile is too large")
+            return {
+                "status": resp.status,
+                "body": body,
+                "content_type": resp.headers.get("Content-Type", "text/plain; charset=utf-8"),
+                "headers": {
+                    key.lower(): value
+                    for key, value in resp.headers.items()
+                    if key.lower().startswith("x-hwid-")
+                },
+            }
 
 
 def normalize_subscription_url(sub_url: str | None) -> str | None:
@@ -82,7 +141,7 @@ async def remnawave_get_or_create_user(
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -151,7 +210,7 @@ async def remnawave_get_or_create_user(
         }
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(create_url, headers=headers, json=payload) as resp:
                 if resp.status in (200, 201):
                     data = await resp.json()
@@ -215,7 +274,7 @@ async def remnawave_update_user_profile(
 
     async def _update():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.patch(
                 f"{REMNAWAVE_BASE_URL}/users",
                 headers={
@@ -252,7 +311,7 @@ async def remnawave_delete_user(session: aiohttp.ClientSession, user_uuid: str) 
     """Физически удалить пользователя из Remnawave."""
     async def _delete():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.delete(
                 f"{REMNAWAVE_BASE_URL}/users/{user_uuid}",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"},
@@ -296,7 +355,7 @@ async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid
     """Сбросить трафик пользователя в Remnawave."""
     async def _reset():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
                 f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-traffic",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
@@ -323,7 +382,7 @@ async def remnawave_revoke_subscription(session: aiohttp.ClientSession, user_uui
             f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-subscription",
             f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/revoke-subscription-url",
         ]
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             errors = []
             for endpoint in endpoints:
                 async with temp_session.post(
@@ -358,7 +417,7 @@ async def remnawave_get_hwid_devices(session: aiohttp.ClientSession, user_uuid: 
     """Получить список HWID-устройств пользователя."""
     async def _get_devices():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(
                 f"{REMNAWAVE_BASE_URL}/hwid/devices/{user_uuid}",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
@@ -382,7 +441,7 @@ async def remnawave_delete_hwid_device(session: aiohttp.ClientSession, user_uuid
     """Удалить одно HWID-устройство пользователя."""
     async def _delete_device():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
                 f"{REMNAWAVE_BASE_URL}/hwid/devices/delete",
                 headers={
@@ -411,7 +470,7 @@ async def remnawave_delete_all_hwid_devices(session: aiohttp.ClientSession, user
     """Удалить все HWID-устройства пользователя."""
     async def _delete_all_devices():
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
                 f"{REMNAWAVE_BASE_URL}/hwid/devices/delete-all",
                 headers={
@@ -462,7 +521,7 @@ async def remnawave_set_subscription_expiry(
         }
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.patch(
                 f"{REMNAWAVE_BASE_URL}/users",
                 headers={
@@ -508,7 +567,7 @@ async def remnawave_extend_subscription(
     async def _extend():
         # 1. Получаем текущий expireAt
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(
                 f"{REMNAWAVE_BASE_URL}/users/{user_uuid}",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
@@ -532,7 +591,7 @@ async def remnawave_extend_subscription(
         }
 
         # 3. PATCH /users для обновления
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.patch(
                 f"{REMNAWAVE_BASE_URL}/users",
                 headers={
@@ -584,7 +643,7 @@ async def remnawave_add_to_squad(
         }
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(url, headers=headers, json=payload) as resp:
                 if resp.status in (200, 201):
                     logging.info(f"Added user {user_uuid} to squad {squad_uuid}")
@@ -624,7 +683,7 @@ async def remnawave_get_subscription_url(
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -664,7 +723,7 @@ async def remnawave_get_user_info(
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as temp_session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()

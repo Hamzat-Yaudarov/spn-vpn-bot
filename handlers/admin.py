@@ -684,7 +684,7 @@ async def admin_reissue_subscription_links(message: Message):
     error_count = 0
     failed_ids = []
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for index, subscription in enumerate(subscriptions, start=1):
@@ -926,7 +926,7 @@ async def admin_give_sub(message: Message):
         else:
             new_until = now + timedelta(days=days)
 
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             uuid, username = await remnawave_get_or_create_user(
@@ -1219,7 +1219,7 @@ async def admin_take_sub(message: Message):
             logger.info(f"Admin {admin_id} /take_sub - user {tg_id} slot {slot_number} has no Remnawave UUID")
             return
 
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector()
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             user_info = await remnawave_get_user_info(session, remnawave_uuid)
@@ -1269,7 +1269,7 @@ async def admin_take_sub(message: Message):
             logger.info(f"Admin {admin_id} cancelled subscription for user {tg_id} slot {slot_number} (removed {days} days)")
 
         else:
-            connector = aiohttp.TCPConnector(ssl=False)
+            connector = aiohttp.TCPConnector()
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 success = await remnawave_set_subscription_expiry(

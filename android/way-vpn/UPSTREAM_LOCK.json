@@ -1,0 +1,26 @@
+{
+  "v2rayNG": {
+    "version": "2.2.6",
+    "git": "https://github.com/2dust/v2rayNG.git",
+    "commit": "15b4fff8e45da9bc0acaa5cc1d80a1d3531e8712",
+    "license": "GPL-3.0"
+  },
+  "AndroidLibXrayLite": {
+    "git": "https://github.com/2dust/AndroidLibXrayLite.git",
+    "commit": "3b5a9c858c4dc98b7079cefb1380537b6b5c155c",
+    "binaryRelease": "v26.6.27",
+    "aar": "app/libs/libv2ray.aar",
+    "aarSha256": "7846eb7f663d1d8ae931034faa7a56cccc82d618c2d029198e6e91a77fd8de1e"
+  },
+  "Xray-core": {
+    "git": "https://github.com/XTLS/Xray-core.git",
+    "version": "v26.6.27",
+    "license": "MPL-2.0"
+  },
+  "hev-socks5-tunnel": {
+    "git": "https://github.com/heiher/hev-socks5-tunnel.git",
+    "commit": "67dfba56c0a9254f401447e0751432bd36617d70",
+    "runtimeEnabled": false
+  },
+  "tunImplementation": "Xray native TUN"
+}

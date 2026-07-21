@@ -17,7 +17,7 @@ async def process_expired_device_addons_once() -> None:
     if not subscriptions:
         return
 
-    connector = aiohttp.TCPConnector(ssl=False)
+    connector = aiohttp.TCPConnector()
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for subscription in subscriptions:

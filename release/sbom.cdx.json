@@ -1,0 +1,26 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:58bccead-450a-4d76-83c4-100000000001",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "Way VPN",
+      "version": "1.0.0",
+      "purl": "pkg:apk/ru.wayspn.vpn@1.0.0"
+    }
+  },
+  "components": [
+    {"type":"application","name":"v2rayNG","version":"2.2.6","purl":"pkg:github/2dust/v2rayNG@2.2.6","licenses":[{"license":{"id":"GPL-3.0-only"}}]},
+    {"type":"library","name":"AndroidLibXrayLite","version":"v26.6.27","purl":"pkg:github/2dust/AndroidLibXrayLite@v26.6.27","hashes":[{"alg":"SHA-256","content":"7846eb7f663d1d8ae931034faa7a56cccc82d618c2d029198e6e91a77fd8de1e"}]},
+    {"type":"library","name":"Xray-core","version":"v26.6.27","purl":"pkg:github/XTLS/Xray-core@v26.6.27","licenses":[{"license":{"id":"MPL-2.0"}}]},
+    {"type":"framework","name":"Android SDK","version":"37.0"},
+    {"type":"library","group":"com.squareup.okhttp3","name":"okhttp","version":"5.3.2","purl":"pkg:maven/com.squareup.okhttp3/okhttp@5.3.2"},
+    {"type":"library","group":"com.google.code.gson","name":"gson","version":"2.13.2","purl":"pkg:maven/com.google.code.gson/gson@2.13.2"},
+    {"type":"library","group":"com.tencent","name":"mmkv-static","version":"1.3.16","purl":"pkg:maven/com.tencent/mmkv-static@1.3.16"},
+    {"type":"library","group":"androidx.datastore","name":"datastore-preferences","version":"1.1.7","purl":"pkg:maven/androidx.datastore/datastore-preferences@1.1.7"},
+    {"type":"library","group":"org.jetbrains.kotlinx","name":"kotlinx-coroutines-android","version":"1.10.2","purl":"pkg:maven/org.jetbrains.kotlinx/kotlinx-coroutines-android@1.10.2"},
+    {"type":"library","group":"androidx.browser","name":"browser","version":"1.9.0","purl":"pkg:maven/androidx.browser/browser@1.9.0"}
+  ]
+}

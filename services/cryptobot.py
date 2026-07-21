@@ -1,4 +1,6 @@
 import aiohttp
+import hashlib
+import hmac
 import logging
 import asyncio
 from config import (
@@ -17,7 +19,9 @@ async def create_cryptobot_invoice(
     bot,
     amount: float,
     tariff_code: str,
-    tg_id: int
+    tg_id: int,
+    *,
+    return_url: str | None = None,
 ) -> dict | None:
     """
     Создать счёт для оплаты через CryptoBot с retry логикой
@@ -35,7 +39,15 @@ async def create_cryptobot_invoice(
         url = f"{CRYPTOBOT_API_URL}/createInvoice"
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
 
-        bot_username = (await bot.get_me()).username
+        if return_url is None:
+            if bot is None:
+                raise RuntimeError("return_url is required without Telegram bot")
+            bot_username = (await bot.get_me()).username
+            paid_btn_name = "openBot"
+            paid_btn_url = f"https://t.me/{bot_username}"
+        else:
+            paid_btn_name = "viewItem"
+            paid_btn_url = return_url
 
         payload = {
             "currency_type": "fiat",
@@ -43,15 +55,14 @@ async def create_cryptobot_invoice(
             "amount": str(amount),
             "description": f"Подписка SPN VPN — {tariff_code}",
             "payload": f"spn_{tg_id}_{tariff_code}",
-            "paid_btn_name": "openBot",
-            "paid_btn_url": f"https://t.me/{bot_username}",
+            "paid_btn_name": paid_btn_name,
+            "paid_btn_url": paid_btn_url,
             "accepted_assets": "USDT,TON,BTC"
         }
 
-        connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -81,10 +92,9 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
         Словарь с информацией о счёте или None
     """
     async def _get_status():
-        connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             headers = {"Crypto-Pay-API-Token": CRYPTOBOT_TOKEN}
             url = f"{CRYPTOBOT_API_URL}/getInvoices"
             params = {"invoice_ids": invoice_id}
@@ -106,6 +116,15 @@ async def get_invoice_status(invoice_id: str) -> dict | None:
         _get_status,
         error_message=f"Failed to get CryptoBot invoice status {invoice_id}"
     )
+
+
+def verify_cryptobot_webhook_signature(raw_body: bytes, signature: str | None) -> bool:
+    """Проверить официальный HMAC-SHA256 Crypto Pay по сырому телу."""
+    if not CRYPTOBOT_TOKEN or not signature:
+        return False
+    secret = hashlib.sha256(CRYPTOBOT_TOKEN.encode("utf-8")).digest()
+    expected = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 async def process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: str) -> bool:

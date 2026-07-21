@@ -1,3 +1,4 @@
+import html
 import logging
 from aiogram import Router, Bot
 from aiogram.filters import CommandStart
@@ -8,11 +9,30 @@ from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
 from services.notification_delivery import clear_telegram_delivery_blocked
+from services.mobile_auth import claim_challenge
 
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+def mobile_auth_keyboard(challenge_id: str, device_name: str | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    device_label = html.escape((device_name or "Android-устройство").strip()[:80])
+    text = (
+        "<b>Вход в Way VPN</b>\n\n"
+        f"Устройство: <code>{device_label}</code>\n\n"
+        "Подтверждайте вход только если вы сами открыли приложение. "
+        "Кнопка одноразовая и действует несколько минут."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✅ Подтвердить вход в Way VPN",
+            callback_data=f"mobile_auth_approve:{challenge_id}",
+            style="success",
+        )],
+    ])
+    return text, keyboard
 
 
 @router.message(CommandStart(deep_link=True))
@@ -27,6 +47,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     args = message.text.split()
     start_payload = args[1].strip() if len(args) > 1 else None
     normalized_payload = start_payload.lower() if start_payload else None
+    is_mobile_auth = bool(start_payload and start_payload.startswith("app_"))
     referrer_id = None
     partner_id = None
     tracking_code = None
@@ -36,12 +57,14 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         tg_id,
         username or "",
         not user_already_exists,
-        start_payload or "",
-        normalized_payload or "",
+        "app_[redacted]" if is_mobile_auth else (start_payload or ""),
+        "app_[redacted]" if is_mobile_auth else (normalized_payload or ""),
     )
 
     if len(args) > 1:
-        if args[1].startswith("ref_"):
+        if is_mobile_auth:
+            pass
+        elif args[1].startswith("ref_"):
             try:
                 referrer_id = int(args[1].split("_")[1])
                 # Проверяем что это не сам пользователь
@@ -99,6 +122,15 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     if referrer_id is not None and not user_already_exists:
         await db.update_referral_count(referrer_id)
 
+    mobile_challenge = None
+    if is_mobile_auth:
+        mobile_challenge = await claim_challenge(start_payload[4:], tg_id)
+        if not mobile_challenge:
+            await message.answer(
+                "Ссылка входа в Way VPN недействительна или уже истекла. Создайте новую ссылку в приложении."
+            )
+            return
+
     # Проверяем принял ли пользователь условия
     if not await db.has_accepted_terms(tg_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -110,6 +142,12 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             reply_markup=kb
         )
         await state.set_state(UserStates.waiting_for_agreement)
+    elif mobile_challenge:
+        text, keyboard = mobile_auth_keyboard(
+            str(mobile_challenge["id"]),
+            mobile_challenge.get("device_name"),
+        )
+        await message.answer(text, reply_markup=keyboard)
     else:
         await show_main_menu(message)
 

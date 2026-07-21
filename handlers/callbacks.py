@@ -4,8 +4,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
 import database as db
-from handlers.start import show_main_menu
+from handlers.start import mobile_auth_keyboard, show_main_menu
 from services.image_handler import edit_text_with_photo
+from services.mobile_auth import approve_challenge, pending_challenge_for_user
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,33 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
         "Соглашение принято! Добро пожаловать!"
     )
 
-    await show_main_menu(callback.message, callback.from_user.id)
+    pending_challenge = await pending_challenge_for_user(tg_id)
+    if pending_challenge:
+        text, keyboard = mobile_auth_keyboard(
+            str(pending_challenge["id"]),
+            pending_challenge.get("device_name"),
+        )
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+    else:
+        await show_main_menu(callback.message, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("mobile_auth_approve:"))
+async def process_mobile_auth_approval(callback: CallbackQuery, state: FSMContext):
+    """Явное одноразовое подтверждение входа в Android-приложение."""
+    challenge_id = callback.data.split(":", 1)[1]
+    if not await db.has_accepted_terms(callback.from_user.id):
+        await callback.answer("Сначала примите пользовательское соглашение", show_alert=True)
+        return
+    if not await approve_challenge(challenge_id, callback.from_user.id):
+        await callback.answer("Запрос входа истёк или уже использован", show_alert=True)
+        return
+
+    await callback.answer("Вход подтверждён")
+    await callback.message.edit_text(
+        "✅ <b>Вход в Way VPN подтверждён.</b>\n\nВернитесь в приложение — оно завершит вход автоматически."
+    )
+    await state.clear()
 
 
 @router.callback_query(F.data == "back_to_menu")

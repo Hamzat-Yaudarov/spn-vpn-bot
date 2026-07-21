@@ -20,7 +20,11 @@ from config import (
     DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
 )
 import database as db
-from services.cryptobot import create_cryptobot_invoice
+from services.cryptobot import (
+    create_cryptobot_invoice,
+    get_invoice_status as get_cryptobot_invoice_status,
+    verify_cryptobot_webhook_signature,
+)
 from services.payment_processing import process_paid_payment
 from services.device_addons import available_device_addon_packages, current_device_limit, device_count_text, effective_device_limit
 from services.payment_summary import build_payment_success_summary
@@ -43,6 +47,7 @@ from services.discounts import calculate_discounted_price
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 from admin_web import router as admin_router
 from customer_web import router as customer_router
+from mobile_api import public_router as mobile_public_router, router as mobile_router
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +66,8 @@ if SITE_STATIC_DIR.exists():
 
 app.include_router(admin_router)
 app.include_router(customer_router)
+app.include_router(mobile_router)
+app.include_router(mobile_public_router)
 
 
 @app.middleware("http")
@@ -68,11 +75,14 @@ async def no_cache_miniapp(request: Request, call_next):
     response = await call_next(request)
     if (
         request.url.path in {"/", "/account", "/login", "/register", "/app", "/admin"}
-        or request.url.path.startswith(("/app/", "/admin/", "/site/api/"))
+        or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/"))
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 # Глобальная переменная для хранения экземпляра бота
@@ -83,7 +93,7 @@ def set_bot(bot):
     """Установить экземпляр бота для отправки уведомлений"""
     global _bot
     _bot = bot
-    logger.info(f"✅ Bot instance set for webhook processing: {bot.token[:20]}...")
+    logger.info("✅ Bot instance set for webhook processing")
     if _bot is None:
         logger.error("⚠️ Bot instance is None! Webhooks will not work!")
 
@@ -634,41 +644,33 @@ async def _process_paid_invoice(bot, tg_id: int, invoice_id: str, tariff_code: s
 
 @app.post("/webhook/cryptobot")
 async def webhook_cryptobot(request: Request):
-    """
-    Webhook endpoint для CryptoBot платежей
-
-    CryptoBot отправляет JSON с информацией об оплате:
-    {
-        "update_id": 123,
-        "invoice_id": "456",
-        "status": "paid",
-        "paid_at": "2024-01-16T12:00:00Z"
-    }
-    """
+    """Проверить подписанный webhook и повторно сверить счёт у Crypto Pay."""
     logger.info("🔔 CryptoBot webhook endpoint called")
 
     try:
-        payload = await request.json()
-        logger.info(f"📦 CryptoBot webhook payload received: {payload}")
+        raw_body = await request.body()
+        if not verify_cryptobot_webhook_signature(
+            raw_body,
+            request.headers.get("crypto-pay-api-signature"),
+        ):
+            logger.warning("CryptoBot webhook signature verification failed")
+            return JSONResponse({"ok": False, "error": "Invalid signature"}, status_code=401)
+        try:
+            payload = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
 
-        invoice_id = payload.get("invoice_id")
-        status = payload.get("status")
-
-        if not invoice_id or not status:
-            logger.warning(f"❌ Invalid CryptoBot webhook payload (missing fields): {payload}")
+        if payload.get("update_type") != "invoice_paid":
+            return JSONResponse({"ok": True})
+        invoice_payload = payload.get("payload") or {}
+        invoice_id = str(invoice_payload.get("invoice_id") or "")
+        if not invoice_id:
+            logger.warning("Invalid CryptoBot webhook payload: missing invoice_id")
             return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
 
-        logger.info(f"📊 CryptoBot invoice {invoice_id} status: {status}")
-
-        if status != "paid":
-            logger.info(f"⏭️ Ignoring CryptoBot webhook with status: {status}")
-            return JSONResponse({"ok": True})
-
-        # Получаем информацию о платеже из БД
-        logger.info(f"🔍 Looking up payment for invoice {invoice_id} in database")
         result = await db.db_execute(
             """
-            SELECT tg_id, tariff_code
+            SELECT tg_id, tariff_code, amount
             FROM payments
             WHERE invoice_id = $1 AND status = 'pending' AND provider = 'cryptobot'
             LIMIT 1
@@ -681,6 +683,18 @@ async def webhook_cryptobot(request: Request):
             logger.warning(f"❌ Payment record not found for invoice {invoice_id} (may already be processed)")
             return JSONResponse({"ok": True})
 
+        verified_invoice = await get_cryptobot_invoice_status(invoice_id)
+        verified_amount = (verified_invoice or {}).get("amount")
+        if (
+            not verified_invoice
+            or verified_invoice.get("status") != "paid"
+            or str(verified_invoice.get("invoice_id")) != invoice_id
+            or verified_amount is None
+            or abs(float(verified_amount) - float(result["amount"])) > 0.009
+        ):
+            logger.warning("CryptoBot provider verification failed for invoice %s", invoice_id)
+            return JSONResponse({"ok": False, "error": "Payment verification failed"}, status_code=400)
+
         tg_id = result['tg_id']
         tariff_code = result['tariff_code']
 
@@ -689,7 +703,6 @@ async def webhook_cryptobot(request: Request):
         # Проверяем доступность бота
         if not _bot:
             logger.error("❌ CRITICAL: Bot instance not available! Webhooks cannot process payments.")
-            logger.error("⚠️ This usually means set_bot() was not called during initialization")
             return JSONResponse({"ok": False, "error": "Bot not available"}, status_code=500)
 
         # Обрабатываем платеж асинхронно
@@ -711,7 +724,7 @@ async def webhook_cryptobot(request: Request):
 
     except Exception as e:
         logger.error(f"❌ CryptoBot webhook error: {e}", exc_info=True)
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"ok": False, "error": "Webhook processing failed"}, status_code=500)
 
 
 @app.post("/webhook/yookassa")
@@ -748,7 +761,7 @@ async def webhook_yookassa(request: Request):
         obj = payload.get("object", {})
         payment_id = obj.get("id")
         if not payment_id:
-            logger.warning(f"❌ Invalid Yookassa webhook payload (missing fields): {payload}")
+            logger.warning("❌ Invalid Yookassa webhook payload: missing payment id")
             return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
 
         # Получаем информацию о платеже из БД
@@ -809,7 +822,7 @@ async def webhook_yookassa(request: Request):
 
     except Exception as e:
         logger.error(f"❌ Yookassa webhook error: {e}", exc_info=True)
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"ok": False, "error": "Webhook processing failed"}, status_code=500)
 
 
 @app.get("/health")
