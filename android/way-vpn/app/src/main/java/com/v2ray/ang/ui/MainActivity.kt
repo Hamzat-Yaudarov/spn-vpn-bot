@@ -50,8 +50,12 @@ import com.v2ray.ang.way.WayApiException
 import com.v2ray.ang.way.WayProfilePolicy
 import com.v2ray.ang.way.WayRepository
 import com.v2ray.ang.way.WayRuntimePolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -427,19 +431,40 @@ class MainActivity : AppCompatActivity() {
         }
         binding.syncButton.isEnabled = false
         showStatus("Обновляем защищённый профиль…")
+        var stage = "получение профиля"
         return try {
             val response = repository.profile(subscription.id)
+            stage = "проверка содержимого"
             val filtered = WayProfilePolicy.filterSupported(response.content)
             val expiresAt = response.expiresAt ?: subscription.offline_allowed_until
             val expiryEpoch = WayRuntimePolicy.parseExpiry(expiresAt)
                 ?: error("Сервер не передал корректный срок действия профиля")
-            repository.secureStore.put(SecureStore.LAST_PROFILE, filtered)
-            repository.secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
-            MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, expiryEpoch)
+            stage = "импорт серверов"
             importAndSelectProfile(filtered)
+            MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, expiryEpoch)
+
+            // Сбой локального зашифрованного кэша не должен удалять уже
+            // импортированные рабочие серверы. Он влияет только на офлайн-режим.
+            stage = "сохранение офлайн-профиля"
+            val cached = try {
+                repository.secureStore.put(SecureStore.LAST_PROFILE, filtered)
+                repository.secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
+                true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                false
+            }
             lastProfileError = null
-            if (showResult) showStatus("Профиль обновлён. Выбран быстрый сервер.")
+            if (showResult) {
+                showStatus(
+                    if (cached) "Профиль обновлён. Выбран быстрый сервер."
+                    else "Серверы загружены. Офлайн-кэш временно недоступен."
+                )
+            }
             true
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: WayApiException) {
             val message = if (error.errorCode == "hwid_limit_reached") {
                 "Достигнут лимит устройств этой подписки."
@@ -451,7 +476,7 @@ class MainActivity : AppCompatActivity() {
             renderServerList()
             false
         } catch (error: Exception) {
-            val message = subscriptionLoadError(error)
+            val message = subscriptionLoadError(error, stage)
             lastProfileError = message
             showStatus(message)
             renderServerList()
@@ -461,33 +486,66 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun subscriptionLoadError(error: Exception): String = when (error) {
+    private fun subscriptionLoadError(error: Exception, stage: String): String = when (error) {
         is java.net.UnknownHostException -> "Не удалось найти сервер подписки. Проверьте адрес и интернет."
         is java.net.SocketTimeoutException -> "Сервер подписки не ответил вовремя. Повторите обновление."
         is javax.net.ssl.SSLException -> "Сертификат HTTPS-сервера подписки не прошёл проверку."
-        else -> error.message?.let { "Не удалось загрузить подписку: $it" }
-            ?: "Не удалось загрузить VPN-подписку"
+        else -> error.message
+            ?.takeIf(String::isNotBlank)
+            ?.takeUnless { it.contains("https://", ignoreCase = true) }
+            ?.let { "Не удалось загрузить подписку: $it" }
+            ?: "Сбой на этапе «$stage» (${error.javaClass.simpleName.ifBlank { "Exception" }})"
     }
 
     private suspend fun importAndSelectProfile(profile: String) = withContext(Dispatchers.IO) {
-        val remembered = repository.secureStore.get(SecureStore.SELECTED_SERVER)
+        val remembered = try {
+            repository.secureStore.get(SecureStore.SELECTED_SERVER)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
         val imported = AngConfigManager.importBatchConfig(profile, WAY_SUBSCRIPTION_ID, false)
         require(imported.first > 0) { "Профиль не содержит доступных узлов" }
         val guids = MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID)
         require(guids.isNotEmpty()) { "Список серверов пуст" }
-        val measured = guids.map { guid ->
+
+        // Список должен появиться сразу после успешного импорта, а не после
+        // последовательного ожидания TCP-пинга каждого узла.
+        val initial = guids.firstOrNull { serverFingerprint(it) == remembered } ?: guids.first()
+        MmkvManager.setSelectServer(initial)
+        try {
+            repository.secureStore.put(SecureStore.SELECTED_SERVER, serverFingerprint(initial))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Выбор остаётся сохранённым в MMKV; шифрованное запоминание необязательно.
+        }
+        withContext(Dispatchers.Main) { refreshServerSpinner() }
+
+        val measured = coroutineScope {
+            guids.map { guid ->
+                async {
                 val config = MmkvManager.decodeServerConfig(guid)
                 val delay = config?.serverPort?.toIntOrNull()?.let { port ->
                     SpeedtestManager.socketConnectTime(config.server.orEmpty(), port, 1_500)
                 } ?: -1
                 serverFingerprint(guid) to delay
-            }
+                }
+            }.awaitAll()
+        }
         serverLatency.clear()
         guids.zip(measured).forEach { (guid, result) -> serverLatency[guid] = result.second }
         val selectedFingerprint = NodeSelector.select(remembered, measured)
         val selected = guids.firstOrNull { serverFingerprint(it) == selectedFingerprint } ?: guids.first()
         MmkvManager.setSelectServer(selected)
-        repository.secureStore.put(SecureStore.SELECTED_SERVER, serverFingerprint(selected))
+        try {
+            repository.secureStore.put(SecureStore.SELECTED_SERVER, serverFingerprint(selected))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Выбор остаётся сохранённым в MMKV; шифрованное запоминание необязательно.
+        }
         withContext(Dispatchers.Main) { refreshServerSpinner() }
     }
 

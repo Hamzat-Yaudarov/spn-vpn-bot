@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.6-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.6-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.6-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.6-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.5-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.5-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.5-gpl-source.zip": "application/zip",
@@ -610,10 +614,10 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Интерфейс больше не перекрывается статус-баром и системными кнопками Android",
-            "Нижняя навигация адаптирована к увеличенному системному шрифту",
-            "Пустой профиль автоматически загружается повторно при запуске",
-            "Ошибка загрузки сохраняется и показывается прямо в списке серверов",
+            "Серверы появляются сразу после импорта, не дожидаясь проверки задержки",
+            "Пинг всех узлов выполняется параллельно",
+            "Сбой офлайн-кэша больше не отменяет успешно загруженный профиль",
+            "При ошибке указывается точный этап загрузки",
         ],
     }, headers={"Cache-Control": "no-store"})
 
