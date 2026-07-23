@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.7-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.7-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.7-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.7-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.6-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.6-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.6-gpl-source.zip": "application/zip",
@@ -614,10 +618,10 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Серверы появляются сразу после импорта, не дожидаясь проверки задержки",
-            "Пинг всех узлов выполняется параллельно",
-            "Сбой офлайн-кэша больше не отменяет успешно загруженный профиль",
-            "При ошибке указывается точный этап загрузки",
+            "Загрузка подписки переведена на стабильный HTTP/1.1",
+            "Отключено проблемное сжатие ответа профиля",
+            "При преждевременном закрытии соединения запрос автоматически повторяется",
+            "Каждая повторная попытка использует новое HTTPS-соединение",
         ],
     }, headers={"Cache-Control": "no-store"})
 

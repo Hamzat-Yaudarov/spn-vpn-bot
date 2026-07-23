@@ -7,8 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.EOFException
+import java.io.IOException
 import java.security.MessageDigest
 import java.time.Instant
 import java.net.SocketTimeoutException
@@ -95,6 +98,8 @@ object SubscriptionResponseHeaders {
 
 class WayApiException(val status: Int, val errorCode: String, override val message: String) : Exception(message)
 
+private class HwidHeadersNotSupportedException : IOException()
+
 class WayApi {
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -108,6 +113,10 @@ class WayApi {
     private val subscriptionClient = client.newBuilder()
         .followRedirects(true)
         .followSslRedirects(false)
+        // Некоторые subscription-прокси преждевременно закрывают HTTP/2 или
+        // gzip-поток. Для небольшого текстового профиля HTTP/1.1 надёжнее.
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .retryOnConnectionFailure(true)
         .build()
     private val apiBase = BuildConfig.WAY_API_BASE_URL.trimEnd('/').also {
         require(it.startsWith("https://")) { "Way VPN API must use HTTPS" }
@@ -199,6 +208,9 @@ class WayApi {
         val builder = Request.Builder()
             .url(AccountAccessKey.normalize(subscriptionUrl))
             .header("Accept", "text/plain, application/octet-stream;q=0.9, */*;q=0.1")
+            .header("Accept-Encoding", "identity")
+            .header("Cache-Control", "no-cache")
+            .header("Connection", "close")
             .header("User-Agent", "WayVPN/${BuildConfig.VERSION_NAME} Android/${Build.VERSION.RELEASE}")
             .get()
         if (includeDeviceHeaders) {
@@ -211,55 +223,119 @@ class WayApi {
         return builder.build()
     }
 
+    private fun hasPrematureEof(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current is EOFException) return true
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun fetchDirectSubscription(
+        subscriptionUrl: String,
+        hwid: String,
+        includeDeviceHeaders: Boolean,
+    ): ProfileResponse {
+        subscriptionClient
+            .newCall(directSubscriptionRequest(subscriptionUrl, hwid, includeDeviceHeaders))
+            .execute()
+            .use { response ->
+                if (!response.request.url.isHttps) {
+                    throw WayApiException(
+                        400,
+                        "insecure_subscription_redirect",
+                        "Сервер подписки перенаправил на небезопасный адрес",
+                    )
+                }
+                if (!response.isSuccessful && response.header("X-Hwid-Not-Supported") != null) {
+                    throw HwidHeadersNotSupportedException()
+                }
+                if (!response.isSuccessful) {
+                    if (response.header("X-Hwid-Max-Devices-Reached") != null) {
+                        throw WayApiException(
+                            409,
+                            "hwid_limit_reached",
+                            "Достигнут лимит устройств этой подписки",
+                        )
+                    }
+                    val message = when (response.code) {
+                        401, 403 -> "Ссылка подписки отклонена сервером или истекла"
+                        404 -> "Ссылка подписки не найдена на сервере"
+                        else -> "Сервер подписки вернул HTTP ${response.code}"
+                    }
+                    throw WayApiException(
+                        response.code,
+                        "subscription_http_${response.code}",
+                        message,
+                    )
+                }
+                val body = response.body
+                val maxBytes = 4L * 1024L * 1024L
+                if (body.contentLength() > maxBytes) {
+                    throw WayApiException(
+                        413,
+                        "subscription_too_large",
+                        "Профиль подписки слишком большой",
+                    )
+                }
+                val bytes = body.source().readByteArray(maxBytes + 1)
+                if (bytes.size > maxBytes) {
+                    throw WayApiException(
+                        413,
+                        "subscription_too_large",
+                        "Профиль подписки слишком большой",
+                    )
+                }
+                val expiry = response.header("X-Way-Subscription-Expires-At")
+                    ?.takeIf(String::isNotBlank)
+                    ?: SubscriptionResponseHeaders.expiryIso(
+                        response.header("Subscription-Userinfo")
+                            ?: response.header("X-Subscription-Userinfo")
+                    )
+                return ProfileResponse(bytes.toString(Charsets.UTF_8), expiry)
+            }
+    }
+
+    private fun fetchDirectSubscriptionWithRetries(
+        subscriptionUrl: String,
+        hwid: String,
+    ): ProfileResponse {
+        var includeDeviceHeaders = true
+        var eofRetries = 0
+        while (true) {
+            try {
+                return fetchDirectSubscription(subscriptionUrl, hwid, includeDeviceHeaders)
+            } catch (_: HwidHeadersNotSupportedException) {
+                if (!includeDeviceHeaders) {
+                    throw WayApiException(
+                        400,
+                        "subscription_device_headers_rejected",
+                        "Сервер подписки отклонил запрос устройства",
+                    )
+                }
+                includeDeviceHeaders = false
+                eofRetries = 0
+            } catch (error: IOException) {
+                if (!hasPrematureEof(error)) throw error
+                if (eofRetries >= 2) {
+                    throw WayApiException(
+                        0,
+                        "subscription_truncated_response",
+                        "Сервер подписки преждевременно закрыл ответ",
+                    )
+                }
+                eofRetries += 1
+            }
+        }
+    }
+
     suspend fun directSubscriptionProfile(subscriptionUrl: String, hwid: String): ProfileResponse = withContext(Dispatchers.IO) {
         if (!AccountAccessKey.isSubscriptionUrl(subscriptionUrl)) {
             throw WayApiException(400, "invalid_subscription_url", "Некорректная HTTPS-ссылка подписки")
         }
         try {
-            var response = subscriptionClient
-                .newCall(directSubscriptionRequest(subscriptionUrl, hwid, includeDeviceHeaders = true))
-                .execute()
-            if (!response.isSuccessful && response.header("X-Hwid-Not-Supported") != null) {
-                response.close()
-                response = subscriptionClient
-                    .newCall(directSubscriptionRequest(subscriptionUrl, hwid, includeDeviceHeaders = false))
-                    .execute()
-            }
-            response.use {
-            if (!response.request.url.isHttps) {
-                throw WayApiException(400, "insecure_subscription_redirect", "Сервер подписки перенаправил на небезопасный адрес")
-            }
-            if (!response.isSuccessful) {
-                if (response.header("X-Hwid-Max-Devices-Reached") != null) {
-                    throw WayApiException(409, "hwid_limit_reached", "Достигнут лимит устройств этой подписки")
-                }
-                val message = when (response.code) {
-                    401, 403 -> "Ссылка подписки отклонена сервером или истекла"
-                    404 -> "Ссылка подписки не найдена на сервере"
-                    else -> "Сервер подписки вернул HTTP ${response.code}"
-                }
-                throw WayApiException(
-                    response.code,
-                    "subscription_http_${response.code}",
-                    message,
-                )
-            }
-            val body = response.body
-            val maxBytes = 4L * 1024L * 1024L
-            if (body.contentLength() > maxBytes) {
-                throw WayApiException(413, "subscription_too_large", "Профиль подписки слишком большой")
-            }
-            val bytes = body.source().readByteArray(maxBytes + 1)
-            if (bytes.size > maxBytes) {
-                throw WayApiException(413, "subscription_too_large", "Профиль подписки слишком большой")
-            }
-            val expiry = response.header("X-Way-Subscription-Expires-At")
-                ?.takeIf(String::isNotBlank)
-                ?: SubscriptionResponseHeaders.expiryIso(
-                    response.header("Subscription-Userinfo") ?: response.header("X-Subscription-Userinfo")
-                )
-            ProfileResponse(bytes.toString(Charsets.UTF_8), expiry)
-            }
+            fetchDirectSubscriptionWithRetries(subscriptionUrl, hwid)
         } catch (error: WayApiException) {
             throw error
         } catch (error: UnknownHostException) {
