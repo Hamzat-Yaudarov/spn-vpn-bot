@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.1.9-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.1.9-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.1.9-gpl-source.zip": "application/zip",
+    "WayVPN-1.1.9-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.8-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.8-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.8-gpl-source.zip": "application/zip",
@@ -622,10 +626,11 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Исправлено чтение обычных коротких VPN-подписок без ложного EOF",
-            "Профиль читается потоково до конца с безопасным лимитом 4 МБ",
-            "Восстановлена штатная поддержка HTTP/2, gzip и редиректов",
-            "User-Agent совместим с v2rayNG 2.2.6",
+            "Подписка передаётся штатному импортёру v2rayNG без предварительного отбрасывания",
+            "Добавлен импорт JSON-массива Xray, используемого внешними подписками",
+            "Каждая JSON-конфигурация отображается отдельным сервером",
+            "Разрешены только конфигурации с основным протоколом VLESS, Trojan или Shadowsocks",
+            "Офлайн-кэш хранит исходный профиль для повторного штатного импорта",
         ],
     }, headers={"Cache-Control": "no-store"})
 

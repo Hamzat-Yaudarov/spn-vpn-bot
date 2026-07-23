@@ -1,5 +1,6 @@
 package com.v2ray.ang.way
 
+import com.v2ray.ang.enums.EConfigType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
@@ -19,6 +20,35 @@ class WaySecurityTest {
         assertTrue(filtered.contains("ss://three"))
         assertFalse(filtered.contains("vmess://"))
         assertFalse(filtered.contains("http://"))
+        assertTrue(WayProfilePolicy.isSupported(EConfigType.VLESS))
+        assertTrue(WayProfilePolicy.isSupported(EConfigType.TROJAN))
+        assertTrue(WayProfilePolicy.isSupported(EConfigType.SHADOWSOCKS))
+        assertFalse(WayProfilePolicy.isSupported(EConfigType.VMESS))
+    }
+
+    @Test
+    fun profilePolicyAcceptsOnlyAllowedPrimaryProtocolInCustomXrayConfig() {
+        val vlessConfig = """{"outbounds":[
+            {"tag":"proxy","protocol":"vless","settings":{}},
+            {"tag":"direct","protocol":"freedom","settings":{}}
+        ]}"""
+        val vmessConfig = """{"outbounds":[
+            {"tag":"proxy","protocol":"vmess","settings":{}},
+            {"tag":"fallback","protocol":"vless","settings":{}}
+        ]}"""
+
+        assertTrue(WayProfilePolicy.isSupported(EConfigType.CUSTOM, vlessConfig))
+        assertFalse(WayProfilePolicy.isSupported(EConfigType.CUSTOM, vmessConfig))
+        assertFalse(WayProfilePolicy.isSupported(EConfigType.CUSTOM, null))
+    }
+
+    @Test
+    fun profilePolicyAcceptsUrlSafeBase64Subscriptions() {
+        val encoded = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("vless://one\ntrojan://two\n".toByteArray())
+        val filtered = WayProfilePolicy.filterSupported(encoded)
+        assertTrue(filtered.contains("vless://one"))
+        assertTrue(filtered.contains("trojan://two"))
     }
 
     @Test

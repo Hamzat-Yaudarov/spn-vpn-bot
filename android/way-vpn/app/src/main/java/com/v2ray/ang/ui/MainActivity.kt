@@ -434,20 +434,18 @@ class MainActivity : AppCompatActivity() {
         var stage = "получение профиля"
         return try {
             val response = repository.profile(subscription.id)
-            stage = "проверка содержимого"
-            val filtered = WayProfilePolicy.filterSupported(response.content)
             val expiresAt = response.expiresAt ?: subscription.offline_allowed_until
             val expiryEpoch = WayRuntimePolicy.parseExpiry(expiresAt)
                 ?: error("Сервер не передал корректный срок действия профиля")
-            stage = "импорт серверов"
-            importAndSelectProfile(filtered)
+            stage = "разбор и импорт серверов"
+            importAndSelectProfile(response.content)
             MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, expiryEpoch)
 
             // Сбой локального зашифрованного кэша не должен удалять уже
             // импортированные рабочие серверы. Он влияет только на офлайн-режим.
             stage = "сохранение офлайн-профиля"
             val cached = try {
-                repository.secureStore.put(SecureStore.LAST_PROFILE, filtered)
+                repository.secureStore.put(SecureStore.LAST_PROFILE, response.content)
                 repository.secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
                 true
             } catch (error: CancellationException) {
@@ -507,8 +505,19 @@ class MainActivity : AppCompatActivity() {
         }
         val imported = AngConfigManager.importBatchConfig(profile, WAY_SUBSCRIPTION_ID, false)
         require(imported.first > 0) { "Профиль не содержит доступных узлов" }
+        MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID)
+            .filter { guid ->
+                val configType = MmkvManager.decodeServerConfig(guid)?.configType
+                configType == null || !WayProfilePolicy.isSupported(
+                    configType,
+                    MmkvManager.decodeServerRaw(guid),
+                )
+            }
+            .forEach(MmkvManager::removeServer)
         val guids = MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID)
-        require(guids.isNotEmpty()) { "Список серверов пуст" }
+        require(guids.isNotEmpty()) {
+            "Профиль не содержит серверов VLESS, Trojan или Shadowsocks"
+        }
 
         // Список должен появиться сразу после успешного импорта, а не после
         // последовательного ожидания TCP-пинга каждого узла.
