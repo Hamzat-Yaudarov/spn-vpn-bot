@@ -1,14 +1,14 @@
 {
-  "versionCode": 9,
-  "versionName": "1.1.7",
+  "versionCode": 10,
+  "versionName": "1.1.8",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.7-universal-release.apk",
-  "sha256": "9ce2a5f26774d51c1bc75d80ed6358f15d80fc643aae4f068f6258a8e6909f13",
+  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.8-universal-release.apk",
+  "sha256": "8cec08bd3de6c7e42deab76966167498006065fe9c4017c78f622babfbbf159a",
   "signingCertSha256": "980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957",
   "releaseNotes": [
-    "Загрузка подписки переведена на стабильный HTTP/1.1",
-    "Отключено проблемное сжатие ответа профиля",
-    "При преждевременном закрытии соединения запрос автоматически повторяется",
-    "Каждая повторная попытка использует новое HTTPS-соединение"
+    "Исправлено чтение обычных коротких VPN-подписок без ложного EOF",
+    "Профиль читается потоково до конца с безопасным лимитом 4 МБ",
+    "Восстановлена штатная поддержка HTTP/2, gzip и редиректов",
+    "User-Agent совместим с v2rayNG 2.2.6"
   ]
 }

@@ -1,9 +1,11 @@
 package com.v2ray.ang.way
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import okio.Buffer
 
 
 class WaySecurityTest {
@@ -73,5 +75,19 @@ class WaySecurityTest {
         )
         assertEquals(null, SubscriptionResponseHeaders.expiryIso("upload=1; expire=0"))
         assertEquals(null, SubscriptionResponseHeaders.expiryIso("expire=not-a-number"))
+    }
+
+    @Test
+    fun shortSubscriptionBodyDoesNotRequireFillingTheMaximumBuffer() {
+        val content = "vless://example\n".toByteArray()
+        val result = SubscriptionBodyReader.readAtMost(Buffer().write(content), 4L * 1024L * 1024L + 1L)
+        assertArrayEquals(content, result)
+    }
+
+    @Test
+    fun subscriptionBodyReaderStopsOneBytePastTheAllowedSize() {
+        val result = SubscriptionBodyReader.readAtMost(Buffer().writeUtf8("1234567890"), 5)
+        assertEquals(5, result.size)
+        assertEquals("12345", result.toString(Charsets.UTF_8))
     }
 }
