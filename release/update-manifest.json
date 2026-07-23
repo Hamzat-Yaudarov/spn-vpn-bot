@@ -1,14 +1,14 @@
 {
-  "versionCode": 6,
-  "versionName": "1.1.4",
+  "versionCode": 7,
+  "versionName": "1.1.5",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.4-universal-release.apk",
-  "sha256": "b1bfd5d4adf9873b3bdb686353ade6facd54e34b39a47be997e1dcd4cc13382c",
+  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.5-universal-release.apk",
+  "sha256": "97532ad4be5960c433f730db47f95dc484dfd1cd1471cd75ede6a65ff32bdd0c",
   "signingCertSha256": "980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957",
   "releaseNotes": [
-    "HTTPS-ссылка теперь добавляется как VPN-подписка, а не как вход в аккаунт",
-    "Для добавления подписки не нужны Telegram, backend Way VPN или запись в базе",
-    "Загрузка профиля выполняется отдельным шагом с понятной диагностикой ошибок",
-    "Серверы без поддержки HWID безопасно повторяются без device-заголовков"
+    "Интерфейс больше не перекрывается статус-баром и системными кнопками Android",
+    "Нижняя навигация адаптирована к увеличенному системному шрифту",
+    "Пустой профиль автоматически загружается повторно при запуске",
+    "Ошибка загрузки сохраняется и показывается прямо в списке серверов"
   ]
 }

@@ -23,6 +23,10 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -70,6 +74,9 @@ class MainActivity : AppCompatActivity() {
     private val serverLatency = mutableMapOf<String, Long>()
     private var loginJob: Job? = null
     private var subscriptionScopedSession = false
+    private var statusOverride: String? = null
+    private var statusOverrideUntil = 0L
+    private var lastProfileError: String? = null
 
     private enum class Page { HOME, SERVERS, SUPPORT, SETTINGS }
 
@@ -81,7 +88,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureSystemBars()
         setContentView(binding.root)
+        applySystemBarInsets()
         enforceWayVpnSettings()
         setupActions()
         showPage(Page.HOME)
@@ -105,6 +114,31 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun configureSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.parseColor("#0B0D12")
+        window.navigationBarColor = Color.parseColor("#0B0D12")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+    }
+
+    private fun applySystemBarInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val safe = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -220,12 +254,9 @@ class MainActivity : AppCompatActivity() {
             binding.devicesButton.visibility = if (directSubscription) View.GONE else View.VISIBLE
             binding.deviceIdText.text = "Device ID: ${repository.secureStore.installationHwid()}\nWay VPN ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
             loadSubscriptions()
-            if (
-                directSubscription &&
-                MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty() &&
-                repository.secureStore.get(SecureStore.LAST_PROFILE) != null
-            ) {
-                restoreOfflineProfile()
+            if (directSubscription && MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty()) {
+                val restored = repository.secureStore.get(SecureStore.LAST_PROFILE) != null && restoreOfflineProfile()
+                if (!restored) syncProfile(false)
             }
             refreshServerSpinner()
             showPage(Page.HOME)
@@ -270,7 +301,6 @@ class MainActivity : AppCompatActivity() {
             MmkvManager.removeSubscription(WAY_SUBSCRIPTION_ID)
             MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, 0L)
             showAccountAndLoad()
-            syncProfile(true)
         } catch (error: Exception) {
             binding.loginStatus.text = error.message ?: "Не удалось добавить VPN-подписку"
             binding.keyLoginButton.isEnabled = true
@@ -407,17 +437,24 @@ class MainActivity : AppCompatActivity() {
             repository.secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
             MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, expiryEpoch)
             importAndSelectProfile(filtered)
+            lastProfileError = null
             if (showResult) showStatus("Профиль обновлён. Выбран быстрый сервер.")
             true
         } catch (error: WayApiException) {
-            if (error.errorCode == "hwid_limit_reached") {
-                showStatus("Достигнут лимит устройств. Удалите старое устройство.")
+            val message = if (error.errorCode == "hwid_limit_reached") {
+                "Достигнут лимит устройств этой подписки."
             } else {
-                showStatus(error.message)
+                error.message
             }
+            lastProfileError = message
+            showStatus(message)
+            renderServerList()
             false
         } catch (error: Exception) {
-            showStatus(subscriptionLoadError(error))
+            val message = subscriptionLoadError(error)
+            lastProfileError = message
+            showStatus(message)
+            renderServerList()
             false
         } finally {
             binding.syncButton.isEnabled = true
@@ -473,7 +510,7 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun measureAllServers() {
         if (serverGuids.isEmpty()) {
-            if (!syncProfile(false)) return
+            if (!syncProfile(true)) return
         }
         binding.pingAllButton.isEnabled = false
         binding.pingAllButton.text = "Проверяем…"
@@ -497,14 +534,17 @@ class MainActivity : AppCompatActivity() {
         val container = binding.serverListContainer
         container.removeAllViews()
         if (serverGuids.isEmpty()) {
+            binding.pingAllButton.text = "Обновить"
             container.addView(TextView(this).apply {
-                text = "Серверы появятся после обновления профиля"
+                text = lastProfileError?.let { "Не удалось загрузить серверы:\n$it\n\nНажмите «Обновить», чтобы повторить." }
+                    ?: "Серверы ещё не загружены. Нажмите «Обновить»."
                 setTextColor(Color.parseColor("#9499A5"))
                 textSize = 16f
                 setPadding(dp(8), dp(24), dp(8), dp(24))
             })
             return
         }
+        binding.pingAllButton.text = "Пинг"
 
         val selectedGuid = MmkvManager.getSelectServer()
         serverGuids.forEach { guid ->
@@ -659,15 +699,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateConnectionState() {
         val running = CoreServiceManager.isRunning()
-        binding.connectionStatus.text = if (running) "Статус:  Подключено" else "Статус:  Не подключено"
-        binding.connectionStatus.setTextColor(Color.parseColor(if (running) "#39E6A5" else "#9499A5"))
+        val overrideActive = !running && android.os.SystemClock.elapsedRealtime() < statusOverrideUntil
+        binding.connectionStatus.text = when {
+            running -> "Статус:  Подключено"
+            overrideActive -> statusOverride
+            else -> "Статус:  Не подключено"
+        }
+        binding.connectionStatus.setTextColor(
+            Color.parseColor(when {
+                running -> "#39E6A5"
+                overrideActive -> "#F2B84B"
+                else -> "#9499A5"
+            })
+        )
         binding.connectButton.text = if (running) "W\nОТКЛЮЧИТЬ" else "W\nПОДКЛЮЧИТЬ"
         binding.connectButton.setBackgroundColor(Color.parseColor(if (running) "#39E6A5" else "#6C717D"))
         if (running) renderSelectedServer()
     }
 
     private fun showStatus(message: String) {
+        statusOverride = message
+        statusOverrideUntil = android.os.SystemClock.elapsedRealtime() + 15_000L
         binding.connectionStatus.text = message
+        binding.connectionStatus.setTextColor(Color.parseColor("#F2B84B"))
     }
 
     private fun showPage(page: Page) {

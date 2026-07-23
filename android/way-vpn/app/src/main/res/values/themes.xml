@@ -58,8 +58,14 @@
     <!-- Day/Night theme: inherit common values and set light-mode-specific items -->
     <style name="AppThemeDayNight" parent="AppThemeBase">
         <!-- day/night-specific overrides (light/default) -->
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+        <!-- Way VPN всегда использует тёмный фон, независимо от системной темы. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+        <item name="android:statusBarColor">#0B0D12</item>
+        <item name="android:navigationBarColor">#0B0D12</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="29">false</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="29">false</item>
     </style>
 
     <!-- Theme without ActionBar -->

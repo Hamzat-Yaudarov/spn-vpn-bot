@@ -196,12 +196,14 @@
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/sync_button"
-                                android:layout_width="50dp"
+                                android:layout_width="86dp"
                                 android:layout_height="50dp"
                                 android:minWidth="0dp"
-                                android:text="↻"
+                                android:paddingStart="2dp"
+                                android:paddingEnd="2dp"
+                                android:text="Обновить"
                                 android:textColor="#39E6A5"
-                                android:textSize="26sp"
+                                android:textSize="11sp"
                                 app:backgroundTint="#191C22"
                                 app:cornerRadius="16dp" />
                         </LinearLayout>
@@ -432,12 +434,14 @@
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/support_telegram_button"
-                                android:layout_width="52dp"
+                                android:layout_width="82dp"
                                 android:layout_height="52dp"
                                 android:minWidth="0dp"
-                                android:text="↗"
+                                android:paddingStart="2dp"
+                                android:paddingEnd="2dp"
+                                android:text="Открыть"
                                 android:textColor="#39E6A5"
-                                android:textSize="24sp"
+                                android:textSize="11sp"
                                 app:backgroundTint="#191C22"
                                 app:cornerRadius="17dp" />
                         </LinearLayout>
@@ -655,7 +659,7 @@
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="76dp"
+            android:layout_height="72dp"
             android:background="#0B0D12"
             android:gravity="center"
             android:orientation="horizontal"
@@ -669,11 +673,16 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="2"
                 android:minWidth="0dp"
-                android:text="⌂\nГлавная"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:text="⌂\nДомой"
                 android:textAllCaps="false"
                 android:textColor="#39E6A5"
-                android:textSize="13sp" />
+                android:textSize="12sp"
+                />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/nav_servers"
@@ -682,11 +691,16 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="2"
                 android:minWidth="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
                 android:text="◎\nСерверы"
                 android:textAllCaps="false"
                 android:textColor="#777C87"
-                android:textSize="13sp" />
+                android:textSize="12sp"
+                />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/nav_support"
@@ -695,11 +709,16 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="2"
                 android:minWidth="0dp"
-                android:text="▤\nПоддержка"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:text="▤\nПомощь"
                 android:textAllCaps="false"
                 android:textColor="#777C87"
-                android:textSize="13sp" />
+                android:textSize="12sp"
+                />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/nav_settings"
@@ -708,11 +727,16 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="2"
                 android:minWidth="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
                 android:text="⚙\nНастройки"
                 android:textAllCaps="false"
                 android:textColor="#777C87"
-                android:textSize="13sp" />
+                android:textSize="12sp"
+                />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>
