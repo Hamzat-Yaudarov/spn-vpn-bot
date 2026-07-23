@@ -11,7 +11,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.MessageDigest
 import java.time.Instant
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 
 data class ChallengeResponse(
@@ -192,29 +195,53 @@ class WayApi {
         }
     }
 
+    private fun directSubscriptionRequest(subscriptionUrl: String, hwid: String, includeDeviceHeaders: Boolean): Request {
+        val builder = Request.Builder()
+            .url(AccountAccessKey.normalize(subscriptionUrl))
+            .header("Accept", "text/plain, application/octet-stream;q=0.9, */*;q=0.1")
+            .header("User-Agent", "WayVPN/${BuildConfig.VERSION_NAME} Android/${Build.VERSION.RELEASE}")
+            .get()
+        if (includeDeviceHeaders) {
+            builder
+                .header("x-hwid", hwid)
+                .header("x-device-os", "Android")
+                .header("x-ver-os", Build.VERSION.RELEASE)
+                .header("x-device-model", "${Build.MANUFACTURER} ${Build.MODEL}".take(120))
+        }
+        return builder.build()
+    }
+
     suspend fun directSubscriptionProfile(subscriptionUrl: String, hwid: String): ProfileResponse = withContext(Dispatchers.IO) {
         if (!AccountAccessKey.isSubscriptionUrl(subscriptionUrl)) {
             throw WayApiException(400, "invalid_subscription_url", "Некорректная HTTPS-ссылка подписки")
         }
-        val request = Request.Builder()
-            .url(AccountAccessKey.normalize(subscriptionUrl))
-            .header("Accept", "text/plain, application/octet-stream;q=0.9, */*;q=0.1")
-            .header("x-hwid", hwid)
-            .header("x-device-os", "Android")
-            .header("x-ver-os", Build.VERSION.RELEASE)
-            .header("x-device-model", "${Build.MANUFACTURER} ${Build.MODEL}".take(120))
-            .header("User-Agent", "WayVPN/${BuildConfig.VERSION_NAME} Android/${Build.VERSION.RELEASE}")
-            .get()
-            .build()
-        subscriptionClient.newCall(request).execute().use { response ->
+        try {
+            var response = subscriptionClient
+                .newCall(directSubscriptionRequest(subscriptionUrl, hwid, includeDeviceHeaders = true))
+                .execute()
+            if (!response.isSuccessful && response.header("X-Hwid-Not-Supported") != null) {
+                response.close()
+                response = subscriptionClient
+                    .newCall(directSubscriptionRequest(subscriptionUrl, hwid, includeDeviceHeaders = false))
+                    .execute()
+            }
+            response.use {
             if (!response.request.url.isHttps) {
                 throw WayApiException(400, "insecure_subscription_redirect", "Сервер подписки перенаправил на небезопасный адрес")
             }
             if (!response.isSuccessful) {
+                if (response.header("X-Hwid-Max-Devices-Reached") != null) {
+                    throw WayApiException(409, "hwid_limit_reached", "Достигнут лимит устройств этой подписки")
+                }
+                val message = when (response.code) {
+                    401, 403 -> "Ссылка подписки отклонена сервером или истекла"
+                    404 -> "Ссылка подписки не найдена на сервере"
+                    else -> "Сервер подписки вернул HTTP ${response.code}"
+                }
                 throw WayApiException(
                     response.code,
                     "subscription_http_${response.code}",
-                    "Сервер подписки отклонил ссылку (HTTP ${response.code})",
+                    message,
                 )
             }
             val body = response.body
@@ -232,6 +259,15 @@ class WayApi {
                     response.header("Subscription-Userinfo") ?: response.header("X-Subscription-Userinfo")
                 )
             ProfileResponse(bytes.toString(Charsets.UTF_8), expiry)
+            }
+        } catch (error: WayApiException) {
+            throw error
+        } catch (error: UnknownHostException) {
+            throw WayApiException(0, "subscription_host_not_found", "Не удалось найти сервер подписки")
+        } catch (error: SocketTimeoutException) {
+            throw WayApiException(0, "subscription_timeout", "Сервер подписки не ответил вовремя")
+        } catch (error: SSLException) {
+            throw WayApiException(0, "subscription_tls_error", "HTTPS-сертификат сервера подписки не прошёл проверку")
         }
     }
 

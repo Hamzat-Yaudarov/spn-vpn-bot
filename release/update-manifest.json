@@ -1,14 +1,14 @@
 {
-  "versionCode": 5,
-  "versionName": "1.1.3",
+  "versionCode": 6,
+  "versionName": "1.1.4",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.3-universal-release.apk",
-  "sha256": "1bb18735347e26a94ad549822d053e7920a0139f002875df95f587ebc0414481",
+  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.4-universal-release.apk",
+  "sha256": "b1bfd5d4adf9873b3bdb686353ade6facd54e34b39a47be997e1dcd4cc13382c",
   "signingCertSha256": "980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957",
   "releaseNotes": [
-    "Любая HTTPS-подписка загружается напрямую без проверки в базе Way VPN",
-    "Поддержаны подписки из других Remnawave-панелей и VPN-сервисов",
-    "Ссылка и последний профиль хранятся зашифрованно на устройстве",
-    "HTTP-ссылки, небезопасные редиректы и профили больше 4 МБ отклоняются"
+    "HTTPS-ссылка теперь добавляется как VPN-подписка, а не как вход в аккаунт",
+    "Для добавления подписки не нужны Telegram, backend Way VPN или запись в базе",
+    "Загрузка профиля выполняется отдельным шагом с понятной диагностикой ошибок",
+    "Серверы без поддержки HWID безопасно повторяются без device-заголовков"
   ]
 }

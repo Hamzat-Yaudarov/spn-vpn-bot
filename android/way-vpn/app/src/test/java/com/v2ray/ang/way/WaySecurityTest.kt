@@ -57,6 +57,8 @@ class WaySecurityTest {
         assertTrue(AccountAccessKey.isValid(subscriptionUrl))
         assertEquals(subscriptionUrl, AccountAccessKey.normalize(" $subscriptionUrl\n"))
         assertTrue(AccountAccessKey.isValid("https://another-vpn.example/sub/LotbHJ8UExGg6pS-"))
+        assertTrue(AccountAccessKey.isValid("https://another-vpn.example/?token=LotbHJ8UExGg6pS-"))
+        assertFalse(AccountAccessKey.isValid("https://another-vpn.example/"))
         assertFalse(AccountAccessKey.isValid("http://sub.wayspn.online/LotbHJ8UExGg6pS-"))
         assertFalse(AccountAccessKey.isValid("https://user:password@sub.wayspn.online/LotbHJ8UExGg6pS-"))
         assertFalse(AccountAccessKey.isValid("WAY-TOO-SHORT"))

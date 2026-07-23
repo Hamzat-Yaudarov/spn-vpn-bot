@@ -27,7 +27,6 @@ object AccountAccessKey {
             !uri.host.isNullOrBlank() &&
             uri.userInfo == null &&
             uri.rawFragment == null &&
-            !uri.rawPath.isNullOrBlank() &&
-            uri.rawPath != "/"
+            ((!uri.rawPath.isNullOrBlank() && uri.rawPath != "/") || !uri.rawQuery.isNullOrBlank())
     }.getOrDefault(false)
 }

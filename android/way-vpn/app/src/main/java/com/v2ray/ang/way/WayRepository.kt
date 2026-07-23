@@ -62,21 +62,29 @@ class WayRepository(context: Context) {
     suspend fun loginWithAccessKey(value: String) {
         val normalized = AccountAccessKey.normalize(value)
         if (AccountAccessKey.isSubscriptionUrl(normalized)) {
-            val response = api.directSubscriptionProfile(normalized, secureStore.installationHwid())
-            val filtered = WayProfilePolicy.filterSupported(response.content)
-            val expiresAt = response.expiresAt ?: onlineOnlyFallbackExpiry()
-            secureStore.put(SecureStore.ACCESS_TOKEN, null)
-            secureStore.put(SecureStore.REFRESH_TOKEN, null)
-            secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
-            secureStore.put(SecureStore.LAST_PROFILE, filtered)
-            secureStore.put(SecureStore.PROFILE_EXPIRES_AT, expiresAt)
-            secureStore.put(SecureStore.PENDING_CHALLENGE, null)
-            secureStore.put(SecureStore.PENDING_VERIFIER, null)
+            addSubscriptionUrl(normalized)
             return
         }
         val tokens = api.exchangeAccessKey(normalized)
         saveTokens(tokens)
         secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
+        secureStore.put(SecureStore.PENDING_CHALLENGE, null)
+        secureStore.put(SecureStore.PENDING_VERIFIER, null)
+    }
+
+    suspend fun addSubscriptionUrl(value: String) {
+        val normalized = AccountAccessKey.normalize(value)
+        if (!AccountAccessKey.isSubscriptionUrl(normalized)) {
+            throw IllegalArgumentException("Нужна полная HTTPS-ссылка VPN-подписки")
+        }
+        secureStore.put(SecureStore.ACCESS_TOKEN, null)
+        secureStore.put(SecureStore.REFRESH_TOKEN, null)
+        secureStore.put(SecureStore.ACCOUNT_ACCESS_KEY, normalized)
+        secureStore.put(SecureStore.LAST_PROFILE, null)
+        secureStore.put(SecureStore.PROFILE_EXPIRES_AT, null)
+        secureStore.put(SecureStore.SELECTED_SUBSCRIPTION, null)
+        secureStore.put(SecureStore.SELECTED_SERVER, null)
+        secureStore.put(SecureStore.LAST_PAYMENT, null)
         secureStore.put(SecureStore.PENDING_CHALLENGE, null)
         secureStore.put(SecureStore.PENDING_VERIFIER, null)
     }

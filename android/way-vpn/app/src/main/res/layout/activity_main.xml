@@ -43,7 +43,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="28dp"
                 android:gravity="center"
-                android:text="Войдите через Telegram или вставьте любую HTTPS-ссылку подписки — в том числе из другой панели."
+                android:text="Добавьте любую HTTPS-ссылку VPN-подписки. Аккаунт Way VPN для этого не нужен."
                 android:textColor="#9499A5"
                 android:textSize="16sp" />
 
@@ -52,7 +52,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="58dp"
                 android:layout_marginTop="26dp"
-                android:text="Войти через Telegram"
+                android:text="Открыть кабинет через Telegram (необязательно)"
                 android:textAllCaps="false"
                 android:textColor="#07110C"
                 android:textSize="17sp"
@@ -77,7 +77,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="22dp"
-                android:text="или"
+                android:text="или просто добавить подписку"
                 android:textColor="#626773"
                 android:textSize="14sp" />
 
@@ -111,7 +111,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="56dp"
                 android:layout_marginTop="12dp"
-                android:text="Войти по ключу или ссылке"
+                android:text="Добавить VPN-подписку"
                 android:textAllCaps="false"
                 android:textColor="#39E6A5"
                 app:cornerRadius="18dp"
@@ -519,7 +519,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Ваш ключ доступа"
+                                android:text="Ссылка VPN-подписки"
                                 android:textColor="#FFFFFF"
                                 android:textSize="20sp"
                                 android:textStyle="bold" />
@@ -528,7 +528,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="5dp"
-                                android:text="Используйте его только на своих устройствах"
+                                android:text="Профиль загружается напрямую с указанного HTTPS-сервера"
                                 android:textColor="#9499A5"
                                 android:textSize="14sp" />
 

@@ -125,7 +125,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupActions() {
         binding.loginButton.setOnClickListener { lifecycleScope.launch { beginLogin() } }
         binding.checkLoginButton.setOnClickListener { lifecycleScope.launch { checkPendingLoginNow() } }
-        binding.keyLoginButton.setOnClickListener { lifecycleScope.launch { loginWithKey() } }
+        binding.keyLoginButton.setOnClickListener { lifecycleScope.launch { addSubscriptionFromInput() } }
         binding.connectButton.setOnClickListener { lifecycleScope.launch { toggleConnection() } }
         binding.syncButton.setOnClickListener { lifecycleScope.launch { syncProfile(true) } }
         binding.paymentButton.setOnClickListener { showPaymentChoices() }
@@ -210,7 +210,7 @@ class MainActivity : AppCompatActivity() {
             val subscriptionSession = me.auth_scope == "subscription" || directSubscription
             subscriptionScopedSession = subscriptionSession
             binding.userName.text = if (subscriptionSession) {
-                if (directSubscription) "Прямая HTTPS-подписка" else "Вход по ссылке подписки"
+                if (directSubscription) "VPN-подписка" else "Вход по ссылке подписки"
             } else {
                 me.username?.let { "@$it" } ?: "Telegram ID ${me.tg_id}"
             }
@@ -220,7 +220,11 @@ class MainActivity : AppCompatActivity() {
             binding.devicesButton.visibility = if (directSubscription) View.GONE else View.VISIBLE
             binding.deviceIdText.text = "Device ID: ${repository.secureStore.installationHwid()}\nWay VPN ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE}"
             loadSubscriptions()
-            if (directSubscription && MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty()) {
+            if (
+                directSubscription &&
+                MmkvManager.decodeServerList(WAY_SUBSCRIPTION_ID).isEmpty() &&
+                repository.secureStore.get(SecureStore.LAST_PROFILE) != null
+            ) {
                 restoreOfflineProfile()
             }
             refreshServerSpinner()
@@ -251,20 +255,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun loginWithKey() {
-        val key = binding.accessKeyInput.text?.toString().orEmpty()
-        if (key.isBlank()) {
-            binding.loginStatus.text = "Введите ключ или полную ссылку подписки Way VPN."
+    private suspend fun addSubscriptionFromInput() {
+        val subscriptionUrl = binding.accessKeyInput.text?.toString().orEmpty()
+        if (subscriptionUrl.isBlank()) {
+            binding.loginStatus.text = "Введите полную HTTPS-ссылку VPN-подписки."
             return
         }
         binding.keyLoginButton.isEnabled = false
         binding.loginButton.isEnabled = false
-        binding.loginStatus.text = "Проверяем ключ доступа…"
+        binding.loginStatus.text = "Добавляем VPN-подписку…"
         try {
-            repository.loginWithAccessKey(key)
+            repository.addSubscriptionUrl(subscriptionUrl)
+            CoreServiceManager.stopVService(this)
+            MmkvManager.removeSubscription(WAY_SUBSCRIPTION_ID)
+            MmkvManager.encodeSettings(WayRuntimePolicy.PROFILE_EXPIRY_SETTING, 0L)
             showAccountAndLoad()
+            syncProfile(true)
         } catch (error: Exception) {
-            binding.loginStatus.text = error.message ?: "Не удалось войти по ключу"
+            binding.loginStatus.text = error.message ?: "Не удалось добавить VPN-подписку"
             binding.keyLoginButton.isEnabled = true
             binding.loginButton.isEnabled = true
         }
@@ -409,11 +417,19 @@ class MainActivity : AppCompatActivity() {
             }
             false
         } catch (error: Exception) {
-            showStatus(error.message ?: "Не удалось обновить профиль")
+            showStatus(subscriptionLoadError(error))
             false
         } finally {
             binding.syncButton.isEnabled = true
         }
+    }
+
+    private fun subscriptionLoadError(error: Exception): String = when (error) {
+        is java.net.UnknownHostException -> "Не удалось найти сервер подписки. Проверьте адрес и интернет."
+        is java.net.SocketTimeoutException -> "Сервер подписки не ответил вовремя. Повторите обновление."
+        is javax.net.ssl.SSLException -> "Сертификат HTTPS-сервера подписки не прошёл проверку."
+        else -> error.message?.let { "Не удалось загрузить подписку: $it" }
+            ?: "Не удалось загрузить VPN-подписку"
     }
 
     private suspend fun importAndSelectProfile(profile: String) = withContext(Dispatchers.IO) {
@@ -847,9 +863,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmLogout() {
         AlertDialog.Builder(this)
-            .setTitle("Выйти из Way VPN?")
-            .setMessage("VPN будет остановлен. Токены, HWID и сохранённые профили будут удалены с устройства.")
-            .setPositiveButton("Выйти") { _, _ ->
+            .setTitle("Удалить данные Way VPN?")
+            .setMessage("VPN будет остановлен. Добавленная подписка, токены, HWID и сохранённые профили будут удалены с устройства.")
+            .setPositiveButton("Удалить") { _, _ ->
                 lifecycleScope.launch {
                     CoreServiceManager.stopVService(this@MainActivity)
                     MmkvManager.removeSubscription(WAY_SUBSCRIPTION_ID)
@@ -858,7 +874,7 @@ class MainActivity : AppCompatActivity() {
                     subscriptions = emptyList()
                     serverGuids = emptyList()
                     showLogin()
-                    binding.loginStatus.text = "Данные удалены. Можно войти снова."
+                    binding.loginStatus.text = "Данные удалены. Можно добавить другую VPN-подписку."
                 }
             }
             .setNegativeButton("Отмена", null)
