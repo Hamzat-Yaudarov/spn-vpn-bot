@@ -7,6 +7,8 @@ import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import java.io.IOException
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.UnknownHostException
@@ -20,32 +22,48 @@ object SpeedtestManager {
      * @param port The port to connect to.
      * @return The connection time in milliseconds, or -1 if the connection failed.
      */
-    fun socketConnectTime(url: String, port: Int, timeoutMs: Int = 1500): Long {
-        var socket: Socket? = null
-        val start = System.currentTimeMillis()
-
+    fun socketConnectTime(
+        url: String,
+        port: Int,
+        timeoutMs: Int = 1500,
+        attempts: Int = 2,
+    ): Long {
         try {
-            socket = Socket()
-            socket.connect(InetSocketAddress(url, port), timeoutMs)
+            val addresses = InetAddress.getAllByName(url)
+                .distinctBy(InetAddress::getHostAddress)
+                .sortedBy { address -> if (address is Inet4Address) 0 else 1 }
+                .take(4)
+            if (addresses.isEmpty()) return -1
 
-            return System.currentTimeMillis() - start
+            repeat(attempts.coerceIn(1, 3)) {
+                val successful = mutableListOf<Long>()
+                addresses.forEach { address ->
+                    val latency = connectAddress(address, port, timeoutMs)
+                    if (latency >= 0) successful += latency
+                }
+                successful.minOrNull()?.let { return it }
+            }
         } catch (e: UnknownHostException) {
             LogUtil.e(AppConfig.TAG, "Unknown host: $url", e)
-        } catch (e: IOException) {
-            LogUtil.e(AppConfig.TAG, "socketConnectTime IOException: ${e.message}")
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Failed to establish socket connection to $url:$port", e)
-        } finally {
-            socket?.let { s ->
-                try {
-                    if (!s.isClosed) {
-                        s.close()
-                    }
-                } catch (closeEx: IOException) {
-                }
-            }
         }
         return -1
+    }
+
+    private fun connectAddress(address: InetAddress, port: Int, timeoutMs: Int): Long {
+        val startedAt = System.nanoTime()
+        return try {
+            Socket().use { socket ->
+                socket.tcpNoDelay = true
+                socket.connect(InetSocketAddress(address, port), timeoutMs)
+            }
+            (System.nanoTime() - startedAt) / 1_000_000L
+        } catch (_: IOException) {
+            -1L
+        } catch (_: SecurityException) {
+            -1L
+        }
     }
 
     fun getRemoteIPInfo(): String? {

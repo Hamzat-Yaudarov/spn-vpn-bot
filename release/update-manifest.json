@@ -1,15 +1,14 @@
 {
-  "versionCode": 11,
-  "versionName": "1.1.9",
+  "versionCode": 12,
+  "versionName": "1.2.0",
   "minSupportedVersionCode": 1,
-  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.1.9-universal-release.apk",
-  "sha256": "41e64aa4ec3aa9f5e97f82a857307bb42ebe94cc62c89e9b6499c454d226988b",
+  "apkUrl": "https://wayspn.ru/downloads/WayVPN-1.2.0-universal-release.apk",
+  "sha256": "273928b614f42d0212dcba8302928cf1a9fbffe8c13cfeeb95a1f5fa81fda529",
   "signingCertSha256": "980d9e8dcdeaebbdcbaea80ec1417880b0ebc57a3cc20ba75a4b8f2104060957",
   "releaseNotes": [
-    "Подписка передаётся штатному импортёру v2rayNG без предварительного отбрасывания",
-    "Добавлен импорт JSON-массива Xray, используемого внешними подписками",
-    "Каждая JSON-конфигурация отображается отдельным сервером",
-    "Разрешены только конфигурации с основным протоколом VLESS, Trojan или Shadowsocks",
-    "Офлайн-кэш хранит исходный профиль для повторного штатного импорта"
+    "Добавлены режимы пинга: Авто, TCP, HTTP GET, HTTP HEAD и ICMP",
+    "На каждом сервере видны очередь, текущий этап и итог проверки",
+    "TCP использует повторные IPv4/IPv6-попытки вместо одного короткого запроса",
+    "Кнопка подключения синхронизирована с реальным состоянием VPN-процесса"
   ]
 }

@@ -1,10 +1,12 @@
 package com.v2ray.ang.ui
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.net.Uri
 import android.net.VpnService
@@ -23,6 +25,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -38,7 +41,9 @@ import com.v2ray.ang.databinding.ActivityMainBinding
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
+import com.v2ray.ang.util.MessageUtil
 import com.v2ray.ang.util.QRCodeDecoder
+import com.v2ray.ang.util.Utils
 import com.v2ray.ang.way.AccountAccessKey
 import com.v2ray.ang.way.DeviceDto
 import com.v2ray.ang.way.LoginRequest
@@ -48,6 +53,9 @@ import com.v2ray.ang.way.SubscriptionDto
 import com.v2ray.ang.way.UpdateInstaller
 import com.v2ray.ang.way.WayApiException
 import com.v2ray.ang.way.WayProfilePolicy
+import com.v2ray.ang.way.WayPingManager
+import com.v2ray.ang.way.WayPingMode
+import com.v2ray.ang.way.WayPingResult
 import com.v2ray.ang.way.WayRepository
 import com.v2ray.ang.way.WayRuntimePolicy
 import kotlinx.coroutines.CancellationException
@@ -59,10 +67,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 
@@ -73,16 +84,48 @@ class MainActivity : AppCompatActivity() {
 
     private val binding by lazy { ActivityMainBinding.inflate(layoutInflater) }
     private val repository by lazy { WayRepository(this) }
+    private val pingManager by lazy { WayPingManager(this) }
     private var subscriptions: List<SubscriptionDto> = emptyList()
     private var serverGuids: List<String> = emptyList()
     private val serverLatency = mutableMapOf<String, Long>()
+    private val serverPingState = mutableMapOf<String, ServerPingUiState>()
     private var loginJob: Job? = null
+    private var pingMeasureJob: Job? = null
+    private var selectedPingMode = WayPingMode.AUTO
+    private var pingInProgress = false
+    private var completedPingCount = 0
+    private var vpnRunning = false
+    private var vpnReceiverRegistered = false
     private var subscriptionScopedSession = false
     private var statusOverride: String? = null
     private var statusOverrideUntil = 0L
     private var lastProfileError: String? = null
 
     private enum class Page { HOME, SERVERS, SUPPORT, SETTINGS }
+    private data class ServerPingUiState(
+        val text: String,
+        val running: Boolean = false,
+        val failed: Boolean = false,
+    )
+
+    private val vpnStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.getIntExtra("key", 0)) {
+                AppConfig.MSG_STATE_RUNNING,
+                AppConfig.MSG_STATE_START_SUCCESS -> setVpnRunning(true)
+
+                AppConfig.MSG_STATE_NOT_RUNNING,
+                AppConfig.MSG_STATE_STOP_SUCCESS -> setVpnRunning(false)
+
+                AppConfig.MSG_STATE_START_FAILURE -> {
+                    setVpnRunning(false)
+                    intent.getStringExtra("content")
+                        ?.takeIf(String::isNotBlank)
+                        ?.let { showStatus("Не удалось подключиться: $it") }
+                }
+            }
+        }
+    }
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == RESULT_OK) startVpnCore()
@@ -152,6 +195,28 @@ class MainActivity : AppCompatActivity() {
         handlePaymentReturn(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (!vpnReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                vpnStateReceiver,
+                IntentFilter(AppConfig.BROADCAST_ACTION_ACTIVITY),
+                Utils.receiverFlags(),
+            )
+            vpnReceiverRegistered = true
+        }
+        MessageUtil.sendMsg2Service(this, AppConfig.MSG_REGISTER_CLIENT, "")
+    }
+
+    override fun onStop() {
+        if (vpnReceiverRegistered) {
+            runCatching { unregisterReceiver(vpnStateReceiver) }
+            vpnReceiverRegistered = false
+        }
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         lifecycleScope.launch {
@@ -171,7 +236,14 @@ class MainActivity : AppCompatActivity() {
         binding.vpnSettingsButton.setOnClickListener { openVpnSettings() }
         binding.updateButton.setOnClickListener { lifecycleScope.launch { checkUpdates() } }
         binding.logoutButton.setOnClickListener { confirmLogout() }
-        binding.pingAllButton.setOnClickListener { lifecycleScope.launch { measureAllServers() } }
+        binding.pingAllButton.setOnClickListener {
+            if (pingMeasureJob?.isActive == true) {
+                pingMeasureJob?.cancel()
+            } else {
+                pingMeasureJob = lifecycleScope.launch { measureAllServers(selectedPingMode) }
+            }
+        }
+        binding.pingModeButton.setOnClickListener { showPingModeDialog() }
         binding.navHome.setOnClickListener { showPage(Page.HOME) }
         binding.navServers.setOnClickListener { showPage(Page.SERVERS) }
         binding.navSupport.setOnClickListener { showPage(Page.SUPPORT) }
@@ -575,33 +647,127 @@ class MainActivity : AppCompatActivity() {
         renderSelectedServer()
     }
 
-    private suspend fun measureAllServers() {
+    private fun showPingModeDialog() {
+        val modes = WayPingMode.entries
+        val labels = modes.map { "${it.title}\n${it.description}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Способ измерения")
+            .setSingleChoiceItems(labels, modes.indexOf(selectedPingMode)) { dialog, which ->
+                selectedPingMode = modes[which]
+                binding.pingModeButton.text = "Метод: ${selectedPingMode.title}"
+                dialog.dismiss()
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private suspend fun measureAllServers(mode: WayPingMode) {
         if (serverGuids.isEmpty()) {
             if (!syncProfile(true)) return
         }
-        binding.pingAllButton.isEnabled = false
-        binding.pingAllButton.text = "Проверяем…"
-        val measured = withContext(Dispatchers.IO) {
-            serverGuids.associateWith { guid ->
-                val config = MmkvManager.decodeServerConfig(guid)
-                config?.serverPort?.toIntOrNull()?.let { port ->
-                    SpeedtestManager.socketConnectTime(config.server.orEmpty(), port, 1_500)
-                } ?: -1L
-            }
-        }
+        val guids = serverGuids.toList()
+        if (guids.isEmpty()) return
+
+        pingInProgress = true
+        completedPingCount = 0
         serverLatency.clear()
-        serverLatency.putAll(measured)
+        serverPingState.clear()
+        guids.forEach { serverPingState[it] = ServerPingUiState("В очереди") }
+        binding.pingAllButton.text = "Стоп"
+        binding.pingModeButton.isEnabled = false
+        binding.pingProgressBar.visibility = View.VISIBLE
+        binding.pingProgressBar.max = guids.size
+        binding.pingProgressBar.progress = 0
+        binding.pingProgressText.visibility = View.VISIBLE
+        binding.pingProgressText.text = "Подготовка · ${mode.title} · 0 из ${guids.size}"
         renderServerList()
-        renderSelectedServer()
-        binding.pingAllButton.text = "Пинг"
-        binding.pingAllButton.isEnabled = true
+
+        val completed = AtomicInteger(0)
+        val responded = AtomicInteger(0)
+        val concurrency = when (mode) {
+            WayPingMode.AUTO, WayPingMode.HTTP_GET, WayPingMode.HTTP_HEAD -> 3
+            WayPingMode.TCP, WayPingMode.ICMP -> 6
+        }
+        val semaphore = Semaphore(concurrency)
+
+        try {
+            coroutineScope {
+                guids.map { guid ->
+                    async(Dispatchers.IO) {
+                        semaphore.withPermit {
+                            withContext(Dispatchers.Main) {
+                                serverPingState[guid] = ServerPingUiState(
+                                    text = "${mode.shortTitle}: начинаем…",
+                                    running = true,
+                                )
+                                renderServerList()
+                            }
+                            val result = pingManager.measure(guid, mode) { stage ->
+                                withContext(Dispatchers.Main) {
+                                    serverPingState[guid] = ServerPingUiState(
+                                        text = stage,
+                                        running = true,
+                                    )
+                                    renderServerList()
+                                }
+                            }
+                            withContext(Dispatchers.Main) {
+                                applyPingResult(guid, result, mode)
+                                if (result.isSuccess) responded.incrementAndGet()
+                                completedPingCount = completed.incrementAndGet()
+                                binding.pingProgressBar.progress = completedPingCount
+                                binding.pingProgressText.text =
+                                    "Проверено $completedPingCount из ${guids.size} · ${mode.title}"
+                                renderServerList()
+                                renderSelectedServer()
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+            binding.pingProgressText.text =
+                "Готово · ответили ${responded.get()} из ${guids.size} · ${mode.title}"
+        } catch (error: CancellationException) {
+            serverPingState.replaceAll { _, state ->
+                if (state.running) ServerPingUiState("Остановлено", failed = true) else state
+            }
+            binding.pingProgressText.text =
+                "Проверка остановлена · $completedPingCount из ${guids.size}"
+            throw error
+        } finally {
+            pingInProgress = false
+            binding.pingAllButton.text = "Пинг"
+            binding.pingModeButton.isEnabled = true
+            binding.pingProgressBar.visibility = View.GONE
+            renderServerList()
+        }
+    }
+
+    private fun applyPingResult(guid: String, result: WayPingResult, requestedMode: WayPingMode) {
+        if (result.usableForAutoSelect) {
+            serverLatency[guid] = result.latencyMs
+        } else {
+            serverLatency[guid] = -1L
+        }
+        val message = when {
+            result.isSuccess && requestedMode == WayPingMode.AUTO && !result.usableForAutoSelect ->
+                "${result.method.shortTitle} ${result.latencyMs} мс\nпорт не подтверждён"
+            result.isSuccess ->
+                "${result.method.shortTitle} ${result.latencyMs} мс"
+            else ->
+                "нет ответа\n${result.detail}"
+        }
+        serverPingState[guid] = ServerPingUiState(
+            text = message,
+            failed = !result.isSuccess || !result.usableForAutoSelect,
+        )
     }
 
     private fun renderServerList() {
         val container = binding.serverListContainer
         container.removeAllViews()
         if (serverGuids.isEmpty()) {
-            binding.pingAllButton.text = "Обновить"
+            if (!pingInProgress) binding.pingAllButton.text = "Обновить"
             container.addView(TextView(this).apply {
                 text = lastProfileError?.let { "Не удалось загрузить серверы:\n$it\n\nНажмите «Обновить», чтобы повторить." }
                     ?: "Серверы ещё не загружены. Нажмите «Обновить»."
@@ -611,12 +777,13 @@ class MainActivity : AppCompatActivity() {
             })
             return
         }
-        binding.pingAllButton.text = "Пинг"
+        if (!pingInProgress) binding.pingAllButton.text = "Пинг"
 
         val selectedGuid = MmkvManager.getSelectServer()
         serverGuids.forEach { guid ->
             val config = MmkvManager.decodeServerConfig(guid) ?: return@forEach
             val latency = serverLatency[guid]
+            val pingState = serverPingState[guid]
             val selected = guid == selectedGuid
             val card = com.google.android.material.card.MaterialCardView(this).apply {
                 radius = dp(20).toFloat()
@@ -653,14 +820,34 @@ class MainActivity : AppCompatActivity() {
                     config.network?.takeIf(String::isNotBlank),
                 ).joinToString(" · "))
             })
+            if (pingState?.running == true) {
+                row.addView(android.widget.ProgressBar(this).apply {
+                    isIndeterminate = true
+                    indeterminateTintList =
+                        android.content.res.ColorStateList.valueOf(Color.parseColor("#39E6A5"))
+                    layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply {
+                        marginEnd = dp(8)
+                    }
+                })
+            }
             row.addView(TextView(this).apply {
-                text = when {
+                text = pingState?.text ?: when {
                     latency == null -> "—"
                     latency < 0 -> "нет ответа"
                     else -> "${latency} мс"
                 }
-                setTextColor(Color.parseColor(latencyColor(latency)))
-                textSize = 14f
+                setTextColor(
+                    Color.parseColor(
+                        when {
+                            pingState?.running == true -> "#39E6A5"
+                            pingState?.failed == true -> "#FF5B78"
+                            else -> latencyColor(latency)
+                        }
+                    )
+                )
+                textSize = if (pingState?.running == true) 12f else 14f
+                gravity = Gravity.END
+                maxWidth = dp(170)
             })
             card.addView(row)
             container.addView(card)
@@ -692,7 +879,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun toggleConnection() {
-        if (CoreServiceManager.isRunning()) {
+        if (vpnRunning) {
             CoreServiceManager.stopVService(this)
             showStatus("Отключение…")
             return
@@ -765,7 +952,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateConnectionState() {
-        val running = CoreServiceManager.isRunning()
+        val running = vpnRunning
         val overrideActive = !running && android.os.SystemClock.elapsedRealtime() < statusOverrideUntil
         binding.connectionStatus.text = when {
             running -> "Статус:  Подключено"
@@ -782,6 +969,15 @@ class MainActivity : AppCompatActivity() {
         binding.connectButton.text = if (running) "W\nОТКЛЮЧИТЬ" else "W\nПОДКЛЮЧИТЬ"
         binding.connectButton.setBackgroundColor(Color.parseColor(if (running) "#39E6A5" else "#6C717D"))
         if (running) renderSelectedServer()
+    }
+
+    private fun setVpnRunning(running: Boolean) {
+        vpnRunning = running
+        if (running) {
+            statusOverride = null
+            statusOverrideUntil = 0L
+        }
+        updateConnectionState()
     }
 
     private fun showStatus(message: String) {

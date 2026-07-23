@@ -52,6 +52,21 @@ class WaySecurityTest {
     }
 
     @Test
+    fun pingParserReadsAndroidIcmpOutput() {
+        val latency = WayPingManager.parseIcmpLatency(
+            "64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=23.7 ms"
+        )
+        assertEquals(24L, latency)
+        assertEquals(null, WayPingManager.parseIcmpLatency("Destination Host Unreachable"))
+    }
+
+    @Test
+    fun pingAggregationIgnoresFailedAttempts() {
+        assertEquals(41L, WayPingManager.bestSuccessfulLatency(listOf(-1L, 53L, 41L)))
+        assertEquals(-1L, WayPingManager.bestSuccessfulLatency(listOf(-1L, -1L)))
+    }
+
+    @Test
     fun generatedHwidMatchesRemnawaveContract() {
         repeat(100) { assertTrue(InstallationIdentity.isValid(InstallationIdentity.generate())) }
         assertFalse(InstallationIdentity.isValid("android-id"))

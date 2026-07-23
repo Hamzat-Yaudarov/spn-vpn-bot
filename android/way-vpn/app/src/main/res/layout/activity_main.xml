@@ -373,6 +373,48 @@
                         android:textSize="14sp" />
 
                     <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/ping_mode_button"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="44dp"
+                            android:text="Метод: Авто"
+                            android:textAllCaps="false"
+                            android:textColor="#39E6A5"
+                            app:icon="@android:drawable/arrow_down_float"
+                            app:iconGravity="textEnd"
+                            app:iconTint="#39E6A5" />
+
+                        <TextView
+                            android:id="@+id/ping_progress_text"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:gravity="end"
+                            android:textColor="#9499A5"
+                            android:textSize="12sp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <ProgressBar
+                        android:id="@+id/ping_progress_bar"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="4dp"
+                        android:layout_marginTop="5dp"
+                        android:indeterminate="false"
+                        android:progressBackgroundTint="#292D36"
+                        android:progressTint="#39E6A5"
+                        android:visibility="gone" />
+
+                    <LinearLayout
                         android:id="@+id/server_list_container"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

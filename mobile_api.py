@@ -62,6 +62,10 @@ ALLOWED_PROFILE_SCHEMES = ("vless://", "trojan://", "ss://")
 _rate_events: dict[str, deque[float]] = defaultdict(deque)
 RELEASE_DIR = Path(__file__).resolve().parent / "release"
 PUBLIC_RELEASE_ARTIFACTS = {
+    "WayVPN-1.2.0-universal-release.apk": "application/vnd.android.package-archive",
+    "WayVPN-1.2.0-universal-release.apk.sha256": "text/plain",
+    "WayVPN-1.2.0-gpl-source.zip": "application/zip",
+    "WayVPN-1.2.0-gpl-source.zip.sha256": "text/plain",
     "WayVPN-1.1.9-universal-release.apk": "application/vnd.android.package-archive",
     "WayVPN-1.1.9-universal-release.apk.sha256": "text/plain",
     "WayVPN-1.1.9-gpl-source.zip": "application/zip",
@@ -626,11 +630,10 @@ async def android_update_manifest():
         "sha256": ANDROID_APK_SHA256.lower(),
         "signingCertSha256": ANDROID_SIGNING_CERT_SHA256.replace(":", "").lower(),
         "releaseNotes": [
-            "Подписка передаётся штатному импортёру v2rayNG без предварительного отбрасывания",
-            "Добавлен импорт JSON-массива Xray, используемого внешними подписками",
-            "Каждая JSON-конфигурация отображается отдельным сервером",
-            "Разрешены только конфигурации с основным протоколом VLESS, Trojan или Shadowsocks",
-            "Офлайн-кэш хранит исходный профиль для повторного штатного импорта",
+            "Добавлены режимы пинга: Авто, TCP, HTTP GET, HTTP HEAD и ICMP",
+            "На каждом сервере видны очередь, текущий этап и итог проверки",
+            "TCP использует повторные IPv4/IPv6-попытки вместо одного короткого запроса",
+            "Кнопка подключения синхронизирована с реальным состоянием VPN-процесса",
         ],
     }, headers={"Cache-Control": "no-store"})
 

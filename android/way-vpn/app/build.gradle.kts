@@ -12,8 +12,8 @@ android {
         applicationId = "ru.wayspn.vpn"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "1.1.9"
+        versionCode = 12
+        versionName = "1.2.0"
         multiDexEnabled = true
         buildConfigField("String", "WAY_API_BASE_URL", "\"${providers.gradleProperty("WAY_API_BASE_URL").orElse("https://wayspn.ru").get()}\"")
         buildConfigField("String", "WAY_UPDATE_MANIFEST_URL", "\"${providers.gradleProperty("WAY_UPDATE_MANIFEST_URL").orElse("https://wayspn.ru/mobile/updates/manifest.json").get()}\"")
