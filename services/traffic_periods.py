@@ -16,6 +16,22 @@ class TrafficPeriodState:
     last_known_used_bytes: int
 
 
+def rebase_traffic_limit_bytes(
+    *,
+    current_base_bytes: int,
+    current_limit_bytes: int,
+    carried_bytes: int,
+    paid_bytes: int,
+    new_base_bytes: int,
+) -> int:
+    """Повысить базу, сохранив весь уже добавленный к ней трафик."""
+    tracked_limit = new_base_bytes + carried_bytes + paid_bytes
+    observed_limit = current_limit_bytes
+    if current_base_bytes > 0:
+        observed_limit += max(0, new_base_bytes - current_base_bytes)
+    return max(new_base_bytes, tracked_limit, observed_limit)
+
+
 def build_traffic_period_state(subscription, plan_kind: str, now: datetime | None = None) -> TrafficPeriodState:
     """Посчитать состояние traffic-cycle при покупке/продлении подписки."""
     now = now or datetime.utcnow()
@@ -50,9 +66,12 @@ def build_traffic_period_state(subscription, plan_kind: str, now: datetime | Non
 
     carried_bytes = int(subscription.get("carried_traffic_bytes") or 0)
     paid_bytes = int(subscription.get("current_paid_traffic_bytes") or 0)
-    limit_bytes = max(
-        int(subscription.get("current_period_limit_bytes") or 0),
-        base_bytes + carried_bytes + paid_bytes,
+    limit_bytes = rebase_traffic_limit_bytes(
+        current_base_bytes=int(subscription.get("base_traffic_bytes") or 0),
+        current_limit_bytes=int(subscription.get("current_period_limit_bytes") or 0),
+        carried_bytes=carried_bytes,
+        paid_bytes=paid_bytes,
+        new_base_bytes=base_bytes,
     )
 
     return TrafficPeriodState(

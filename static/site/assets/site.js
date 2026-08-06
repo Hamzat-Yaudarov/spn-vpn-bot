@@ -100,7 +100,7 @@ function planCard(item) {
     ${item.days >= 90 ? `<span class="tag">Выгоднее</span>` : ""}
     <h3>${item.days} дней</h3><p class="plan-subtitle">${bypass ? "С антиглушилкой" : "Обычная подписка"}</p>
     ${priceMarkup(item)}
-    <ul class="plan-features"><li>${bypass ? "150 ГБ включено" : "Без лимита трафика"}</li><li>${bypass ? "До 3 устройств" : "До 5 устройств"}</li></ul>
+    <ul class="plan-features"><li>${bypass ? `${Number(item.base_gb || 200)} ГБ включено` : "Без лимита трафика"}</li><li>${bypass ? "До 3 устройств" : "До 5 устройств"}</li></ul>
     <button class="button ${item.days >= 90 ? "primary" : "glass"}" data-plan="${esc(item.code)}">Купить подписку</button>
   </article>`;
 }

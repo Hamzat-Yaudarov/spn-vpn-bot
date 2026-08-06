@@ -214,6 +214,7 @@ def _catalog(discounts) -> dict:
                 "title": tariff["title"],
                 "days": tariff["days"],
                 "kind": tariff["kind"],
+                "base_gb": tariff.get("base_gb"),
                 **calculate_discounted_price(
                     tariff["price"], discounts, product_type="subscription", code=code, plan_kind=tariff["kind"]
                 ),

@@ -55,6 +55,7 @@ function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглуш
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
+function bypassBaseGb() { return Number(state.tariffs?.bypass?.[0]?.base_gb || 200); }
 function priceHtml(item) {
   if (Number(item.original_price) > Number(item.price)) {
     return `<span class="offer-price"><s>${rub(item.original_price)}</s><b>${rub(item.price)}</b><em>${escapeHtml(item.discount?.name || "Скидка")}</em></span>`;
@@ -461,7 +462,7 @@ function renderBuy() {
       <div class="section-note"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p></div>
       <div class="plan-grid">
         <button class="plan-card plan-regular" onclick="selectBuyPlan('regular')"><span>Обычная</span><b>5 устройств</b><small>Для ежедневного подключения.</small></button>
-        <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>150 ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
+        <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>${bypassBaseGb()} ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
       </div>
     </div>`;
     return;
@@ -471,7 +472,7 @@ function renderBuy() {
     const tariffs = state.tariffs[state.buyPlan] || [];
     container.innerHTML = `<div class="grid">
       <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
-      <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : "3 устройства, 150 ГБ в месяц."}</p></div>
+      <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : `3 устройства, ${bypassBaseGb()} ГБ в месяц.`}</p></div>
       <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span>${priceHtml(t)}</button>`).join("")}</div>
     </div>`;
     return;

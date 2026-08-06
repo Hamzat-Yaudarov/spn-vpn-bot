@@ -1106,8 +1106,13 @@ async def run_migrations():
                 UPDATE subscriptions
                 SET base_traffic_bytes = $1,
                     current_period_limit_bytes = GREATEST(
-                        COALESCE(current_period_limit_bytes, 0),
-                        $1 + COALESCE(carried_traffic_bytes, 0) + COALESCE(current_paid_traffic_bytes, 0)
+                        $1 + COALESCE(carried_traffic_bytes, 0) + COALESCE(current_paid_traffic_bytes, 0),
+                        CASE
+                            WHEN COALESCE(base_traffic_bytes, 0) > 0
+                            THEN COALESCE(current_period_limit_bytes, 0)
+                                 + GREATEST($1 - base_traffic_bytes, 0)
+                            ELSE COALESCE(current_period_limit_bytes, 0)
+                        END
                     ),
                     last_traffic_sync_at = NULL,
                     updated_at = now()
