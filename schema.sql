@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT now(),
     updated_at TIMESTAMP DEFAULT now(),
     accepted_terms BOOLEAN DEFAULT FALSE,
+    news_channel_onboarding_required BOOLEAN DEFAULT FALSE,
+    news_channel_bonus_claimed_at TIMESTAMP,
+    news_channel_bonus_subscription_id BIGINT,
     remnawave_uuid UUID,
     remnawave_username TEXT,
     subscription_until TIMESTAMP,
@@ -332,6 +335,9 @@ CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider);
 CREATE INDEX IF NOT EXISTS idx_payments_subscription_id ON payments(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_payments_tracking_code ON payments(tracking_code);
+CREATE INDEX IF NOT EXISTS idx_payments_tracking_paid_purchases
+    ON payments(tracking_code, tg_id)
+    WHERE status = 'paid' AND refund_requested_at IS NULL AND amount > 0;
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);

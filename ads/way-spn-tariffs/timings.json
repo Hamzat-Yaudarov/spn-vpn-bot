@@ -1,0 +1,28 @@
+{
+  "duration_seconds": 15.0,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "build_id": "overview-v1",
+  "voice_file": "voice-overview-v1.aiff",
+  "output_file": "way-spn-tariffs-overview-v1.mp4",
+  "poster_file": "way-spn-tariffs-overview-v1.jpg",
+  "bot_handle": "@WaySPN_robot",
+  "offer_status": "future_pending_config_update",
+  "regular": {
+    "title": "ОБЫЧНЫЙ",
+    "price": "200 ₽",
+    "period": "30 ДНЕЙ",
+    "devices": "ДО 5 УСТРОЙСТВ ВКЛЮЧЕНО",
+    "traffic": "БЕЗ ЗАДАННОГО ЛИМИТА",
+    "traffic_note": "трафика по тарифу"
+  },
+  "bypass": {
+    "title": "С АНТИГЛУШИЛКОЙ",
+    "price": "300 ₽",
+    "period": "30 ДНЕЙ",
+    "devices": "ДО 3 УСТРОЙСТВ ВКЛЮЧЕНО",
+    "traffic": "200 ГБ",
+    "traffic_note": "на 30 дней"
+  }
+}

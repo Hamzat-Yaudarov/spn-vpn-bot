@@ -4,9 +4,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME, PUBLIC_SITE_URL
 import database as db
-from handlers.start import mobile_auth_keyboard, show_main_menu
+from handlers.start import (
+    mobile_auth_keyboard,
+    news_channel_chat,
+    send_news_channel_offer,
+    show_main_menu,
+)
+from services.channel_bonus import activate_news_channel_bonus
 from services.image_handler import edit_text_with_photo
 from services.mobile_auth import approve_challenge, pending_challenge_for_user
+from services.connection_instructions import (
+    ANDROID_PLATFORM,
+    IPHONE_PLATFORM,
+    build_connection_instruction,
+    connection_app_button_text,
+    connection_app_url,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +40,11 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
     await callback.message.delete()
     await state.clear()
 
+    if await db.needs_news_channel_onboarding(tg_id):
+        await callback.answer()
+        await send_news_channel_offer(callback.bot, callback.message.chat.id)
+        return
+
     await callback.bot.send_message(
         callback.message.chat.id,
         "Соглашение принято! Добро пожаловать!"
@@ -41,6 +59,78 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
         await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
     else:
         await show_main_menu(callback.message, callback.from_user.id)
+
+
+@router.callback_query(F.data == "check_news_channel")
+async def process_check_news_channel(callback: CallbackQuery, state: FSMContext):
+    """Проверить подписку нового пользователя и выдать однодневный бонус."""
+    tg_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    await callback.answer()
+
+    try:
+        await callback.message.delete()
+    except Exception as exc:
+        logger.debug("Could not delete news-channel prompt for user %s: %s", tg_id, exc)
+
+    if not await db.needs_news_channel_onboarding(tg_id):
+        await state.clear()
+        await show_main_menu(callback.message, tg_id)
+        return
+
+    try:
+        member = await callback.bot.get_chat_member(news_channel_chat(), tg_id)
+        status = getattr(member.status, "value", member.status)
+    except Exception as exc:
+        logger.error("Failed to check news-channel membership for user %s: %s", tg_id, exc)
+        await callback.bot.send_message(
+            chat_id,
+            "Не удалось проверить подписку. Попробуйте ещё раз через несколько секунд.",
+        )
+        await send_news_channel_offer(callback.bot, chat_id)
+        return
+
+    if status not in {"member", "administrator", "creator"}:
+        logger.info("News-channel membership not found for user %s: %s", tg_id, status)
+        await send_news_channel_offer(callback.bot, chat_id, retry=True)
+        return
+
+    if not await db.acquire_user_lock(tg_id):
+        await callback.bot.send_message(chat_id, "Проверка уже выполняется. Нажмите кнопку ещё раз.")
+        await send_news_channel_offer(callback.bot, chat_id)
+        return
+
+    try:
+        activated = await activate_news_channel_bonus(tg_id)
+    except Exception as exc:
+        logger.exception("News-channel bonus activation failed for user %s: %s", tg_id, exc)
+        activated = False
+    finally:
+        await db.release_user_lock(tg_id)
+
+    if not activated:
+        await callback.bot.send_message(
+            chat_id,
+            "Не удалось активировать подарочный день. Попробуйте ещё раз чуть позже.",
+        )
+        await send_news_channel_offer(callback.bot, chat_id)
+        return
+
+    await state.clear()
+    await callback.bot.send_message(
+        chat_id,
+        "✅ Подписка на канал подтверждена. Вам начислен <b>1 день подписки</b>!",
+    )
+
+    pending_challenge = await pending_challenge_for_user(tg_id)
+    if pending_challenge:
+        text, keyboard = mobile_auth_keyboard(
+            str(pending_challenge["id"]),
+            pending_challenge.get("device_name"),
+        )
+        await callback.bot.send_message(chat_id, text, reply_markup=keyboard)
+
+    await show_main_menu(callback.message, tg_id)
 
 
 @router.callback_query(F.data.startswith("mobile_auth_approve:"))
@@ -133,18 +223,17 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} clicked: how_to_connect")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
+        [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
         [InlineKeyboardButton(text="🛒 Как купить подписку", callback_data="instruction_buy", style="primary")],
-        [InlineKeyboardButton(text="📲 Как подключить VPN", callback_data="instruction_connect", style="primary")],
         [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")]
     ])
 
     text = (
         "📲 <b>Инструкция</b>\n\n"
-        "Здесь собраны самые важные шаги:\n"
-        "• как купить подписку\n"
-        "• как подключить VPN\n\n"
-        "Выбери нужный раздел ниже."
+        "Выбери устройство, на котором хочешь подключить VPN.\n"
+        "Бот покажет подходящее приложение и короткую инструкцию."
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
@@ -181,30 +270,48 @@ async def process_instruction_buy(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "instruction_connect")
 async def process_instruction_connect(callback: CallbackQuery, state: FSMContext):
-    """Показать инструкцию подключения VPN."""
+    """Предложить выбрать устройство для инструкции подключения."""
     tg_id = callback.from_user.id
-    logging.info(f"User {tg_id} opened connect instruction")
+    logging.info(f"User {tg_id} opened connection platform selection")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="🛒 Как купить подписку", callback_data="instruction_buy", style="primary")],
+        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
+        [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="how_to_connect", style="danger")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")]
     ])
 
     text = (
         "📲 <b>Как подключить VPN</b>\n\n"
-        "1. Открой раздел <b>🔐 Мои подписки</b>\n"
-        "2. Выбери нужную подписку\n"
-        "3. Открой её и скопируй ключ\n"
-        "4. Скачай <b>Happ Plus</b> из Google Play или App Store\n"
-        "5. Открой приложение <b>Happ Plus</b>\n"
-        "6. Нажми <b>+</b> в правом верхнем углу\n"
-        "7. Выбери <b>Вставить из буфера обмена</b>\n"
-        "8. Подтверди добавление конфигурации\n"
-        "9. Включи подключение\n\n"
-        "Если приложение просит разрешения, просто подтверди их.\n\n"
-        f"Если что-то не получается: {SUPPORT_URL}"
+        "Выбери своё устройство — бот покажет подходящее приложение и короткую инструкцию."
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
+    await state.clear()
+
+
+@router.callback_query(F.data.in_({"instruction_connect_android", "instruction_connect_iphone"}))
+async def process_instruction_connect_platform(callback: CallbackQuery, state: FSMContext):
+    """Показать инструкцию и ссылку на приложение для выбранной платформы."""
+    platform = ANDROID_PLATFORM if callback.data.endswith("_android") else IPHONE_PLATFORM
+    tg_id = callback.from_user.id
+    logging.info(f"User {tg_id} opened {platform} connection instruction")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=connection_app_button_text(platform),
+            url=connection_app_url(platform),
+            style="success",
+        )],
+        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="📱 Выбрать другое устройство", callback_data="instruction_connect", style="primary")],
+        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+
+    await edit_text_with_photo(
+        callback,
+        build_connection_instruction(platform, support_url=SUPPORT_URL),
+        kb,
+        "Как подключиться",
+    )
     await state.clear()

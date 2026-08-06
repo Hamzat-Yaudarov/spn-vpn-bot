@@ -108,7 +108,13 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 )
 
     # Создаём пользователя если его нет
-    await db.create_user(tg_id, username, referrer_id, tracking_code)
+    await db.create_user(
+        tg_id,
+        username,
+        referrer_id,
+        tracking_code,
+        require_news_channel_onboarding=True,
+    )
     await clear_telegram_delivery_blocked(tg_id)
     logger.info(
         "User ensured in database after /start: user=%s username=%s was_new=%s tracking_code=%s referrer_id=%s",
@@ -142,6 +148,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             reply_markup=kb
         )
         await state.set_state(UserStates.waiting_for_agreement)
+    elif await db.needs_news_channel_onboarding(tg_id):
+        await send_news_channel_offer(bot, message.chat.id)
     elif mobile_challenge:
         text, keyboard = mobile_auth_keyboard(
             str(mobile_challenge["id"]),
@@ -150,6 +158,32 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         await message.answer(text, reply_markup=keyboard)
     else:
         await show_main_menu(message)
+
+
+def news_channel_chat() -> str:
+    """Telegram-идентификатор канала для getChatMember."""
+    return f"@{NEWS_CHANNEL_USERNAME.lstrip('@')}"
+
+
+def news_channel_url() -> str:
+    """Публичная ссылка на новостной канал."""
+    return f"https://t.me/{NEWS_CHANNEL_USERNAME.lstrip('@')}"
+
+
+async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False):
+    """Отправить обязательный welcome-экран подписки на канал."""
+    prefix = "Подписка пока не найдена.\n\n" if retry else ""
+    text = (
+        f"{prefix}📢 <b>Подпишитесь на наш новостной канал</b>\n\n"
+        "Так вы не пропустите новости и важные изменения Way SPN.\n"
+        "За подписку мы подарим вам <b>1 день подписки</b>.\n\n"
+        "После подписки нажмите <b>«Проверить»</b>."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Подписаться", url=news_channel_url(), style="primary")],
+        [InlineKeyboardButton(text="Проверить", callback_data="check_news_channel", style="success")],
+    ])
+    await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
 async def show_main_menu(message: Message, user_id: int | None = None):

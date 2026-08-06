@@ -20,6 +20,7 @@ from config import (
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
     REGULAR_TARIFFS,
+    SUPPORT_URL,
     TARIFFS,
 )
 from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
@@ -29,6 +30,13 @@ from services.device_addons import (
     effective_device_limit,
 )
 from services.image_handler import edit_text_with_photo, send_text_with_photo
+from services.connection_instructions import (
+    ANDROID_PLATFORM,
+    IPHONE_PLATFORM,
+    build_connection_instruction,
+    connection_app_button_text,
+    connection_app_url,
+)
 from services.payment_summary import build_payment_success_summary
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
@@ -197,18 +205,6 @@ async def _get_subscription_access_data(subscription) -> tuple[str | None, str, 
 
     remaining_str = _format_remaining(effective_until.replace(tzinfo=timezone.utc).isoformat()) if effective_until else "неизвестно"
     return sub_url, remaining_str, effective_until
-
-
-def _build_instruction_text(sub_url: str) -> str:
-    return (
-        "📲 <b>Инструкция по подключению</b>\n\n"
-        "1. Скачай <b>Happ Plus</b> из Google Play или App Store\n"
-        f"2. Скопируй ключ:\n<code>{sub_url}</code>\n"
-        "3. Открой Happ Plus\n"
-        "4. Нажми <b>+</b> в правом верхнем углу\n"
-        "5. Выбери <b>Вставить из буфера обмена</b>\n\n"
-        "По всем вопросам: @wayspn_support"
-    )
 
 
 def _build_remnawave_username(tg_id: int, subscription_id: int) -> str:
@@ -666,12 +662,9 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
         await callback.answer("Подписка не найдена", show_alert=True)
         return
 
-    sub_url, _, _ = await _get_subscription_access_data(subscription)
-    if not sub_url:
-        await callback.answer("Не удалось получить ключ подписки", show_alert=True)
-        return
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Android", callback_data=f"subscription_instruction_android_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🍎 iPhone", callback_data=f"subscription_instruction_iphone_{subscription_id}", style="primary")],
         [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
         [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
@@ -679,7 +672,47 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
 
     await edit_text_with_photo(
         callback,
-        _build_instruction_text(sub_url),
+        "📲 <b>Инструкция по подключению</b>\n\nВыбери устройство, на котором хочешь подключить эту подписку.",
+        kb,
+        "Как подключиться",
+    )
+
+
+async def _show_subscription_instruction_platform(
+    callback: CallbackQuery,
+    subscription_id: int,
+    platform: str,
+):
+    tg_id = callback.from_user.id
+    subscription = await db.get_subscription_by_id(subscription_id, tg_id)
+
+    if not _is_bot_viewable_subscription(subscription):
+        await callback.answer("Подписка не найдена", show_alert=True)
+        return
+
+    sub_url, _, _ = await _get_subscription_access_data(subscription)
+    if not sub_url:
+        await callback.answer("Не удалось получить ключ подписки", show_alert=True)
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=connection_app_button_text(platform),
+            url=connection_app_url(platform),
+            style="success",
+        )],
+        [InlineKeyboardButton(text="📱 Выбрать другое устройство", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
+    ])
+
+    await edit_text_with_photo(
+        callback,
+        build_connection_instruction(
+            platform,
+            support_url=SUPPORT_URL,
+            subscription_url=sub_url,
+        ),
         kb,
         "Как подключиться",
     )
@@ -1051,10 +1084,24 @@ async def process_delete_subscription_request(callback: CallbackQuery, state: FS
     )
 
 
-@router.callback_query(F.data.startswith("subscription_instruction_"))
+@router.callback_query(F.data.regexp(r"^subscription_instruction_\d+$"))
 async def process_subscription_instruction(callback: CallbackQuery, state: FSMContext):
     subscription_id = int(callback.data.split("_")[-1])
     await _show_subscription_instruction(callback, subscription_id)
+
+
+@router.callback_query(F.data.regexp(r"^subscription_instruction_(android|iphone)_\d+$"))
+async def process_subscription_instruction_platform(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    platform = ANDROID_PLATFORM if parts[-2] == "android" else IPHONE_PLATFORM
+    subscription_id = int(parts[-1])
+    logging.info(
+        "User %s opened %s instruction for subscription %s",
+        callback.from_user.id,
+        platform,
+        subscription_id,
+    )
+    await _show_subscription_instruction_platform(callback, subscription_id, platform)
 
 
 @router.callback_query(F.data.startswith("subscription_devices_"))

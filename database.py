@@ -1,7 +1,7 @@
 import asyncio
 import asyncpg
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import (
     DATABASE_URL,
     PAYMENT_EXPIRY_TIME,
@@ -130,6 +130,9 @@ async def run_migrations():
                 'tg_id': {'type': 'BIGINT', 'nullable': False},
                 'username': {'type': 'TEXT', 'nullable': True},
                 'accepted_terms': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'news_channel_onboarding_required': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
+                'news_channel_bonus_claimed_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'news_channel_bonus_subscription_id': {'type': 'BIGINT', 'nullable': True},
                 'remnawave_uuid': {'type': 'UUID', 'nullable': True},
                 'remnawave_username': {'type': 'TEXT', 'nullable': True},
                 'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
@@ -339,6 +342,9 @@ async def run_migrations():
 
                     -- Условия и подписка
                     accepted_terms BOOLEAN DEFAULT FALSE,
+                    news_channel_onboarding_required BOOLEAN DEFAULT FALSE,
+                    news_channel_bonus_claimed_at TIMESTAMP,
+                    news_channel_bonus_subscription_id BIGINT,
                     remnawave_uuid UUID,
                     remnawave_username TEXT,
                     subscription_until TIMESTAMP,
@@ -816,6 +822,13 @@ async def run_migrations():
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS tracking_code TEXT;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_requested_at TIMESTAMP;",
                 "ALTER TABLE payments ADD COLUMN IF NOT EXISTS refund_status TEXT;",
+                """
+                CREATE INDEX IF NOT EXISTS idx_payments_tracking_paid_purchases
+                ON payments(tracking_code, tg_id)
+                WHERE status = 'paid'
+                  AND refund_requested_at IS NULL
+                  AND amount > 0
+                """,
                 "ALTER TABLE mobile_sessions ADD COLUMN IF NOT EXISTS scoped_subscription_id BIGINT;",
                 "CREATE INDEX IF NOT EXISTS idx_mobile_sessions_scope ON mobile_sessions(scoped_subscription_id, revoked_at);",
             ]
@@ -1372,13 +1385,26 @@ async def user_exists(tg_id: int) -> bool:
     return result is not None
 
 
-async def create_user(tg_id: int, username: str, referrer_id=None, tracking_code: str | None = None):
+async def create_user(
+    tg_id: int,
+    username: str,
+    referrer_id=None,
+    tracking_code: str | None = None,
+    *,
+    require_news_channel_onboarding: bool = False,
+):
     """Создать или обновить пользователя"""
     tracking_code = tracking_code.strip().lower() if tracking_code else None
     await db_execute(
         """
-        INSERT INTO users (tg_id, username, referrer_id, tracking_code)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO users (
+            tg_id,
+            username,
+            referrer_id,
+            tracking_code,
+            news_channel_onboarding_required
+        )
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (tg_id) DO UPDATE
         SET username = COALESCE(EXCLUDED.username, users.username),
             tracking_code = CASE
@@ -1387,7 +1413,7 @@ async def create_user(tg_id: int, username: str, referrer_id=None, tracking_code
                 ELSE users.tracking_code
             END
         """,
-        (tg_id, username, referrer_id, tracking_code)
+        (tg_id, username, referrer_id, tracking_code, require_news_channel_onboarding)
     )
 
 
@@ -1407,6 +1433,242 @@ async def has_accepted_terms(tg_id: int) -> bool:
     """Проверить принял ли пользователь условия"""
     user = await get_user(tg_id)
     return user and user['accepted_terms']
+
+
+async def needs_news_channel_onboarding(tg_id: int) -> bool:
+    """Нужно ли новому пользователю пройти обязательный экран канала."""
+    result = await db_execute(
+        """
+        SELECT 1
+        FROM users
+        WHERE tg_id = $1
+          AND news_channel_onboarding_required = TRUE
+          AND news_channel_bonus_claimed_at IS NULL
+        LIMIT 1
+        """,
+        (tg_id,),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+async def prepare_news_channel_bonus_subscription(tg_id: int):
+    """Создать стабильную локальную цель для однодневного бонуса.
+
+    Запись создаётся один раз под блокировкой строки пользователя. При повторе
+    после сетевой ошибки срок обновляется до полных 24 часов от новой попытки.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user = await conn.fetchrow(
+                """
+                SELECT news_channel_onboarding_required,
+                       news_channel_bonus_claimed_at,
+                       news_channel_bonus_subscription_id
+                FROM users
+                WHERE tg_id = $1
+                FOR UPDATE
+                """,
+                tg_id,
+            )
+            if (
+                not user
+                or not user['news_channel_onboarding_required']
+                or user['news_channel_bonus_claimed_at'] is not None
+            ):
+                return None
+
+            subscription_id = user['news_channel_bonus_subscription_id']
+            if subscription_id is not None:
+                subscription = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE id = $1 AND tg_id = $2",
+                    subscription_id,
+                    tg_id,
+                )
+                if subscription:
+                    subscription_until = datetime.utcnow() + timedelta(days=1)
+                    next_notification, notification_type = _calculate_notification_fields(subscription_until)
+                    return await conn.fetchrow(
+                        """
+                        UPDATE subscriptions
+                        SET subscription_until = $3,
+                            is_active = FALSE,
+                            is_visible = FALSE,
+                            is_renewable = FALSE,
+                            next_notification_time = $4,
+                            notification_type = $5,
+                            updated_at = now()
+                        WHERE id = $1 AND tg_id = $2
+                        RETURNING *
+                        """,
+                        subscription_id,
+                        tg_id,
+                        subscription_until,
+                        next_notification,
+                        notification_type,
+                    )
+
+            subscriptions = await conn.fetch(
+                """
+                SELECT slot_number, type_index, plan_kind
+                FROM subscriptions
+                WHERE tg_id = $1
+                """,
+                tg_id,
+            )
+            taken_slots = {row['slot_number'] for row in subscriptions}
+            taken_type_indexes = {
+                row['type_index']
+                for row in subscriptions
+                if row['plan_kind'] == 'regular' and row['type_index'] is not None
+            }
+            slot_number = next(
+                (
+                    slot
+                    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER * 2 + 1)
+                    if slot not in taken_slots
+                ),
+                None,
+            )
+            type_index = next(
+                (
+                    index
+                    for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
+                    if index not in taken_type_indexes
+                ),
+                None,
+            )
+            if slot_number is None or type_index is None:
+                return None
+
+            subscription_until = datetime.utcnow() + timedelta(days=1)
+            next_notification, notification_type = _calculate_notification_fields(subscription_until)
+            subscription = await conn.fetchrow(
+                """
+                INSERT INTO subscriptions (
+                    tg_id,
+                    slot_number,
+                    subscription_until,
+                    is_active,
+                    plan_kind,
+                    type_index,
+                    generation,
+                    is_visible,
+                    is_renewable,
+                    purchase_days,
+                    traffic_enabled,
+                    base_traffic_bytes,
+                    current_paid_traffic_bytes,
+                    carried_traffic_bytes,
+                    current_period_limit_bytes,
+                    hwid_device_limit,
+                    next_notification_time,
+                    notification_type
+                )
+                VALUES (
+                    $1, $2, $3, FALSE, 'regular', $4, 'v2', FALSE, FALSE, 1,
+                    FALSE, 0, 0, 0, 0, $5, $6, $7
+                )
+                RETURNING *
+                """,
+                tg_id,
+                slot_number,
+                subscription_until,
+                type_index,
+                REGULAR_HWID_DEVICE_LIMIT,
+                next_notification,
+                notification_type,
+            )
+            await conn.execute(
+                """
+                UPDATE users
+                SET news_channel_bonus_subscription_id = $2,
+                    updated_at = now()
+                WHERE tg_id = $1
+                """,
+                tg_id,
+                subscription['id'],
+            )
+            return subscription
+
+
+async def finalize_news_channel_bonus(
+    tg_id: int,
+    subscription_id: int,
+    uuid: str,
+    username: str,
+    subscription_until,
+    squad_uuid: str,
+) -> bool:
+    """Атомарно показать активированную подписку и завершить onboarding."""
+    next_notification, notification_type = _calculate_notification_fields(subscription_until)
+    result = await db_execute(
+        """
+        WITH eligible AS (
+            SELECT 1
+            FROM users
+            WHERE tg_id = $1
+              AND news_channel_onboarding_required = TRUE
+              AND news_channel_bonus_claimed_at IS NULL
+              AND news_channel_bonus_subscription_id = $2
+              AND EXISTS (
+                  SELECT 1 FROM subscriptions
+                  WHERE id = $2 AND tg_id = $1
+              )
+            FOR UPDATE
+        ),
+        claimed AS (
+            UPDATE users
+            SET news_channel_bonus_claimed_at = now(),
+                updated_at = now()
+            WHERE tg_id = $1
+              AND EXISTS (SELECT 1 FROM eligible)
+            RETURNING 1
+        ),
+        activated AS (
+            UPDATE subscriptions
+            SET remnawave_uuid = $3,
+                remnawave_username = $4,
+                subscription_until = $5,
+                squad_uuid = $6,
+                next_notification_time = $7,
+                notification_type = $8,
+                is_active = TRUE,
+                is_visible = TRUE,
+                is_renewable = TRUE,
+                updated_at = now()
+            WHERE id = $2
+              AND tg_id = $1
+              AND EXISTS (SELECT 1 FROM claimed)
+            RETURNING 1
+        )
+        SELECT EXISTS(SELECT 1 FROM activated) AS finalized
+        """,
+        (
+            tg_id,
+            subscription_id,
+            uuid,
+            username,
+            subscription_until,
+            squad_uuid,
+            next_notification,
+            notification_type,
+        ),
+        fetch_one=True,
+    )
+    finalized = bool(result and result['finalized'])
+    if finalized:
+        try:
+            await sync_primary_subscription_to_user(tg_id)
+        except Exception:
+            # V2-подписка уже активирована атомарно. Ошибка совместимых legacy-
+            # полей не должна повторно запускать выдачу бонуса.
+            logging.exception(
+                "Failed to sync legacy primary subscription after channel bonus for user %s",
+                tg_id,
+            )
+    return finalized
 
 
 # ────────────────────────────────────────────────
@@ -3764,18 +4026,59 @@ async def set_promo_code_active(code: str, active: bool) -> bool:
 
 
 async def list_tracking_links_with_stats():
+    """Список tracking-ссылок с переходами и подтверждёнными покупками.
+
+    Покупка относится к ссылке по коду, сохранённому в ``payments`` в момент
+    создания счёта. Это сохраняет корректную last-touch атрибуцию даже если
+    first-touch код пользователя отличается. Служебные записи, неоплаченные
+    счета и покупки с запрошенным возвратом в показатели не входят.
+    """
     return await db_execute(
         """
+        WITH click_stats AS (
+            SELECT
+                code,
+                COUNT(*) AS clicks,
+                COUNT(DISTINCT tg_id) AS unique_clicks
+            FROM tracking_link_clicks
+            GROUP BY code
+        ),
+        user_stats AS (
+            SELECT tracking_code AS code, COUNT(*) AS users_count
+            FROM users
+            WHERE tracking_code IS NOT NULL
+            GROUP BY tracking_code
+        ),
+        purchase_stats AS (
+            SELECT
+                tracking_code AS code,
+                COUNT(*) AS purchases_count,
+                COUNT(DISTINCT tg_id) AS unique_buyers,
+                COALESCE(SUM(amount), 0) AS revenue
+            FROM payments
+            WHERE tracking_code IS NOT NULL
+              AND status = 'paid'
+              AND provider IN ('cryptobot', 'yookassa')
+              AND payment_kind IN ('subscription', 'traffic_package', 'device_addon')
+              AND amount > 0
+              AND refund_requested_at IS NULL
+            GROUP BY tracking_code
+        )
         SELECT
             l.code,
             l.title,
             l.is_active,
             l.created_at,
-            (SELECT COUNT(*) FROM tracking_link_clicks c WHERE c.code = l.code) AS clicks,
-            (SELECT COUNT(DISTINCT c.tg_id) FROM tracking_link_clicks c WHERE c.code = l.code) AS unique_clicks,
-            (SELECT COUNT(*) FROM users u WHERE u.tracking_code = l.code) AS users_count,
-            (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.tracking_code = l.code AND p.status = 'paid') AS revenue
+            COALESCE(clicks.clicks, 0) AS clicks,
+            COALESCE(clicks.unique_clicks, 0) AS unique_clicks,
+            COALESCE(users.users_count, 0) AS users_count,
+            COALESCE(purchases.unique_buyers, 0) AS unique_buyers,
+            COALESCE(purchases.purchases_count, 0) AS purchases_count,
+            COALESCE(purchases.revenue, 0) AS revenue
         FROM tracking_links l
+        LEFT JOIN click_stats clicks ON clicks.code = l.code
+        LEFT JOIN user_stats users ON users.code = l.code
+        LEFT JOIN purchase_stats purchases ON purchases.code = l.code
         ORDER BY l.created_at DESC, l.code ASC
         """,
         fetch_all=True,

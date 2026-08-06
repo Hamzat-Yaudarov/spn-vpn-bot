@@ -181,6 +181,9 @@ async def admin_toggle_promo(code: str, body: ToggleBody, _: int = Depends(requi
 async def admin_links(_: int = Depends(require_admin)):
     items = _plain(await db.list_tracking_links_with_stats())
     for item in items:
+        # Явно фиксируем числовой контракт API, в том числе для ссылок без оплат.
+        item["unique_buyers"] = int(item.get("unique_buyers") or 0)
+        item["purchases_count"] = int(item.get("purchases_count") or 0)
         item["bot_url"] = f"https://t.me/{BOT_USERNAME}?start={item['code']}"
         item["site_url"] = f"{PUBLIC_SITE_URL}/?t={item['code']}"
     return {"items": items, "bot_username": BOT_USERNAME, "site_url": PUBLIC_SITE_URL}
