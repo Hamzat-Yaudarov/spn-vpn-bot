@@ -3,7 +3,12 @@ import logging
 import aiohttp
 
 import database as db
-from config import REGULAR_HWID_DEVICE_LIMIT, REGULAR_SQUAD_UUID
+from config import (
+    BYPASS_BASE_TRAFFIC_GB,
+    BYPASS_HWID_DEVICE_LIMIT,
+    BYPASS_SQUAD_UUID,
+    GB_BYTES,
+)
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_set_subscription_expiry,
@@ -14,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 async def activate_news_channel_bonus(tg_id: int) -> bool:
-    """Активировать новому пользователю одну обычную подписку на один день.
+    """Активировать новому пользователю антиглушилку на один день.
 
     Повтор после сетевого сбоя использует ту же скрытую запись, но заново даёт
     полные 24 часа. Видимой она становится только при атомарном завершении.
@@ -28,7 +33,7 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
     type_index = int(subscription.get('type_index') or subscription_id)
     remna_username = (
         subscription.get('remnawave_username')
-        or f"tg_{tg_id}_regular_{type_index}"
+        or f"tg_{tg_id}_bypass_{type_index}"
     )
     subscription_until = subscription['subscription_until']
 
@@ -41,10 +46,10 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
             days=1,
             extend_if_exists=False,
             remna_username=remna_username,
-            traffic_limit_bytes=0,
+            traffic_limit_bytes=BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
             traffic_limit_strategy="NO_RESET",
-            active_internal_squads=[REGULAR_SQUAD_UUID],
-            hwid_device_limit=REGULAR_HWID_DEVICE_LIMIT,
+            active_internal_squads=[BYPASS_SQUAD_UUID],
+            hwid_device_limit=BYPASS_HWID_DEVICE_LIMIT,
             telegram_id=tg_id,
         )
         if not uuid:
@@ -61,7 +66,7 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
         uuid,
         username or remna_username,
         subscription_until,
-        REGULAR_SQUAD_UUID,
+        BYPASS_SQUAD_UUID,
     )
     if not finalized and await db.needs_news_channel_onboarding(tg_id):
         logger.error("Failed to finalize news-channel bonus for user %s", tg_id)

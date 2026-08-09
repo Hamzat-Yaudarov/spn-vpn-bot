@@ -176,7 +176,7 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
     text = (
         f"{prefix}📢 <b>Подпишитесь на наш новостной канал</b>\n\n"
         "Так вы не пропустите новости и важные изменения Way SPN.\n"
-        "За подписку мы подарим вам <b>1 день подписки</b>.\n\n"
+        "За подписку мы подарим вам <b>1 день подписки с антиглушилкой</b>.\n\n"
         "После подписки нажмите <b>«Проверить»</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

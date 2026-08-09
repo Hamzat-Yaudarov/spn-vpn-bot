@@ -119,7 +119,7 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
     await state.clear()
     await callback.bot.send_message(
         chat_id,
-        "✅ Подписка на канал подтверждена. Вам начислен <b>1 день подписки</b>!",
+        "✅ Подписка на канал подтверждена. Вам начислен <b>1 день подписки с антиглушилкой</b>!",
     )
 
     pending_challenge = await pending_challenge_for_user(tg_id)

@@ -1492,15 +1492,63 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
                     tg_id,
                 )
                 if subscription:
+                    other_bypass_subscriptions = await conn.fetch(
+                        """
+                        SELECT type_index
+                        FROM subscriptions
+                        WHERE tg_id = $1
+                          AND plan_kind = 'bypass'
+                          AND id <> $2
+                        """,
+                        tg_id,
+                        subscription_id,
+                    )
+                    taken_type_indexes = {
+                        row['type_index']
+                        for row in other_bypass_subscriptions
+                        if row['type_index'] is not None
+                    }
+                    type_index = subscription.get('type_index')
+                    if (
+                        type_index is None
+                        or type_index not in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
+                        or type_index in taken_type_indexes
+                    ):
+                        type_index = next(
+                            (
+                                index
+                                for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
+                                if index not in taken_type_indexes
+                            ),
+                            None,
+                        )
+                    if type_index is None:
+                        return None
+
                     subscription_until = datetime.utcnow() + timedelta(days=1)
+                    traffic_reset_at = subscription_until + timedelta(days=29)
                     next_notification, notification_type = _calculate_notification_fields(subscription_until)
                     return await conn.fetchrow(
                         """
                         UPDATE subscriptions
                         SET subscription_until = $3,
+                            plan_kind = 'bypass',
+                            type_index = $9,
+                            remnawave_uuid = NULL,
+                            remnawave_username = NULL,
+                            squad_uuid = NULL,
                             is_active = FALSE,
                             is_visible = FALSE,
                             is_renewable = FALSE,
+                            traffic_enabled = TRUE,
+                            base_traffic_bytes = $6,
+                            current_paid_traffic_bytes = 0,
+                            carried_traffic_bytes = 0,
+                            current_period_limit_bytes = $6,
+                            traffic_reset_at = $7,
+                            last_known_used_traffic_bytes = 0,
+                            last_traffic_sync_at = NULL,
+                            hwid_device_limit = $8,
                             next_notification_time = $4,
                             notification_type = $5,
                             updated_at = now()
@@ -1512,6 +1560,10 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
                         subscription_until,
                         next_notification,
                         notification_type,
+                        BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
+                        traffic_reset_at,
+                        BYPASS_HWID_DEVICE_LIMIT,
+                        type_index,
                     )
 
             subscriptions = await conn.fetch(
@@ -1526,7 +1578,7 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
             taken_type_indexes = {
                 row['type_index']
                 for row in subscriptions
-                if row['plan_kind'] == 'regular' and row['type_index'] is not None
+                if row['plan_kind'] == 'bypass' and row['type_index'] is not None
             }
             slot_number = next(
                 (
@@ -1548,6 +1600,7 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
                 return None
 
             subscription_until = datetime.utcnow() + timedelta(days=1)
+            traffic_reset_at = subscription_until + timedelta(days=29)
             next_notification, notification_type = _calculate_notification_fields(subscription_until)
             subscription = await conn.fetchrow(
                 """
@@ -1567,13 +1620,14 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
                     current_paid_traffic_bytes,
                     carried_traffic_bytes,
                     current_period_limit_bytes,
+                    traffic_reset_at,
                     hwid_device_limit,
                     next_notification_time,
                     notification_type
                 )
                 VALUES (
-                    $1, $2, $3, FALSE, 'regular', $4, 'v2', FALSE, FALSE, 1,
-                    FALSE, 0, 0, 0, 0, $5, $6, $7
+                    $1, $2, $3, FALSE, 'bypass', $4, 'v2', FALSE, FALSE, 1,
+                    TRUE, $5, 0, 0, $5, $6, $7, $8, $9
                 )
                 RETURNING *
                 """,
@@ -1581,7 +1635,9 @@ async def prepare_news_channel_bonus_subscription(tg_id: int):
                 slot_number,
                 subscription_until,
                 type_index,
-                REGULAR_HWID_DEVICE_LIMIT,
+                BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
+                traffic_reset_at,
+                BYPASS_HWID_DEVICE_LIMIT,
                 next_notification,
                 notification_type,
             )

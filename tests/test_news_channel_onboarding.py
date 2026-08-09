@@ -84,8 +84,12 @@ class ChannelBonusPreparationTests(unittest.IsolatedAsyncioTestCase):
         await database.prepare_news_channel_bonus_subscription(123)
 
         insert_query = connection.fetchrow.await_args_list[1].args[0]
-        self.assertIn("FALSE, 'regular'", insert_query)
+        insert_args = connection.fetchrow.await_args_list[1].args
+        self.assertIn("FALSE, 'bypass'", insert_query)
         self.assertIn("'v2', FALSE, FALSE", insert_query)
+        self.assertIn("TRUE, $5, 0, 0, $5", insert_query)
+        self.assertEqual(insert_args[5], database.BYPASS_BASE_TRAFFIC_GB * database.GB_BYTES)
+        self.assertEqual(insert_args[7], database.BYPASS_HWID_DEVICE_LIMIT)
 
     @patch("database.get_pool", new_callable=AsyncMock)
     async def test_retry_refreshes_bonus_to_full_day(self, get_pool):
@@ -93,7 +97,7 @@ class ChannelBonusPreparationTests(unittest.IsolatedAsyncioTestCase):
         refreshed = {"id": 55, "subscription_until": datetime.utcnow() + timedelta(days=1)}
         connection = SimpleNamespace()
         connection.transaction = lambda: _AsyncContext()
-        connection.fetch = AsyncMock()
+        connection.fetch = AsyncMock(return_value=[])
         connection.execute = AsyncMock()
         connection.fetchrow = AsyncMock(side_effect=[
             {
@@ -109,7 +113,42 @@ class ChannelBonusPreparationTests(unittest.IsolatedAsyncioTestCase):
         await database.prepare_news_channel_bonus_subscription(123)
 
         update_args = connection.fetchrow.await_args_list[2].args
+        update_query = update_args[0]
         self.assertGreater(update_args[3], datetime.utcnow() + timedelta(hours=23, minutes=55))
+        self.assertIn("plan_kind = 'bypass'", update_query)
+        self.assertIn("type_index = $9", update_query)
+        self.assertIn("traffic_enabled = TRUE", update_query)
+        self.assertEqual(update_args[6], database.BYPASS_BASE_TRAFFIC_GB * database.GB_BYTES)
+        self.assertEqual(update_args[8], database.BYPASS_HWID_DEVICE_LIMIT)
+        self.assertEqual(update_args[9], 1)
+
+    @patch("database.get_pool", new_callable=AsyncMock)
+    async def test_retry_chooses_free_bypass_index(self, get_pool):
+        connection = SimpleNamespace()
+        connection.transaction = lambda: _AsyncContext()
+        connection.fetch = AsyncMock(return_value=[{"type_index": 1}])
+        connection.execute = AsyncMock()
+        connection.fetchrow = AsyncMock(side_effect=[
+            {
+                "news_channel_onboarding_required": True,
+                "news_channel_bonus_claimed_at": None,
+                "news_channel_bonus_subscription_id": 55,
+            },
+            {
+                "id": 55,
+                "plan_kind": "regular",
+                "type_index": 1,
+                "subscription_until": datetime.utcnow() + timedelta(minutes=5),
+            },
+            {"id": 55, "plan_kind": "bypass", "type_index": 2},
+        ])
+        get_pool.return_value = _Pool(connection)
+
+        subscription = await database.prepare_news_channel_bonus_subscription(123)
+
+        self.assertEqual(subscription["type_index"], 2)
+        update_args = connection.fetchrow.await_args_list[2].args
+        self.assertEqual(update_args[9], 2)
 
 
 class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
@@ -131,7 +170,7 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
             "remnawave_username": None,
             "subscription_until": expires_at,
         }
-        get_or_create.return_value = ("uuid-55", "tg_123_regular_1")
+        get_or_create.return_value = ("uuid-55", "tg_123_bypass_1")
         set_expiry.return_value = True
         finalize.return_value = True
 
@@ -139,6 +178,18 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(activated)
         self.assertFalse(get_or_create.await_args.kwargs["extend_if_exists"])
+        self.assertEqual(
+            get_or_create.await_args.kwargs["traffic_limit_bytes"],
+            channel_bonus.BYPASS_BASE_TRAFFIC_GB * channel_bonus.GB_BYTES,
+        )
+        self.assertEqual(
+            get_or_create.await_args.kwargs["active_internal_squads"],
+            [channel_bonus.BYPASS_SQUAD_UUID],
+        )
+        self.assertEqual(
+            get_or_create.await_args.kwargs["hwid_device_limit"],
+            channel_bonus.BYPASS_HWID_DEVICE_LIMIT,
+        )
         set_expiry.assert_awaited_once_with(
             get_or_create.await_args.args[0],
             "uuid-55",
@@ -148,9 +199,9 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
             123,
             55,
             "uuid-55",
-            "tg_123_regular_1",
+            "tg_123_bypass_1",
             expires_at,
-            channel_bonus.REGULAR_SQUAD_UUID,
+            channel_bonus.BYPASS_SQUAD_UUID,
         )
 
 
@@ -162,10 +213,10 @@ class ChannelBonusFinalizationTests(unittest.IsolatedAsyncioTestCase):
         expires_at = datetime.utcnow() + timedelta(days=1)
 
         first = await database.finalize_news_channel_bonus(
-            123, 55, "uuid-55", "tg_123_regular_1", expires_at, "regular-squad"
+            123, 55, "uuid-55", "tg_123_bypass_1", expires_at, "bypass-squad"
         )
         second = await database.finalize_news_channel_bonus(
-            123, 55, "uuid-55", "tg_123_regular_1", expires_at, "regular-squad"
+            123, 55, "uuid-55", "tg_123_bypass_1", expires_at, "bypass-squad"
         )
 
         self.assertTrue(first)
