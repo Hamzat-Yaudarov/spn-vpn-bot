@@ -11,6 +11,7 @@ from config import (
 )
 from services.remnawave import (
     remnawave_get_or_create_user,
+    remnawave_get_subscription_url,
     remnawave_set_subscription_expiry,
 )
 
@@ -18,7 +19,7 @@ from services.remnawave import (
 logger = logging.getLogger(__name__)
 
 
-async def activate_news_channel_bonus(tg_id: int) -> bool:
+async def activate_news_channel_bonus(tg_id: int) -> str | None:
     """Активировать новому пользователю антиглушилку на один день.
 
     Повтор после сетевого сбоя использует ту же скрытую запись, но заново даёт
@@ -27,7 +28,7 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
     """
     subscription = await db.prepare_news_channel_bonus_subscription(tg_id)
     if subscription is None:
-        return not await db.needs_news_channel_onboarding(tg_id)
+        return None
 
     subscription_id = int(subscription['id'])
     type_index = int(subscription.get('type_index') or subscription_id)
@@ -54,11 +55,16 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
         )
         if not uuid:
             logger.error("Failed to create Remnawave welcome subscription for user %s", tg_id)
-            return False
+            return None
 
         if not await remnawave_set_subscription_expiry(session, uuid, subscription_until):
             logger.error("Failed to set welcome subscription expiry for user %s", tg_id)
-            return False
+            return None
+
+        subscription_url = await remnawave_get_subscription_url(session, uuid)
+        if not subscription_url:
+            logger.error("Failed to get welcome subscription URL for user %s", tg_id)
+            return None
 
     finalized = await db.finalize_news_channel_bonus(
         tg_id,
@@ -70,7 +76,7 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
     )
     if not finalized and await db.needs_news_channel_onboarding(tg_id):
         logger.error("Failed to finalize news-channel bonus for user %s", tg_id)
-        return False
+        return None
 
     logger.info(
         "News-channel bonus activated for user %s, subscription %s, until %s",
@@ -78,4 +84,4 @@ async def activate_news_channel_bonus(tg_id: int) -> bool:
         subscription_id,
         subscription_until,
     )
-    return True
+    return subscription_url

@@ -1,3 +1,4 @@
+import html
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -101,14 +102,14 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
         return
 
     try:
-        activated = await activate_news_channel_bonus(tg_id)
+        subscription_url = await activate_news_channel_bonus(tg_id)
     except Exception as exc:
         logger.exception("News-channel bonus activation failed for user %s: %s", tg_id, exc)
-        activated = False
+        subscription_url = None
     finally:
         await db.release_user_lock(tg_id)
 
-    if not activated:
+    if not subscription_url:
         await callback.bot.send_message(
             chat_id,
             "Не удалось активировать подарочный день. Попробуйте ещё раз чуть позже.",
@@ -117,9 +118,23 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
         return
 
     await state.clear()
+    support_url = "https://t.me/wayspn_support"
+    support_username = "@wayspn_support"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [InlineKeyboardButton(text="🆘 Поддержка", url=support_url, style="success")],
+    ])
     await callback.bot.send_message(
         chat_id,
-        "✅ Подписка на канал подтверждена. Вам начислен <b>1 день подписки с антиглушилкой</b>!",
+        (
+            "✅ <b>Пробная подписка с антиглушилкой активирована на 1 день!</b>\n\n"
+            "🔑 <b>Ваш пробный ключ:</b>\n"
+            f"<code>{html.escape(subscription_url)}</code>\n\n"
+            "Скачайте приложение <b>Happ Plus</b> или <b>INCY</b> и добавьте туда ключ.\n\n"
+            "По любым вопросам пишите в поддержку:\n"
+            f"{html.escape(support_username)}"
+        ),
+        reply_markup=keyboard,
     )
 
     pending_challenge = await pending_challenge_for_user(tg_id)
@@ -129,9 +144,6 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
             pending_challenge.get("device_name"),
         )
         await callback.bot.send_message(chat_id, text, reply_markup=keyboard)
-
-    await show_main_menu(callback.message, tg_id)
-
 
 @router.callback_query(F.data.startswith("mobile_auth_approve:"))
 async def process_mobile_auth_approval(callback: CallbackQuery, state: FSMContext):

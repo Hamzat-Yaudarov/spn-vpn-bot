@@ -153,6 +153,7 @@ class ChannelBonusPreparationTests(unittest.IsolatedAsyncioTestCase):
 
 class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
     @patch("services.channel_bonus.db.finalize_news_channel_bonus", new_callable=AsyncMock)
+    @patch("services.channel_bonus.remnawave_get_subscription_url", new_callable=AsyncMock)
     @patch("services.channel_bonus.remnawave_set_subscription_expiry", new_callable=AsyncMock)
     @patch("services.channel_bonus.remnawave_get_or_create_user", new_callable=AsyncMock)
     @patch("services.channel_bonus.db.prepare_news_channel_bonus_subscription", new_callable=AsyncMock)
@@ -161,6 +162,7 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
         prepare,
         get_or_create,
         set_expiry,
+        get_subscription_url,
         finalize,
     ):
         expires_at = datetime.utcnow() + timedelta(days=1)
@@ -172,11 +174,12 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
         }
         get_or_create.return_value = ("uuid-55", "tg_123_bypass_1")
         set_expiry.return_value = True
+        get_subscription_url.return_value = "https://sub.wayspn.online/trial-key"
         finalize.return_value = True
 
-        activated = await channel_bonus.activate_news_channel_bonus(123)
+        subscription_url = await channel_bonus.activate_news_channel_bonus(123)
 
-        self.assertTrue(activated)
+        self.assertEqual(subscription_url, "https://sub.wayspn.online/trial-key")
         self.assertFalse(get_or_create.await_args.kwargs["extend_if_exists"])
         self.assertEqual(
             get_or_create.await_args.kwargs["traffic_limit_bytes"],
@@ -194,6 +197,10 @@ class ChannelBonusActivationTests(unittest.IsolatedAsyncioTestCase):
             get_or_create.await_args.args[0],
             "uuid-55",
             expires_at,
+        )
+        get_subscription_url.assert_awaited_once_with(
+            get_or_create.await_args.args[0],
+            "uuid-55",
         )
         finalize.assert_awaited_once_with(
             123,
@@ -242,24 +249,22 @@ class ChannelCheckHandlerTests(unittest.IsolatedAsyncioTestCase):
         send_offer.assert_awaited_once_with(callback.bot, 777, retry=True)
         state.clear.assert_not_awaited()
 
-    @patch("handlers.callbacks.show_main_menu", new_callable=AsyncMock)
     @patch("handlers.callbacks.pending_challenge_for_user", new_callable=AsyncMock)
     @patch("handlers.callbacks.activate_news_channel_bonus", new_callable=AsyncMock)
     @patch("handlers.callbacks.db.release_user_lock", new_callable=AsyncMock)
     @patch("handlers.callbacks.db.acquire_user_lock", new_callable=AsyncMock)
     @patch("handlers.callbacks.db.needs_news_channel_onboarding", new_callable=AsyncMock)
-    async def test_subscribed_user_gets_bonus_once_and_main_menu(
+    async def test_subscribed_user_gets_trial_key_instruction_without_opening_menu(
         self,
         needs,
         acquire_lock,
         release_lock,
         activate,
         pending_challenge,
-        show_menu,
     ):
         needs.return_value = True
         acquire_lock.return_value = True
-        activate.return_value = True
+        activate.return_value = "https://sub.wayspn.online/trial-key?a=1&b=2"
         pending_challenge.return_value = None
         callback = _callback(status="member")
         state = AsyncMock()
@@ -270,7 +275,19 @@ class ChannelCheckHandlerTests(unittest.IsolatedAsyncioTestCase):
         activate.assert_awaited_once_with(123)
         release_lock.assert_awaited_once_with(123)
         state.clear.assert_awaited_once()
-        show_menu.assert_awaited_once_with(callback.message, 123)
+        sent = callback.bot.send_message.await_args
+        self.assertEqual(sent.args[0], 777)
+        self.assertIn("Пробная подписка с антиглушилкой", sent.args[1])
+        self.assertIn(
+            "https://sub.wayspn.online/trial-key?a=1&amp;b=2",
+            sent.args[1],
+        )
+        self.assertIn("Happ Plus", sent.args[1])
+        self.assertIn("INCY", sent.args[1])
+        self.assertIn("@wayspn_support", sent.args[1])
+        keyboard = sent.kwargs["reply_markup"].inline_keyboard
+        self.assertEqual(keyboard[0][0].callback_data, "back_to_menu")
+        self.assertEqual(keyboard[1][0].url, "https://t.me/wayspn_support")
 
 
 if __name__ == "__main__":
