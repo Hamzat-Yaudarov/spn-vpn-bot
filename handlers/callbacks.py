@@ -1,4 +1,3 @@
-import html
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -11,7 +10,6 @@ from handlers.start import (
     send_news_channel_offer,
     show_main_menu,
 )
-from services.channel_bonus import activate_news_channel_bonus
 from services.image_handler import edit_text_with_photo
 from services.mobile_auth import approve_challenge, pending_challenge_for_user
 from services.connection_instructions import (
@@ -64,7 +62,7 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "check_news_channel")
 async def process_check_news_channel(callback: CallbackQuery, state: FSMContext):
-    """Проверить подписку нового пользователя и выдать однодневный бонус."""
+    """Проверить подписку нового пользователя и завершить welcome-экран."""
     tg_id = callback.from_user.id
     chat_id = callback.message.chat.id
     await callback.answer()
@@ -96,46 +94,22 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
         await send_news_channel_offer(callback.bot, chat_id, retry=True)
         return
 
-    if not await db.acquire_user_lock(tg_id):
-        await callback.bot.send_message(chat_id, "Проверка уже выполняется. Нажмите кнопку ещё раз.")
-        await send_news_channel_offer(callback.bot, chat_id)
-        return
-
     try:
-        subscription_url = await activate_news_channel_bonus(tg_id)
+        completed = await db.complete_news_channel_onboarding(tg_id)
     except Exception as exc:
-        logger.exception("News-channel bonus activation failed for user %s: %s", tg_id, exc)
-        subscription_url = None
-    finally:
-        await db.release_user_lock(tg_id)
+        logger.exception("News-channel onboarding completion failed for user %s: %s", tg_id, exc)
+        completed = False
 
-    if not subscription_url:
+    if not completed and await db.needs_news_channel_onboarding(tg_id):
         await callback.bot.send_message(
             chat_id,
-            "Не удалось активировать подарочный день. Попробуйте ещё раз чуть позже.",
+            "Не удалось завершить проверку. Попробуйте ещё раз чуть позже.",
         )
         await send_news_channel_offer(callback.bot, chat_id)
         return
 
     await state.clear()
-    support_url = "https://t.me/wayspn_support"
-    support_username = "@wayspn_support"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=support_url, style="success")],
-    ])
-    await callback.bot.send_message(
-        chat_id,
-        (
-            "✅ <b>Пробная подписка с антиглушилкой активирована на 1 день!</b>\n\n"
-            "🔑 <b>Ваш пробный ключ:</b>\n"
-            f"<code>{html.escape(subscription_url)}</code>\n\n"
-            "Скачайте приложение <b>Happ Plus</b> или <b>INCY</b> и добавьте туда ключ.\n\n"
-            "По любым вопросам пишите в поддержку:\n"
-            f"{html.escape(support_username)}"
-        ),
-        reply_markup=keyboard,
-    )
+    await show_main_menu(callback.message, tg_id)
 
     pending_challenge = await pending_challenge_for_user(tg_id)
     if pending_challenge:
@@ -144,6 +118,7 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
             pending_challenge.get("device_name"),
         )
         await callback.bot.send_message(chat_id, text, reply_markup=keyboard)
+
 
 @router.callback_query(F.data.startswith("mobile_auth_approve:"))
 async def process_mobile_auth_approval(callback: CallbackQuery, state: FSMContext):

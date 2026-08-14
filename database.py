@@ -1457,279 +1457,49 @@ async def needs_news_channel_onboarding(tg_id: int) -> bool:
     return result is not None
 
 
-async def prepare_news_channel_bonus_subscription(tg_id: int):
-    """Создать стабильную локальную цель для однодневного бонуса.
+async def complete_news_channel_onboarding(tg_id: int) -> bool:
+    """Завершить welcome-экран канала без выдачи подписки.
 
-    Запись создаётся один раз под блокировкой строки пользователя. При повторе
-    после сетевой ошибки срок обновляется до полных 24 часов от новой попытки.
+    Если старый сценарий успел создать скрытую локальную заготовку, она
+    удаляется только когда ещё не активирована и не связана с Remnawave.
+    Уже выданные пользователям подписки не изменяются.
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            user = await conn.fetchrow(
-                """
-                SELECT news_channel_onboarding_required,
-                       news_channel_bonus_claimed_at,
-                       news_channel_bonus_subscription_id
-                FROM users
-                WHERE tg_id = $1
-                FOR UPDATE
-                """,
-                tg_id,
-            )
-            if (
-                not user
-                or not user['news_channel_onboarding_required']
-                or user['news_channel_bonus_claimed_at'] is not None
-            ):
-                return None
-
-            subscription_id = user['news_channel_bonus_subscription_id']
-            if subscription_id is not None:
-                subscription = await conn.fetchrow(
-                    "SELECT * FROM subscriptions WHERE id = $1 AND tg_id = $2",
-                    subscription_id,
-                    tg_id,
-                )
-                if subscription:
-                    other_bypass_subscriptions = await conn.fetch(
-                        """
-                        SELECT type_index
-                        FROM subscriptions
-                        WHERE tg_id = $1
-                          AND plan_kind = 'bypass'
-                          AND id <> $2
-                        """,
-                        tg_id,
-                        subscription_id,
-                    )
-                    taken_type_indexes = {
-                        row['type_index']
-                        for row in other_bypass_subscriptions
-                        if row['type_index'] is not None
-                    }
-                    type_index = subscription.get('type_index')
-                    if (
-                        type_index is None
-                        or type_index not in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
-                        or type_index in taken_type_indexes
-                    ):
-                        type_index = next(
-                            (
-                                index
-                                for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
-                                if index not in taken_type_indexes
-                            ),
-                            None,
-                        )
-                    if type_index is None:
-                        return None
-
-                    subscription_until = datetime.utcnow() + timedelta(days=1)
-                    traffic_reset_at = subscription_until + timedelta(days=29)
-                    next_notification, notification_type = _calculate_notification_fields(subscription_until)
-                    return await conn.fetchrow(
-                        """
-                        UPDATE subscriptions
-                        SET subscription_until = $3,
-                            plan_kind = 'bypass',
-                            type_index = $9,
-                            remnawave_uuid = NULL,
-                            remnawave_username = NULL,
-                            squad_uuid = NULL,
-                            is_active = FALSE,
-                            is_visible = FALSE,
-                            is_renewable = FALSE,
-                            traffic_enabled = TRUE,
-                            base_traffic_bytes = $6,
-                            current_paid_traffic_bytes = 0,
-                            carried_traffic_bytes = 0,
-                            current_period_limit_bytes = $6,
-                            traffic_reset_at = $7,
-                            last_known_used_traffic_bytes = 0,
-                            last_traffic_sync_at = NULL,
-                            hwid_device_limit = $8,
-                            next_notification_time = $4,
-                            notification_type = $5,
-                            updated_at = now()
-                        WHERE id = $1 AND tg_id = $2
-                        RETURNING *
-                        """,
-                        subscription_id,
-                        tg_id,
-                        subscription_until,
-                        next_notification,
-                        notification_type,
-                        BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
-                        traffic_reset_at,
-                        BYPASS_HWID_DEVICE_LIMIT,
-                        type_index,
-                    )
-
-            subscriptions = await conn.fetch(
-                """
-                SELECT slot_number, type_index, plan_kind
-                FROM subscriptions
-                WHERE tg_id = $1
-                """,
-                tg_id,
-            )
-            taken_slots = {row['slot_number'] for row in subscriptions}
-            taken_type_indexes = {
-                row['type_index']
-                for row in subscriptions
-                if row['plan_kind'] == 'bypass' and row['type_index'] is not None
-            }
-            slot_number = next(
-                (
-                    slot
-                    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER * 2 + 1)
-                    if slot not in taken_slots
-                ),
-                None,
-            )
-            type_index = next(
-                (
-                    index
-                    for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1)
-                    if index not in taken_type_indexes
-                ),
-                None,
-            )
-            if slot_number is None or type_index is None:
-                return None
-
-            subscription_until = datetime.utcnow() + timedelta(days=1)
-            traffic_reset_at = subscription_until + timedelta(days=29)
-            next_notification, notification_type = _calculate_notification_fields(subscription_until)
-            subscription = await conn.fetchrow(
-                """
-                INSERT INTO subscriptions (
-                    tg_id,
-                    slot_number,
-                    subscription_until,
-                    is_active,
-                    plan_kind,
-                    type_index,
-                    generation,
-                    is_visible,
-                    is_renewable,
-                    purchase_days,
-                    traffic_enabled,
-                    base_traffic_bytes,
-                    current_paid_traffic_bytes,
-                    carried_traffic_bytes,
-                    current_period_limit_bytes,
-                    traffic_reset_at,
-                    hwid_device_limit,
-                    next_notification_time,
-                    notification_type
-                )
-                VALUES (
-                    $1, $2, $3, FALSE, 'bypass', $4, 'v2', FALSE, FALSE, 1,
-                    TRUE, $5, 0, 0, $5, $6, $7, $8, $9
-                )
-                RETURNING *
-                """,
-                tg_id,
-                slot_number,
-                subscription_until,
-                type_index,
-                BYPASS_BASE_TRAFFIC_GB * GB_BYTES,
-                traffic_reset_at,
-                BYPASS_HWID_DEVICE_LIMIT,
-                next_notification,
-                notification_type,
-            )
-            await conn.execute(
-                """
-                UPDATE users
-                SET news_channel_bonus_subscription_id = $2,
-                    updated_at = now()
-                WHERE tg_id = $1
-                """,
-                tg_id,
-                subscription['id'],
-            )
-            return subscription
-
-
-async def finalize_news_channel_bonus(
-    tg_id: int,
-    subscription_id: int,
-    uuid: str,
-    username: str,
-    subscription_until,
-    squad_uuid: str,
-) -> bool:
-    """Атомарно показать активированную подписку и завершить onboarding."""
-    next_notification, notification_type = _calculate_notification_fields(subscription_until)
     result = await db_execute(
         """
         WITH eligible AS (
-            SELECT 1
+            SELECT news_channel_bonus_subscription_id
             FROM users
             WHERE tg_id = $1
               AND news_channel_onboarding_required = TRUE
               AND news_channel_bonus_claimed_at IS NULL
-              AND news_channel_bonus_subscription_id = $2
-              AND EXISTS (
-                  SELECT 1 FROM subscriptions
-                  WHERE id = $2 AND tg_id = $1
-              )
             FOR UPDATE
         ),
-        claimed AS (
+        completed AS (
             UPDATE users
-            SET news_channel_bonus_claimed_at = now(),
+            SET news_channel_onboarding_required = FALSE,
+                news_channel_bonus_claimed_at = COALESCE(news_channel_bonus_claimed_at, now()),
+                news_channel_bonus_subscription_id = NULL,
                 updated_at = now()
             WHERE tg_id = $1
               AND EXISTS (SELECT 1 FROM eligible)
             RETURNING 1
         ),
-        activated AS (
-            UPDATE subscriptions
-            SET remnawave_uuid = $3,
-                remnawave_username = $4,
-                subscription_until = $5,
-                squad_uuid = $6,
-                next_notification_time = $7,
-                notification_type = $8,
-                is_active = TRUE,
-                is_visible = TRUE,
-                is_renewable = TRUE,
-                updated_at = now()
-            WHERE id = $2
+        removed_pending AS (
+            DELETE FROM subscriptions
+            WHERE id = (SELECT news_channel_bonus_subscription_id FROM eligible)
               AND tg_id = $1
-              AND EXISTS (SELECT 1 FROM claimed)
+              AND is_active = FALSE
+              AND is_visible = FALSE
+              AND remnawave_uuid IS NULL
+              AND EXISTS (SELECT 1 FROM completed)
             RETURNING 1
         )
-        SELECT EXISTS(SELECT 1 FROM activated) AS finalized
+        SELECT EXISTS(SELECT 1 FROM completed) AS completed
         """,
-        (
-            tg_id,
-            subscription_id,
-            uuid,
-            username,
-            subscription_until,
-            squad_uuid,
-            next_notification,
-            notification_type,
-        ),
+        (tg_id,),
         fetch_one=True,
     )
-    finalized = bool(result and result['finalized'])
-    if finalized:
-        try:
-            await sync_primary_subscription_to_user(tg_id)
-        except Exception:
-            # V2-подписка уже активирована атомарно. Ошибка совместимых legacy-
-            # полей не должна повторно запускать выдачу бонуса.
-            logging.exception(
-                "Failed to sync legacy primary subscription after channel bonus for user %s",
-                tg_id,
-            )
-    return finalized
+    return bool(result and result['completed'])
 
 
 # ────────────────────────────────────────────────
