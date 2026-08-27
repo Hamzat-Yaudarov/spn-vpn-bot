@@ -37,8 +37,8 @@ async def process_referral(callback: CallbackQuery):
         tariffs_info = "• 1 месяц: \n• 3 месяца: \n• 6 месяцев: \n• 12 месяцев: \n"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Запросить вывод", callback_data="referral_withdraw", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
+        [InlineKeyboardButton(text="💰 Вывести деньги", callback_data="referral_withdraw", style="success")],
+        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
@@ -59,7 +59,7 @@ async def process_referral(callback: CallbackQuery):
         "</blockquote>\n\n"
         "<b>🔗 Ваша реферальная ссылка:</b>\n"
         f"<code>{referral_link}</code>\n\n"
-        "💡 <i>Нажми на ссылку чтобы скопировать её</i>"
+        "💡 <i>Нажмите на ссылку, чтобы скопировать её</i>"
     )
 
     await edit_text_with_photo(callback, text, kb, "Реферальная программа")
@@ -83,9 +83,9 @@ async def process_referral_withdraw_start(callback: CallbackQuery, state: FSMCon
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏦 Вывод на карту по СБП", callback_data="referral_withdraw_sbp", style="success")],
-        [InlineKeyboardButton(text="💎 Вывод в USDT", callback_data="referral_withdraw_usdt", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
+        [InlineKeyboardButton(text="🏦 На карту (СБП)", callback_data="referral_withdraw_sbp", style="success")],
+        [InlineKeyboardButton(text="💎 В USDT", callback_data="referral_withdraw_usdt", style="success")],
+        [InlineKeyboardButton(text="← Назад", callback_data="referral", style="primary")]
     ])
 
     text = (
@@ -110,7 +110,7 @@ async def process_referral_withdraw_sbp_start(callback: CallbackQuery, state: FS
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="referral_withdraw", style="primary")]
     ])
 
     text = "💳 <b>Вывод на карту по СБП</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
@@ -139,7 +139,7 @@ async def process_referral_sbp_amount(message: Message, state: FSMContext):
         await state.update_data(withdrawal_amount=amount)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+            [InlineKeyboardButton(text="← Назад", callback_data="referral_withdraw", style="primary")]
         ])
 
         text = f"🏦 <b>Укажите банк</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите название вашего банка:"
@@ -164,7 +164,7 @@ async def process_referral_sbp_bank(message: Message, state: FSMContext):
     await state.update_data(bank_name=bank_name)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="referral_withdraw", style="primary")]
     ])
 
     text = f"📱 <b>Укажите номер телефона</b>\n\n✅ Введите номер телефона, к которому привязана карта (с кодом страны, например +7XXXXXXXXXX):"
@@ -196,7 +196,7 @@ async def process_referral_sbp_phone(message: Message, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="referral", style="primary")]
     ])
 
     text = (
@@ -246,7 +246,7 @@ async def process_referral_withdraw_usdt_start(callback: CallbackQuery, state: F
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="referral_withdraw", style="primary")]
     ])
 
     text = "💎 <b>Вывод в USDT</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
@@ -275,7 +275,7 @@ async def process_referral_usdt_amount(message: Message, state: FSMContext):
         await state.update_data(withdrawal_amount=amount)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="referral_withdraw", style="danger")]
+            [InlineKeyboardButton(text="← Назад", callback_data="referral_withdraw", style="primary")]
         ])
 
         text = f"💎 <b>Введите адрес USDT кошелька</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите адрес вашего USDT кошелька (TRC-20 или ERC-20):"
@@ -308,7 +308,7 @@ async def process_referral_usdt_address(message: Message, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="referral", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="referral", style="primary")]
     ])
 
     text = (

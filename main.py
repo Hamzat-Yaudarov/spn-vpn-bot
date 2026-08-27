@@ -11,12 +11,13 @@ from config import ADMIN_ID, BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
 import database as db
 
 # Импортируем все роутеры обработчиков
-from handlers import start, callbacks, subscription, gift, referral, promo, admin, partnership, smart_assistant
+from handlers import start, callbacks, subscription, gift, referral, promo, admin, partnership, reactivation, smart_assistant
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 from services.subscription_notifications import check_and_send_notifications
 from services.traffic_resets import run_traffic_reset_loop
 from services.device_addon_expiry import run_device_addon_expiry_loop
+from services.reactivation_campaigns import refresh_reactivation_candidates, run_reactivation_campaign_loop
 import webhooks
 
 
@@ -59,6 +60,7 @@ def setup_handlers():
     dp.include_router(promo.router)
     dp.include_router(partnership.router)
     dp.include_router(admin.router)
+    dp.include_router(reactivation.router)
     dp.include_router(smart_assistant.router)
     logger.info("All handlers registered")
 
@@ -151,6 +153,13 @@ async def main():
     # Список активных задач
     tasks = []
 
+    # Создаём состояния подходящих кампаний до запуска обычных уведомлений,
+    # чтобы пользователь не получил два разных сообщения об истёкшем доступе.
+    try:
+        await refresh_reactivation_candidates()
+    except Exception as exc:
+        logger.error("Initial reactivation candidate refresh failed: %s", exc, exc_info=True)
+
     # YooKassa проверяется всегда: webhook даёт мгновенную активацию,
     # а фоновая задача подхватывает платёж, если webhook не дошёл.
     tasks.append(asyncio.create_task(check_yookassa_payments(bot)))
@@ -166,6 +175,7 @@ async def main():
     tasks.append(asyncio.create_task(cleanup_expired_payments()))
 
     # Запускаем задачу отправки уведомлений о заканчивающихся подписках
+    tasks.append(asyncio.create_task(run_reactivation_campaign_loop(bot)))
     tasks.append(asyncio.create_task(check_and_send_notifications(bot)))
     tasks.append(asyncio.create_task(run_traffic_reset_loop()))
     tasks.append(asyncio.create_task(run_device_addon_expiry_loop()))

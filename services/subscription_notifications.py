@@ -77,14 +77,14 @@ def _format_time_left(delta: timedelta) -> str:
 def _subscription_name(subscription) -> str:
     plan_kind = subscription.get("plan_kind") if subscription.get("plan_kind") in {"regular", "bypass"} else "regular"
     type_index = subscription.get("type_index") or subscription.get("slot_number")
-    title = "С антиглушилкой" if plan_kind == "bypass" else "Обычная"
-    return f"{title} #{type_index}"
+    title = "Антиглушилка" if plan_kind == "bypass" else "Обычная"
+    return f"{title} №{type_index}"
 
 
 def _buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Купить / Продлить", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
 
@@ -173,10 +173,10 @@ async def _send_notifications_for_expiring(bot):
             f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
             f"{stage['body']}"
         )
-        keyboard = [[InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
+        keyboard = [[InlineKeyboardButton(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
         if await _has_multiple_active_visible_subscriptions(tg_id):
-            keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-        keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+            keyboard.append([InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")])
+        keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         if await _send_message(bot, tg_id, text, kb):
             await db.mark_notification_state_sent(tg_id, stage["type"], subscription_id)
@@ -231,6 +231,9 @@ async def _send_notifications_for_expired(bot):
         if has_active:
             continue
 
+        if await db.has_open_reactivation_offer(tg_id):
+            continue
+
         subscriptions = [
             subscription
             for subscription in all_subscriptions
@@ -251,12 +254,12 @@ async def _send_notifications_for_expired(bot):
             text = (
                 "❌ <b>Подписка закончилась</b>\n\n"
                 f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
-                "Что сделать: нажмите «Купить / Продлить», чтобы вернуть доступ."
+                "Нажмите «Купить подписку», чтобы вернуть доступ."
             )
         else:
             text = (
                 "❌ <b>Активной подписки нет</b>\n\n"
-                "Что сделать: нажмите «Купить / Продлить», чтобы получить доступ к VPN."
+                "Нажмите «Купить подписку», чтобы получить доступ к VPN."
             )
 
         if await _send_message(bot, tg_id, text, _buy_keyboard()):
@@ -326,7 +329,7 @@ async def _send_notifications_for_low_traffic(bot):
                 keyboard = [[InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
                 if await _has_multiple_active_visible_subscriptions(tg_id):
                     keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-                keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+                keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
                 kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
                 if await _send_message(bot, tg_id, text, kb):
                     await db.mark_notification_state_sent(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, subscription_id)

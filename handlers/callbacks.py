@@ -1,10 +1,12 @@
 import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME, PUBLIC_SITE_URL
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from config import SUPPORT_URL, PUBLIC_SITE_URL
 import database as db
 from handlers.start import (
+    build_main_menu,
+    build_more_menu,
     mobile_auth_keyboard,
     news_channel_chat,
     send_news_channel_offer,
@@ -43,11 +45,6 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         await send_news_channel_offer(callback.bot, callback.message.chat.id)
         return
-
-    await callback.bot.send_message(
-        callback.message.chat.id,
-        "Соглашение принято! Добро пожаловать!"
-    )
 
     pending_challenge = await pending_challenge_for_user(tg_id)
     if pending_challenge:
@@ -109,7 +106,7 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
         return
 
     await state.clear()
-    await show_main_menu(callback.message, tg_id)
+    await show_main_menu(callback.message, tg_id, welcome=True)
 
     pending_challenge = await pending_challenge_for_user(tg_id)
     if pending_challenge:
@@ -152,55 +149,16 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} returned to main menu")
 
     await state.clear()
-    is_partner = await db.is_partner(tg_id)
+    text, keyboard = build_main_menu()
+    await edit_text_with_photo(callback, text, keyboard, "Главное меню")
 
-    keyboard = [
-        [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
-        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
-    ]
-    if tg_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
-    visible_subscriptions = await db.get_bot_visible_subscriptions(tg_id)
-    if visible_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
 
-    active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
-    if active_bypass_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")])
-
-    keyboard.extend([
-        [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect", style="primary")],
-        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}", style="primary")],
-        [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral", style="primary")],
-    ])
-
-    # Добавляем кнопку партнёрства если пользователь партнёр
-    if is_partner:
-        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
-
-    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
-
-    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-    text = (
-        "<b>SPN — стабильное и быстрое интернет-соединение</b>\n\n"
-        "<b>Что вы получаете:</b>\n"
-        "<blockquote>"
-        "• Улучшенную работу сайтов, мессенджеров и онлайн-сервисов\n"
-        "• Более стабильное соединение даже при перегрузках сети\n"
-        "• Поддержку Android, iOS, Windows, macOS и Linux\n"
-        "• Простое подключение за 1–2 минуты\n"
-        "• Защиту и оптимизацию интернет-трафика"
-        "</blockquote>\n\n"
-        "<b>Реферальная программа:</b>\n"
-        "<blockquote>"
-        "👥 За каждого приглашённого пользователя:\n"
-        "💰 35% от первой покупки\n"
-        "💰 15% от повторных покупок"
-        "</blockquote>"
-    )
-
-    await edit_text_with_photo(callback, text, kb, "Главное меню")
+@router.callback_query(F.data == "more_menu")
+async def process_more_menu(callback: CallbackQuery, state: FSMContext):
+    """Показать второстепенные функции."""
+    await state.clear()
+    text, keyboard = await build_more_menu(callback.from_user.id)
+    await edit_text_with_photo(callback, text, keyboard, "Главное меню")
 
 
 @router.callback_query(F.data == "how_to_connect")
@@ -212,15 +170,11 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
         [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
-        [InlineKeyboardButton(text="🛒 Как купить подписку", callback_data="instruction_buy", style="primary")],
-        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
-        "📲 <b>Инструкция</b>\n\n"
-        "Выбери устройство, на котором хочешь подключить VPN.\n"
-        "Бот покажет подходящее приложение и короткую инструкцию."
+        "📲 <b>Как подключить</b>\n\nВыберите ваше устройство."
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
@@ -234,20 +188,16 @@ async def process_instruction_buy(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} opened buy instruction")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="📲 Как подключить VPN", callback_data="instruction_connect", style="primary")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")]
+        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="← Назад", callback_data="how_to_connect", style="primary")]
     ])
 
     text = (
         "🛒 <b>Как купить подписку</b>\n\n"
-        "1. Открой раздел <b>💳 Купить / Продлить подписку</b>\n"
-        "2. Нажми <b>Купить первую подписку</b> или <b>Купить ещё подписку</b>\n"
-        "3. Выбери срок подписки\n"
-        "4. Выбери удобный способ оплаты\n"
-        "5. Оплати счёт\n"
-        "6. После оплаты бот сразу пришлёт тебе ключ и кнопку <b>📲 Инструкция</b>\n\n"
-        "Если уже есть подписка, ты можешь открыть её и продлить отдельно.\n\n"
+        "1. Нажмите <b>Купить подписку</b>\n"
+        "2. Выберите тип и срок\n"
+        "3. Оплатите счёт\n"
+        "4. Бот сразу выдаст ключ и инструкцию\n\n"
         f"По всем вопросам: {SUPPORT_URL}"
     )
 
@@ -264,13 +214,11 @@ async def process_instruction_connect(callback: CallbackQuery, state: FSMContext
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
         [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="how_to_connect", style="danger")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")]
+        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
-        "📲 <b>Как подключить VPN</b>\n\n"
-        "Выбери своё устройство — бот покажет подходящее приложение и короткую инструкцию."
+        "📲 <b>Как подключить</b>\n\nВыберите ваше устройство."
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
@@ -290,9 +238,9 @@ async def process_instruction_connect_platform(callback: CallbackQuery, state: F
             url=connection_app_url(platform),
             style="success",
         )],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="📱 Выбрать другое устройство", callback_data="instruction_connect", style="primary")],
-        [InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="📱 Другое устройство", callback_data="instruction_connect", style="primary")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(

@@ -232,13 +232,13 @@ async def _send_direct_message(
 
 
 BROADCAST_BUTTONS = {
-    "buy_subscription": {"text": "💳 Купить / Продлить", "callback_data": "buy_subscription", "style": "success"},
-    "my_subscriptions": {"text": "🔐 Мои подписки", "callback_data": "my_subscriptions", "style": "primary"},
-    "buy_gb": {"text": "📦 Купить ГБ", "callback_data": "buy_gb", "style": "success"},
+    "buy_subscription": {"text": "🛒 Купить подписку", "callback_data": "buy_subscription", "style": "success"},
+    "my_subscriptions": {"text": "🔑 Мои подписки", "callback_data": "my_subscriptions", "style": "primary"},
+    "buy_gb": {"text": "📦 Докупить ГБ", "callback_data": "buy_gb", "style": "success"},
     "miniapp": {"text": "📱 Личный кабинет", "web_app": MINIAPP_URL, "style": "primary"},
-    "how_to_connect": {"text": "📲 Инструкция", "callback_data": "how_to_connect", "style": "primary"},
+    "how_to_connect": {"text": "📲 Как подключить", "callback_data": "how_to_connect", "style": "primary"},
     "support": {"text": "🆘 Поддержка", "url": SUPPORT_URL, "style": "primary"},
-    "back_to_menu": {"text": "🏠 Главное меню", "callback_data": "back_to_menu", "style": "danger"},
+    "back_to_menu": {"text": "🏠 Главное меню", "callback_data": "back_to_menu", "style": "primary"},
 }
 
 BROADCAST_BUTTON_ORDER = (

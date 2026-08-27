@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import database as db
 from config import (
     ADMIN_ID,
+    BYPASS_BASE_TRAFFIC_GB,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     BYPASS_TRAFFIC_PACKAGES,
@@ -70,8 +71,8 @@ REFUND_WINDOW = timedelta(days=3)
 def _subscription_name(subscription) -> str:
     plan_kind = subscription.get('plan_kind') if subscription.get('plan_kind') in {'regular', 'bypass'} else 'bypass'
     type_index = subscription.get('type_index') or subscription.get('slot_number')
-    label = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
-    return f"{label} #{type_index}"
+    label = "Обычная" if plan_kind == "regular" else "Антиглушилка"
+    return f"{label} №{type_index}"
 
 
 def _subscription_short_status(subscription) -> str:
@@ -116,11 +117,26 @@ def _payment_action_text(payment) -> str:
     return "Продление" if (payment.get("payment_target") or "new") == "renew" else "Покупка"
 
 
+def _tariff_display_name(tariff: dict) -> str:
+    return "С антиглушилкой" if tariff.get("kind") == "bypass" else "Обычная подписка"
+
+
+def _subscription_invoice_text(tariff: dict, amount: float) -> str:
+    return (
+        "💳 <b>Оплата подписки</b>\n\n"
+        f"Подписка: <b>{_tariff_display_name(tariff)}</b>\n"
+        f"Срок: <b>{tariff['days']} дней</b>\n"
+        f"Сумма: <b>{amount:g} ₽</b>\n\n"
+        "Нажмите <b>«Оплатить»</b>. После оплаты бот активирует подписку автоматически.\n"
+        "Если результат не появился, вернитесь и нажмите <b>«Проверить оплату»</b>."
+    )
+
+
 def _payment_subscription_name(payment) -> str:
     plan_kind = payment.get("plan_kind") or (TARIFFS.get(payment.get("tariff_code")) or {}).get("kind") or "regular"
     type_index = payment.get("type_index") or payment.get("target_slot_number") or payment.get("slot_number")
     label = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
-    return f"{label} #{type_index or '—'}"
+    return f"{label} №{type_index or '—'}"
 
 
 def _payment_paid_at(payment) -> datetime | None:
@@ -138,15 +154,20 @@ def _refund_is_available(payment) -> bool:
 
 
 def _refund_subscription_button_text(subscription) -> str:
-    return f"{_subscription_name(subscription)} · до {_format_date(subscription.get('subscription_until'))}"
+    until = subscription.get('subscription_until')
+    until_text = until.strftime('%d.%m') if until else '—'
+    return f"{_subscription_name(subscription)} · до {until_text}"
 
 
 def _refund_payment_details(payment) -> str:
     tariff = TARIFFS.get(payment.get("tariff_code")) or {}
     deadline = _refund_deadline(payment)
+    tariff_title = tariff.get("title") or _tariff_display_name({
+        "kind": payment.get("plan_kind") or "regular",
+    })
     return (
         f"{_payment_action_text(payment)}: <b>{_html(_payment_subscription_name(payment))}</b>\n"
-        f"Тариф: <b>{_html(tariff.get('title') or payment.get('tariff_code'))}</b>\n"
+        f"Тариф: <b>{_html(tariff_title)}</b>\n"
         f"Сумма: <b>{float(payment.get('amount') or 0):.2f} ₽</b>\n"
         f"Оплачено: <b>{_format_datetime(_payment_paid_at(payment))}</b>\n"
         f"Возврат доступен до: <b>{_format_datetime(deadline)}</b>"
@@ -242,16 +263,11 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     for tariff_code, tariff in tariffs.items():
         pricing = calculate_discounted_price(tariff["price"], discounts, product_type="subscription", code=tariff_code, plan_kind=plan_kind)
         price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
-        if purchase_mode == "renew":
-            period = "1 месяц" if tariff["days"] == 30 else "3 месяца" if tariff["days"] == 90 else tariff["title"]
-            label = f"{period} — {price_label}"
-        else:
-            devices_count = REGULAR_HWID_DEVICE_LIMIT if plan_kind == "regular" else BYPASS_HWID_DEVICE_LIMIT
-            devices = f"{devices_count} устройства" if devices_count in (2, 3, 4) else f"{devices_count} устройств"
-            label = f"{tariff['title']} — {price_label} ({devices})"
+        period = f"{tariff['days']} дней"
+        label = f"{period} — {price_label}"
         keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
 
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     image_key = "Покупка обычной подписки" if plan_kind == "regular" else "Покупка подписки с антиглушилкой"
@@ -259,39 +275,53 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     await state.set_state(UserStates.choosing_tariff)
 
 
+async def _show_new_subscription_type_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    back_callback: str,
+):
+    """Короткий понятный выбор типа новой подписки."""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛡 С антиглушилкой", callback_data="plan_bypass", style="success")],
+        [InlineKeyboardButton(text="⚡ Обычная", callback_data="plan_regular", style="primary")],
+        [InlineKeyboardButton(text="← Назад", callback_data=back_callback, style="primary")],
+    ])
+    text = (
+        "🛒 <b>Выберите подписку</b>\n\n"
+        f"🛡 <b>С антиглушилкой</b> — рекомендуем. {BYPASS_BASE_TRAFFIC_GB} ГБ, "
+        f"до {BYPASS_HWID_DEVICE_LIMIT} устройств.\n"
+        f"⚡ <b>Обычная</b> — до {REGULAR_HWID_DEVICE_LIMIT} устройств."
+    )
+    await state.update_data(purchase_mode="new", target_subscription_id=None, target_slot_number=None)
+    await edit_text_with_photo(callback, text, kb, "Выбор типа подписки")
+
+
 async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
     subscriptions = await db.get_visible_subscriptions(tg_id)
     renewable_subscriptions = await db.get_renewable_subscriptions(tg_id)
 
-    keyboard = []
-
-    if renewable_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="Продлить имеющуюся подписку", callback_data="renew_existing_subscription", style="success")])
-
-    buy_text = "Купить первую подписку" if not subscriptions else "Купить новую подписку"
-    keyboard.append([InlineKeyboardButton(text=buy_text, callback_data="buy_new_subscription", style="success")])
-
     if not subscriptions:
-        text = (
-            "💳 <b>Купить / Продлить подписку</b>\n\n"
-            "У тебя пока нет подписок.\n"
-            "Купи первую подписку: обычную или с антиглушилкой."
-        )
-        image_key = "Нет подписок"
-    else:
-        text = (
-            "💳 <b>Купить / Продлить подписку</b>\n\n"
-            f"Активных новых подписок: <b>{len(subscriptions)}</b>.\n"
-            "Можно продлить существующую или купить новую."
-        )
-        image_key = "Выбор покупки или продления"
+        await state.clear()
+        await _show_new_subscription_type_choice(callback, state, back_callback="back_to_menu")
+        return
 
-    keyboard.append([InlineKeyboardButton(text="Закрыть", callback_data="back_to_menu", style="danger")])
+    keyboard = []
+    if renewable_subscriptions:
+        keyboard.append([InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew_existing_subscription", style="success")])
+
+    keyboard.append([InlineKeyboardButton(text="🛒 Купить новую", callback_data="buy_new_subscription", style="success")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await state.clear()
-    await edit_text_with_photo(callback, text, kb, image_key)
+    await edit_text_with_photo(
+        callback,
+        "🛒 <b>Подписка</b>\n\nЧто вы хотите сделать?",
+        kb,
+        "Выбор покупки или продления",
+    )
 
 
 async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSMContext):
@@ -299,54 +329,46 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
     subscriptions = await db.get_bot_visible_subscriptions(tg_id)
 
     if not subscriptions:
-        await callback.answer("У тебя пока нет подписок", show_alert=True)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+            [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")],
+            [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")],
+        ])
+        await state.clear()
+        await edit_text_with_photo(
+            callback,
+            "🔑 <b>Мои подписки</b>\n\nУ вас пока нет подписок.",
+            keyboard,
+            "Нет подписок",
+        )
         return
 
-    has_regular = any((subscription.get('plan_kind') or 'regular') == 'regular' for subscription in subscriptions)
-    has_bypass = any(subscription.get('plan_kind') == 'bypass' for subscription in subscriptions)
-
-    keyboard = []
-    if has_regular:
-        keyboard.append([InlineKeyboardButton(text="Обычные подписки", callback_data="my_subscriptions_regular", style="primary")])
-    if has_bypass:
-        keyboard.append([InlineKeyboardButton(text="Подписки с антиглушилкой", callback_data="my_subscriptions_bypass", style="primary")])
+    keyboard = [
+        [InlineKeyboardButton(
+            text=(
+                f"{'🛡' if subscription.get('plan_kind') == 'bypass' else '⚡'} "
+                f"{_subscription_name(subscription)} · {_subscription_short_status(subscription)}"
+            ),
+            callback_data=f"my_subscription_view_{subscription['id']}",
+            style="primary",
+        )]
+        for subscription in subscriptions
+    ]
     keyboard.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")])
-    keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
 
     await state.clear()
     await edit_text_with_photo(
         callback,
-        "🔐 <b>Мои подписки</b>\n\nВыбери тип подписок:",
+        "🔑 <b>Мои подписки</b>\n\nВыберите подписку:",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
     )
 
 
-async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str):
-    tg_id = callback.from_user.id
-    subscriptions = [
-        subscription
-        for subscription in await db.get_bot_visible_subscriptions(tg_id)
-        if (subscription.get('plan_kind') or 'regular') == plan_kind
-    ]
-
-    if not subscriptions:
-        await callback.answer("Подписок этого типа нет", show_alert=True)
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(text=f"Подписка #{subscription.get('type_index') or subscription['slot_number']}", callback_data=f"my_subscription_view_{subscription['id']}", style="primary")]
-        for subscription in subscriptions
-    ]
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="my_subscriptions", style="danger")])
-
-    title = "Обычные подписки" if plan_kind == "regular" else "Подписки с антиглушилкой"
-    await edit_text_with_photo(
-        callback,
-        f"🔐 <b>{title}</b>\n\nВыбери подписку:",
-        InlineKeyboardMarkup(inline_keyboard=keyboard),
-        "Мои подписки",
-    )
+async def _show_my_subscriptions_by_kind(callback: CallbackQuery, plan_kind: str, state: FSMContext):
+    # Совместимость со старыми сообщениями: оба callback ведут в новый общий список.
+    await _show_my_subscriptions_type_choice(callback, state)
 
 
 async def _send_refund_subscription_choice(message: Message):
@@ -355,13 +377,13 @@ async def _send_refund_subscription_choice(message: Message):
 
     if not subscriptions:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+            [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")],
         ])
         await send_text_with_photo(
             message,
             "↩️ <b>Оформить возврат</b>\n\n"
-            "У тебя пока нет активных подписок, по которым можно оформить возврат.",
+            "У вас нет активных подписок, по которым можно оформить возврат.",
             kb,
             "Возврат",
         )
@@ -371,12 +393,12 @@ async def _send_refund_subscription_choice(message: Message):
         [InlineKeyboardButton(text=_refund_subscription_button_text(subscription), callback_data=f"refund_subscription_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")])
 
     await send_text_with_photo(
         message,
         "↩️ <b>Оформить возврат</b>\n\n"
-        "Выбери подписку, за которую хочешь оформить возврат.\n\n"
+        "Выберите подписку, за которую хотите оформить возврат.\n\n"
         "Возврат можно оформить только в течение <b>3 суток</b> после покупки или последнего продления.",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Возврат",
@@ -392,7 +414,6 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         return
 
     sub_url, remaining_str, effective_until = await _get_subscription_access_data(subscription)
-    plan_title = 'С антиглушилкой' if subscription.get('plan_kind') == 'bypass' else 'Обычная'
     active_device_addons = await db.get_active_device_addon_count(subscription_id)
     effective_device_limit_value = effective_device_limit(subscription.get('plan_kind'), active_device_addons)
     display_subscription = {
@@ -422,39 +443,38 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         reset_at = subscription.get('traffic_reset_at')
         reset_text = _format_date(reset_at)
         traffic_text = (
-            f"\n📦 Трафик антиглушилки: <b>{_format_traffic_gb(used_bytes)} / {_format_traffic_gb(limit_bytes)}</b>\n"
-            f"🔄 Сброс трафика: <b>{reset_text}</b>"
+            f"\n📦 Трафик: <b>{_format_traffic_gb(used_bytes)} из {_format_traffic_gb(limit_bytes)}</b>\n"
+            f"🔄 Обновится: <b>{reset_text}</b>"
         )
 
     keyboard = [
-        [InlineKeyboardButton(text="📲 Инструкция", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="📲 Подключить", callback_data=f"subscription_instruction_{subscription_id}", style="success")],
         [InlineKeyboardButton(text="📱 Устройства", callback_data=f"subscription_devices_{subscription_id}", style="primary")],
     ]
     if subscription.get('generation') == 'v2' and subscription.get('is_renewable'):
-        keyboard.append([InlineKeyboardButton(text="🔄 Продлить эту подписку", callback_data=f"renew_subscription_{subscription_id}", style="success")])
+        keyboard.append([InlineKeyboardButton(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")])
         if status_text == 'активна' and device_packages:
-            keyboard.append([InlineKeyboardButton(text="➕ Докупить устройства", callback_data=f"device_addons_{subscription_id}", style="success")])
+            keyboard.append([InlineKeyboardButton(text="➕ Добавить устройства", callback_data=f"device_addons_{subscription_id}", style="success")])
     if (
         subscription.get('generation') == 'v2'
         and subscription.get('is_renewable')
         and subscription.get('plan_kind') == 'bypass'
         and status_text == 'активна'
     ):
-        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
-    keyboard.append([InlineKeyboardButton(text="🗑 Удалить подписку", callback_data=f"delete_subscription_{subscription_id}", style="danger")])
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback, style="danger")])
+        keyboard.append([InlineKeyboardButton(text="📦 Докупить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
+    keyboard.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_subscription_{subscription_id}", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data=back_callback, style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
-        f"🔐 <b>{_subscription_name(subscription)}</b>\n\n"
+        f"🔑 <b>{_subscription_name(subscription)}</b>\n\n"
         "<blockquote>"
-        f"📍 Статус: <b>{status_text}</b>\n"
-        f"📆 Срок: <b>до {until_text}</b>, осталось <b>{remaining_str}</b>\n"
-        f"🌐 Тип: <b>{plan_title}</b>\n"
-        f"🧩 Лимит: <b>{limit_text}</b>"
+        f"Статус: <b>{status_text}</b>\n"
+        f"Срок: <b>до {until_text}</b> · осталось <b>{remaining_str}</b>\n"
+        f"Устройства: <b>до {limit_text}</b>"
         f"{traffic_text}"
         "</blockquote>\n\n"
-        "<b>Ваш ключ:</b>\n"
+        "<b>Ключ для подключения:</b>\n"
         f"{sub_url or '<i>Ошибка получения ссылки</i>'}"
     )
 
@@ -470,7 +490,7 @@ async def _show_subscription_devices(callback: CallbackQuery, subscription_id: i
         return
 
     if not subscription.get('remnawave_uuid'):
-        await callback.answer("У ключа пока нет UUID Remnawave", show_alert=True)
+        await callback.answer("Данные подписки ещё не готовы. Попробуйте позже.", show_alert=True)
         return
 
     devices = []
@@ -499,7 +519,7 @@ async def _show_subscription_devices(callback: CallbackQuery, subscription_id: i
             text_lines.append(f"   Подключено: {_html(created_at)}")
             if hwid:
                 text_lines.append(f"   HWID: <code>{_html(hwid)}</code>")
-                keyboard.append([InlineKeyboardButton(text=f"Удалить {index}. {title}", callback_data=f"device_delete_{subscription_id}_{index - 1}", style="danger")])
+                keyboard.append([InlineKeyboardButton(text=f"🗑 Удалить устройство {index}", callback_data=f"device_delete_{subscription_id}_{index - 1}", style="danger")])
             text_lines.append("")
         keyboard.append([InlineKeyboardButton(text="🧹 Удалить все устройства", callback_data=f"device_delete_all_{subscription_id}", style="danger")])
     else:
@@ -595,7 +615,7 @@ async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: 
         ]
         for package in packages
     ]
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к подписке", callback_data=f"subscription_view_{subscription_id}", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
 
     await state.update_data(device_addon_subscription_id=subscription_id)
     await edit_text_with_photo(
@@ -604,7 +624,7 @@ async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: 
         f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
         f"Сейчас доступно: <b>{device_count_text(int(current_limit))}</b>\n"
         f"Максимум: <b>{device_count_text(DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT)}</b>\n\n"
-        f"Выбери, сколько устройств добавить.\n"
+        f"Выберите, сколько устройств добавить.\n"
         f"Действует до конца текущего периода: <b>{_format_date(subscription['subscription_until'])}</b>.\n"
         f"После этой даты лимит вернётся к базовому, если не докупить заново.",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
@@ -640,15 +660,15 @@ async def _show_device_addon_payment_methods(callback: CallbackQuery, state: FSM
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_devices_cryptobot", style="success")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_devices_yookassa", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"device_addons_{subscription_id}", style="danger")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_devices_yookassa", style="success")],
+        [InlineKeyboardButton(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
         f"➕ <b>+{device_count_text(device_count)} к {_subscription_name(subscription)}</b>\n\n"
         f"Действует до: <b>{_format_date(subscription['subscription_until'])}</b>\n"
         f"Сумма: <b>{package['price']:g} ₽</b>\n\n"
-        "Выбери способ оплаты:",
+        "Выберите способ оплаты.",
         kb,
         "Выбери способ оплаты",
     )
@@ -665,14 +685,13 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤖 Android", callback_data=f"subscription_instruction_android_{subscription_id}", style="primary")],
         [InlineKeyboardButton(text="🍎 iPhone", callback_data=f"subscription_instruction_iphone_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(
         callback,
-        "📲 <b>Инструкция по подключению</b>\n\nВыбери устройство, на котором хочешь подключить эту подписку.",
+        "📲 <b>Подключение</b>\n\nВыберите ваше устройство.",
         kb,
         "Как подключиться",
     )
@@ -701,9 +720,9 @@ async def _show_subscription_instruction_platform(
             url=connection_app_url(platform),
             style="success",
         )],
-        [InlineKeyboardButton(text="📱 Выбрать другое устройство", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🔐 Открыть эту подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="📱 Другое устройство", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(
@@ -785,6 +804,17 @@ async def process_refund_command(message: Message, state: FSMContext):
     await _send_refund_subscription_choice(message)
 
 
+@router.callback_query(F.data == "refund_start")
+async def process_refund_start(callback: CallbackQuery, state: FSMContext):
+    """Открыть возврат прямо из интерфейса, без ручного ввода команды."""
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception as exc:
+        logger.debug("Could not delete menu before refund flow: %s", exc)
+    await _send_refund_subscription_choice(callback.message)
+
+
 @router.callback_query(F.data.startswith("refund_subscription_"))
 async def process_refund_subscription(callback: CallbackQuery):
     """Показать подтверждение возврата по выбранной подписке."""
@@ -832,7 +862,7 @@ async def process_refund_subscription(callback: CallbackQuery):
     await edit_text_with_photo(
         callback,
         "↩️ <b>Подтверждение возврата</b>\n\n"
-        f"Ты точно хочешь оформить возврат за <b>{_html(_subscription_name(subscription))}</b> "
+        f"Вы точно хотите оформить возврат за <b>{_html(_subscription_name(subscription))}</b> "
         f"на сумму <b>{float(payment.get('amount') or 0):.2f} ₽</b>?\n\n"
         f"{details}\n\n"
         "После подтверждения подписка будет деактивирована.",
@@ -850,7 +880,7 @@ async def process_refund_confirm(callback: CallbackQuery):
     payment_id = int(parts[-1])
 
     if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подписка сейчас обрабатывается, попробуй позже", show_alert=True)
+        await callback.answer("Подписка сейчас обрабатывается. Попробуйте позже.", show_alert=True)
         return
 
     try:
@@ -868,7 +898,7 @@ async def process_refund_confirm(callback: CallbackQuery):
 
         payment = await db.get_latest_subscription_payment_for_refund(subscription_id, tg_id)
         if not payment or int(payment["id"]) != payment_id:
-            await callback.answer("Последняя оплата подписки изменилась. Открой возврат заново.", show_alert=True)
+            await callback.answer("Последняя оплата изменилась. Откройте возврат заново.", show_alert=True)
             return
 
         if payment.get("refund_requested_at"):
@@ -891,15 +921,15 @@ async def process_refund_confirm(callback: CallbackQuery):
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             if not await remnawave_set_subscription_expiry(session, subscription["remnawave_uuid"], expired_at):
-                await callback.answer("Не удалось деактивировать подписку. Попробуй позже.", show_alert=True)
+                await callback.answer("Не удалось отключить подписку. Попробуйте позже.", show_alert=True)
                 return
 
         if not await db.deactivate_subscription_for_refund(subscription_id, tg_id, expired_at):
-            await callback.answer("Не удалось деактивировать подписку в базе. Напиши в поддержку.", show_alert=True)
+            await callback.answer("Не удалось деактивировать подписку. Напишите в поддержку.", show_alert=True)
             return
 
         if not await db.request_payment_refund(payment_id, tg_id):
-            await callback.answer("Не удалось оформить заявку. Попробуй ещё раз.", show_alert=True)
+            await callback.answer("Не удалось оформить заявку. Попробуйте ещё раз.", show_alert=True)
             return
 
         payment_with_subscription = {
@@ -911,7 +941,7 @@ async def process_refund_confirm(callback: CallbackQuery):
         details = _refund_payment_details(payment_with_subscription)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
         ])
         await edit_text_with_photo(
             callback,
@@ -941,29 +971,22 @@ async def process_refund_confirm(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("refund_payment_"))
-async def process_legacy_refund_payment(callback: CallbackQuery):
-    """Старый callback больше не используется: просим открыть новый сценарий возврата."""
-    await callback.answer("Теперь возврат оформляется через выбор подписки. Отправь /refund ещё раз.", show_alert=True)
+async def process_legacy_refund_payment(callback: CallbackQuery, state: FSMContext):
+    """Старые кнопки возврата перенаправляются в актуальный сценарий."""
+    await process_refund_start(callback, state)
 
 
 @router.callback_query(F.data.in_({"my_subscriptions_regular", "my_subscriptions_bypass"}))
-async def process_my_subscriptions_kind(callback: CallbackQuery):
+async def process_my_subscriptions_kind(callback: CallbackQuery, state: FSMContext):
     """Показать подписки выбранного типа."""
     plan_kind = callback.data.removeprefix("my_subscriptions_")
-    await _show_my_subscriptions_by_kind(callback, plan_kind)
+    await _show_my_subscriptions_by_kind(callback, plan_kind, state)
 
 
 @router.callback_query(F.data == "buy_new_subscription")
 async def process_buy_new_subscription(callback: CallbackQuery, state: FSMContext):
     """Начать покупку новой подписки."""
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Обычная (Без антиглушилки)", callback_data="plan_regular", style="primary")],
-        [InlineKeyboardButton(text="С антиглушилкой", callback_data="plan_bypass", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
-    ])
-    text = "Выбери тип новой подписки:"
-    await state.update_data(purchase_mode="new", target_subscription_id=None, target_slot_number=None)
-    await edit_text_with_photo(callback, text, kb, "Выбор типа подписки")
+    await _show_new_subscription_type_choice(callback, state, back_callback="buy_subscription")
 
 
 @router.callback_query(F.data.startswith("plan_"))
@@ -978,7 +1001,7 @@ async def process_plan_choice(callback: CallbackQuery, state: FSMContext):
     type_index = await db.get_next_type_index(tg_id, plan_kind)
     if type_index is None:
         plan_name = "обычных" if plan_kind == "regular" else "подписок с антиглушилкой"
-        await callback.answer(f"У тебя уже максимум {db.MAX_SUBSCRIPTIONS_PER_USER} {plan_name}", show_alert=True)
+        await callback.answer(f"У вас уже максимум: {db.MAX_SUBSCRIPTIONS_PER_USER} {plan_name}", show_alert=True)
         return
 
     await state.update_data(
@@ -988,8 +1011,19 @@ async def process_plan_choice(callback: CallbackQuery, state: FSMContext):
         target_subscription_id=None,
         target_slot_number=type_index,
     )
-    plan_title = "обычной подписки" if plan_kind == "regular" else "подписки с антиглушилкой"
-    await _show_tariff_selection(callback, state, f"Выбери срок для {plan_title} #{type_index}:")
+    if plan_kind == "bypass":
+        title = (
+            "🛡 <b>С антиглушилкой</b>\n\n"
+            f"{BYPASS_BASE_TRAFFIC_GB} ГБ · до {BYPASS_HWID_DEVICE_LIMIT} устройств\n"
+            "Выберите срок подписки."
+        )
+    else:
+        title = (
+            "⚡ <b>Обычная подписка</b>\n\n"
+            f"До {REGULAR_HWID_DEVICE_LIMIT} устройств\n"
+            "Выберите срок подписки."
+        )
+    await _show_tariff_selection(callback, state, title)
 
 
 @router.callback_query(F.data == "renew_existing_subscription")
@@ -1005,11 +1039,11 @@ async def process_renew_existing_subscription(callback: CallbackQuery, state: FS
         [InlineKeyboardButton(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")])
 
     await edit_text_with_photo(
         callback,
-        "Выбери подписку, которую хочешь продлить:",
+        "🔄 <b>Продление</b>\n\nВыберите подписку:",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
     )
@@ -1024,9 +1058,7 @@ async def process_subscription_view(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("my_subscription_view_"))
 async def process_my_subscription_view(callback: CallbackQuery, state: FSMContext):
     subscription_id = int(callback.data.split("_")[-1])
-    subscription = await db.get_subscription_by_id(subscription_id, callback.from_user.id)
-    plan_kind = (subscription.get('plan_kind') or 'regular') if subscription else 'regular'
-    await _show_subscription_card(callback, subscription_id, back_callback=f"my_subscriptions_{plan_kind}")
+    await _show_subscription_card(callback, subscription_id, back_callback="my_subscriptions")
 
 
 @router.callback_query(F.data.startswith("delete_subscription_confirm_"))
@@ -1038,10 +1070,10 @@ async def process_delete_subscription_confirm(callback: CallbackQuery, state: FS
         await callback.answer(str(exc), show_alert=True)
         return
     except SubscriptionBusyError:
-        await callback.answer("Подписка сейчас занята другой операцией. Попробуй чуть позже.", show_alert=True)
+        await callback.answer("Подписка сейчас занята другой операцией. Попробуйте позже.", show_alert=True)
         return
     except RemnawaveDeletionError:
-        await callback.answer("Не удалось удалить ключ в Remnawave. Попробуй позже или напиши в поддержку.", show_alert=True)
+        await callback.answer("Не удалось удалить подписку. Попробуйте позже или напишите в поддержку.", show_alert=True)
         return
 
     await state.clear()
@@ -1049,13 +1081,13 @@ async def process_delete_subscription_confirm(callback: CallbackQuery, state: FS
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
         [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="danger")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
         f"✅ <b>Подписка удалена</b>\n\n"
         f"{_subscription_name(subscription)} удалена из бота и Remnawave. Ключ больше не будет работать.\n\n"
-        "Если удалил подписку по ошибке — напиши в поддержку.",
+        "Если вы удалили подписку по ошибке, напишите в поддержку.",
         kb,
         "Подписка удалена",
     )
@@ -1078,7 +1110,7 @@ async def process_delete_subscription_request(callback: CallbackQuery, state: FS
         callback,
         f"🗑 <b>Удалить {_subscription_name(subscription)}?</b>\n\n"
         "Ключ будет удалён из Remnawave и перестанет работать. Это действие нельзя отменить.\n\n"
-        "Удаление не оформляет возврат денег. Если нужен возврат и прошло меньше 3 суток после оплаты — используй /refund.",
+        "Удаление не оформляет возврат денег. Если после оплаты прошло меньше 3 суток, вернитесь в «Ещё» и выберите «Оформить возврат».",
         kb,
         "Удаление подписки",
     )
@@ -1162,7 +1194,11 @@ async def process_subscription_renew(callback: CallbackQuery, state: FSMContext)
         target_slot_number=subscription['slot_number'],
         type_index=subscription.get('type_index'),
     )
-    await _show_tariff_selection(callback, state, f"Выбери срок для продления {_subscription_name(subscription).lower()}:")
+    await _show_tariff_selection(
+        callback,
+        state,
+        f"🔄 <b>{_subscription_name(subscription)}</b>\n\nВыберите срок продления.",
+    )
 
 
 @router.callback_query(F.data == "buy_gb")
@@ -1178,11 +1214,11 @@ async def process_buy_gb(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="🔙 Главное меню", callback_data="back_to_menu", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")])
 
     await edit_text_with_photo(
         callback,
-        "📦 <b>Купить ГБ</b>\n\nВыбери подписку с антиглушилкой:",
+        "📦 <b>Докупить ГБ</b>\n\nВыберите подписку:",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
     )
@@ -1216,12 +1252,12 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
                 style="success",
             )
         ])
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")])
 
     await state.update_data(gb_subscription_id=subscription_id)
     await edit_text_with_photo(
         callback,
-        f"📦 <b>{_subscription_name(subscription)}</b>\n\nВыбери пакет трафика:",
+        f"📦 <b>{_subscription_name(subscription)}</b>\n\nВыберите пакет трафика:",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
     )
@@ -1239,13 +1275,13 @@ async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
     pricing = await current_price(package["price"], product_type="traffic", code=package_code, plan_kind="bypass")
     await state.update_data(gb_package_code=package_code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_gb_yookassa", style="success")],
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot", style="success")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_gb_yookassa", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
+        [InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
-        f"📦 <b>Пакет {package['gb']} ГБ</b>\n\nСумма: <b>{pricing['price']:g}₽</b>\n\nВыбери способ оплаты:",
+        f"📦 <b>Пакет {package['gb']} ГБ</b>\n\nСумма: <b>{pricing['price']:g} ₽</b>\n\nВыберите способ оплаты.",
         kb,
         "Выбери способ оплаты",
     )
@@ -1313,13 +1349,15 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_gb", style="danger")],
+        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
-        f"📦 <b>Счёт на {package['gb']} ГБ</b>\n\nСумма: {amount}₽",
+        f"📦 <b>Оплата {package['gb']} ГБ</b>\n\n"
+        f"Сумма: <b>{amount:g} ₽</b>\n\n"
+        "После оплаты трафик добавится автоматически.",
         kb,
         "Оплати",
     )
@@ -1408,9 +1446,9 @@ async def _create_device_addon_payment(callback: CallbackQuery, state: FSMContex
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"device_addons_{subscription_id}", style="danger")],
+        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [InlineKeyboardButton(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1433,14 +1471,14 @@ async def _show_checked_payment_success(callback: CallbackQuery, invoice_id: str
     if subscription_id:
         keyboard.append([InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")])
     keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-    keyboard.append([InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_menu", style="danger")])
+    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
 
     await callback.answer(summary.get("toast") or "✅ Оплата прошла!", show_alert=True)
     await edit_text_with_photo(
         callback,
         f"✅ <b>{_html(summary.get('title'))}</b>\n\n"
         f"{_html(summary.get('message'))}\n\n"
-        "Покупка уже активирована и отображается в твоих подписках.",
+        "Покупка уже активирована и отображается в ваших подписках.",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Оплати",
     )
@@ -1476,25 +1514,31 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     referral_balance = stats['current_balance']
 
     if purchase_mode == "renew" and target_slot_number:
-        purchase_text = f"Продление подписки #{target_slot_number}"
+        purchase_text = f"Продление подписки №{target_slot_number}"
     elif target_slot_number:
-        purchase_text = f"Новая подписка #{target_slot_number}"
+        purchase_text = f"Новая подписка №{target_slot_number}"
     else:
         purchase_text = "Новая подписка"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    keyboard = [
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_yookassa", style="success")],
         [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_yookassa", style="success")],
-        [InlineKeyboardButton(text="💰 Оплатить с баланса от рефералов", callback_data="pay_referral_balance", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=(f"subscription_view_{target_subscription_id}" if purchase_mode == "renew" and target_subscription_id else "buy_subscription"), style="danger")],
-    ])
+    ]
+    if referral_balance >= pricing["price"]:
+        keyboard.append([InlineKeyboardButton(text="💰 Бонусный баланс", callback_data="pay_referral_balance", style="success")])
+    keyboard.append([InlineKeyboardButton(
+        text="← Назад",
+        callback_data=(f"subscription_view_{target_subscription_id}" if purchase_mode == "renew" and target_subscription_id else "buy_subscription"),
+        style="primary",
+    )])
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
-        f"<b>{purchase_text}</b>\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {pricing['price']:g} ₽\n"
-        f"Баланс от рефералов: {referral_balance:.2f} ₽\n\n"
-        "Выбери способ оплаты:"
+        f"💳 <b>{purchase_text}</b>\n\n"
+        f"Подписка: <b>{_tariff_display_name(tariff)}</b>\n"
+        f"Срок: <b>{tariff['days']} дней</b>\n"
+        f"Сумма: <b>{pricing['price']:g} ₽</b>\n\n"
+        "Выберите способ оплаты."
     )
 
     await edit_text_with_photo(callback, text, kb, "Выбери способ оплаты")
@@ -1540,17 +1584,17 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
             pay_url = invoice.get("bot_invoice_url", "")
             if pay_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+                    [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
+                    [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+                    [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
                 ])
-                await edit_text_with_photo(callback, "<b>Счёт на оплату (существующий)</b>", kb, "Оплати")
+                await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
                 await state.clear()
                 return
 
     invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
     if not invoice:
-        await callback.answer("Ошибка создания счёта в CryptoBot. Попробуй позже.", show_alert=True)
+        await callback.answer("Не удалось создать счёт. Попробуйте позже.", show_alert=True)
         await state.clear()
         return
 
@@ -1568,20 +1612,12 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
         target_slot_number=target_slot_number,
     )
 
-    target_text = f"подписки #{target_slot_number}" if purchase_mode == "new" else f"подписки #{data.get('target_slot_number')}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
     ])
-    text = (
-        f"<b>Счёт на оплату {target_text}</b>\n\n"
-        f"Тариф: {tariff_code}\n"
-        f"Сумма: {amount} ₽\n\n"
-        "Оплати через CryptoBot. После оплаты бот автоматически активирует подписку.\n"
-        "Если не активировалось, нажми «Проверить оплату»."
-    )
-    await edit_text_with_photo(callback, text, kb, "Оплати")
+    await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
     await state.clear()
 
 
@@ -1624,17 +1660,17 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
             confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
             if confirmation_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url, style="success")],
-                    [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-                    [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+                    [InlineKeyboardButton(text="💳 Оплатить", url=confirmation_url, style="success")],
+                    [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+                    [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
                 ])
-                await edit_text_with_photo(callback, "<b>💳 Yookassa (существующий платёж)</b>", kb, "Оплати")
+                await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
                 await state.clear()
                 return
 
     payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
     if not payment:
-        await callback.answer("Ошибка создания платежа в Yookassa. Попробуй позже.", show_alert=True)
+        await callback.answer("Не удалось создать платёж. Попробуйте позже.", show_alert=True)
         await state.clear()
         return
 
@@ -1657,11 +1693,11 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Оплатить сейчас", url=confirmation_url, style="success")],
-        [InlineKeyboardButton(text="Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="buy_subscription", style="danger")],
+        [InlineKeyboardButton(text="💳 Оплатить", url=confirmation_url, style="success")],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
     ])
-    await edit_text_with_photo(callback, "<b>💳 Yookassa</b>", kb, "Оплати")
+    await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
     await state.clear()
 
 
@@ -1681,7 +1717,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
     amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
 
     if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+        await callback.answer("Подождите несколько секунд ⏳", show_alert=True)
         return
 
     try:
@@ -1727,7 +1763,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
             )
 
             if not uuid:
-                await callback.answer("Ошибка получения доступа в VPN. Попробуй позже.", show_alert=True)
+                await callback.answer("Не удалось получить доступ. Попробуйте позже.", show_alert=True)
                 return
 
             sub_url = await remnawave_get_subscription_url(session, uuid)
@@ -1812,12 +1848,13 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
         remaining_balance = referral_balance - amount
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
         ])
 
         text = (
-            f"✅ <b>{_subscription_name(subscription)} оплачена с баланса рефералов!</b>\n\n"
-            f"Тариф: {tariff_code} ({tariff['days']} дней)\n"
+            f"✅ <b>{_subscription_name(subscription)} оплачена с бонусного баланса!</b>\n\n"
+            f"Подписка: {_tariff_display_name(tariff)}\n"
+            f"Срок: {tariff['days']} дней\n"
             f"Списано: {amount} ₽\n"
             f"Остаток баланса: {remaining_balance:.2f} ₽\n\n"
             f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
@@ -1856,7 +1893,7 @@ async def process_check_payment(callback: CallbackQuery):
     provider = result['provider']
 
     if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подожди пару секунд ⏳", show_alert=True)
+        await callback.answer("Подождите несколько секунд ⏳", show_alert=True)
         return
 
     try:
@@ -1867,7 +1904,7 @@ async def process_check_payment(callback: CallbackQuery):
                 if success:
                     await _show_checked_payment_success(callback, invoice_id)
                 else:
-                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напиши в поддержку.", show_alert=True)
+                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напишите в поддержку.", show_alert=True)
             else:
                 await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
         elif provider == "cryptobot":
@@ -1877,7 +1914,7 @@ async def process_check_payment(callback: CallbackQuery):
                 if success:
                     await _show_checked_payment_success(callback, invoice_id)
                 else:
-                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напиши в поддержку.", show_alert=True)
+                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напишите в поддержку.", show_alert=True)
             else:
                 await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
     except Exception as e:

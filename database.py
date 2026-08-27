@@ -327,6 +327,20 @@ async def run_migrations():
                 'updated_at': {'type': 'TIMESTAMP', 'nullable': True, 'default': 'now()'},
             }
 
+            expected_reactivation_offers_columns = {
+                'tg_id': {'type': 'BIGINT', 'nullable': False},
+                'offer_type': {'type': 'TEXT', 'nullable': False},
+                'status': {'type': 'TEXT', 'nullable': False, 'default': "'offered'"},
+                'send_count': {'type': 'INT', 'nullable': False, 'default': '0'},
+                'last_message_id': {'type': 'BIGINT', 'nullable': True},
+                'first_sent_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'last_sent_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'activation_started_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'trial_expires_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'claimed_at': {'type': 'TIMESTAMP', 'nullable': True},
+                'subscription_id': {'type': 'BIGINT', 'nullable': True},
+            }
+
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 1: СОЗДАНИЕ ТАБЛИЦ (если не существуют)
             # ═══════════════════════════════════════════════════════════
@@ -614,6 +628,27 @@ async def run_migrations():
             """)
             logging.info("✅ Таблица 'notification_state' создана или уже существует")
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS reactivation_offers (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_id BIGINT NOT NULL,
+                    offer_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'offered',
+                    send_count INT NOT NULL DEFAULT 0,
+                    last_message_id BIGINT,
+                    first_sent_at TIMESTAMP,
+                    last_sent_at TIMESTAMP,
+                    activation_started_at TIMESTAMP,
+                    trial_expires_at TIMESTAMP,
+                    claimed_at TIMESTAMP,
+                    subscription_id BIGINT,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    UNIQUE(tg_id, offer_type)
+                )
+            """)
+            logging.info("✅ Таблица 'reactivation_offers' создана или уже существует")
+
             # Таблица платежей
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
@@ -768,6 +803,8 @@ async def run_migrations():
                 # notification_state индексы
                 "CREATE INDEX IF NOT EXISTS idx_notification_state_lookup ON notification_state(tg_id, subscription_id, notification_type);",
                 "CREATE INDEX IF NOT EXISTS idx_notification_state_last_sent ON notification_state(last_sent_at);",
+                "CREATE INDEX IF NOT EXISTS idx_reactivation_offers_due ON reactivation_offers(status, send_count, last_sent_at);",
+                "CREATE INDEX IF NOT EXISTS idx_reactivation_offers_user ON reactivation_offers(tg_id, status);",
 
                 # promo_codes индексы
                 "CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);",
@@ -897,6 +934,7 @@ async def run_migrations():
             await sync_table_schema(conn, 'tracking_links', expected_tracking_links_columns)
             await sync_table_schema(conn, 'tracking_link_clicks', expected_tracking_clicks_columns)
             await sync_table_schema(conn, 'notification_state', expected_notification_state_columns)
+            await sync_table_schema(conn, 'reactivation_offers', expected_reactivation_offers_columns)
 
             normalized_links = await conn.fetchval(
                 """
@@ -3245,6 +3283,534 @@ async def mark_notification_state_sent(tg_id: int, notification_type: str, subsc
         """,
         (tg_id, subscription_id or 0, notification_type),
     )
+
+
+# ────────────────────────────────────────────────
+#          REACTIVATION OFFERS
+# ────────────────────────────────────────────────
+
+async def ensure_reactivation_candidates(inactive_cutoff, new_user_cutoff) -> None:
+    """Создать/обновить одноразовые предложения для подходящих пользователей."""
+    await db_execute(
+        """
+        UPDATE reactivation_offers offer
+        SET status = 'cancelled',
+            updated_at = now()
+        WHERE offer.status = 'offered'
+          AND EXISTS (
+              SELECT 1
+              FROM payments payment
+              WHERE payment.tg_id = offer.tg_id
+                AND payment.payment_kind = 'subscription'
+                AND payment.status = 'paid'
+                AND payment.amount > 0
+                AND payment.refund_requested_at IS NULL
+                AND payment.updated_at > offer.created_at
+          )
+        """
+    )
+
+    await db_execute(
+        """
+        WITH paid_users AS (
+            SELECT tg_id, MAX(updated_at) AS last_paid_at
+            FROM payments
+            WHERE payment_kind = 'subscription'
+              AND status = 'paid'
+              AND amount > 0
+              AND refund_requested_at IS NULL
+              AND tg_id > 0
+            GROUP BY tg_id
+        ),
+        last_access AS (
+            SELECT tg_id, MAX(subscription_until) AS last_subscription_until
+            FROM subscriptions
+            WHERE subscription_until IS NOT NULL
+              AND tg_id > 0
+            GROUP BY tg_id
+        ),
+        candidates AS (
+            SELECT user_row.tg_id
+            FROM users user_row
+            JOIN paid_users paid ON paid.tg_id = user_row.tg_id
+            JOIN last_access access ON access.tg_id = user_row.tg_id
+            WHERE user_row.tg_id > 0
+              AND paid.last_paid_at <= $1
+              AND access.last_subscription_until <= $1
+              AND paid.last_paid_at <= access.last_subscription_until
+              AND NOT EXISTS (
+                  SELECT 1 FROM subscriptions active_subscription
+                  WHERE active_subscription.tg_id = user_row.tg_id
+                    AND active_subscription.subscription_until IS NOT NULL
+                    AND active_subscription.subscription_until > now() AT TIME ZONE 'UTC'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM reactivation_offers claimed_offer
+                  WHERE claimed_offer.tg_id = user_row.tg_id
+                    AND claimed_offer.status = 'claimed'
+              )
+        )
+        INSERT INTO reactivation_offers (tg_id, offer_type, status)
+        SELECT tg_id, 'winback_7d', 'offered'
+        FROM candidates
+        ON CONFLICT (tg_id, offer_type) DO UPDATE
+        SET status = 'offered',
+            send_count = 0,
+            last_message_id = NULL,
+            first_sent_at = NULL,
+            last_sent_at = NULL,
+            activation_started_at = NULL,
+            trial_expires_at = NULL,
+            claimed_at = NULL,
+            subscription_id = NULL,
+            created_at = now(),
+            updated_at = now()
+        WHERE reactivation_offers.status = 'cancelled'
+          AND NOT EXISTS (
+              SELECT 1 FROM reactivation_offers claimed_offer
+              WHERE claimed_offer.tg_id = EXCLUDED.tg_id
+                AND claimed_offer.status = 'claimed'
+          )
+        """,
+        (inactive_cutoff,),
+    )
+
+    await db_execute(
+        """
+        INSERT INTO reactivation_offers (tg_id, offer_type, status)
+        SELECT user_row.tg_id, 'new_user_1d', 'offered'
+        FROM users user_row
+        WHERE user_row.tg_id > 0
+          AND user_row.accepted_terms = TRUE
+          AND user_row.created_at <= $1
+          AND NOT EXISTS (
+              SELECT 1 FROM payments payment
+              WHERE payment.tg_id = user_row.tg_id
+                AND payment.payment_kind = 'subscription'
+                AND payment.status = 'paid'
+                AND payment.amount > 0
+                AND payment.refund_requested_at IS NULL
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM subscriptions active_subscription
+              WHERE active_subscription.tg_id = user_row.tg_id
+                AND active_subscription.subscription_until IS NOT NULL
+                AND active_subscription.subscription_until > now() AT TIME ZONE 'UTC'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM reactivation_offers claimed_offer
+              WHERE claimed_offer.tg_id = user_row.tg_id
+                AND claimed_offer.status = 'claimed'
+          )
+        ON CONFLICT (tg_id, offer_type) DO UPDATE
+        SET status = 'offered',
+            send_count = 0,
+            last_message_id = NULL,
+            first_sent_at = NULL,
+            last_sent_at = NULL,
+            activation_started_at = NULL,
+            trial_expires_at = NULL,
+            claimed_at = NULL,
+            subscription_id = NULL,
+            created_at = now(),
+            updated_at = now()
+        WHERE reactivation_offers.status = 'cancelled'
+          AND NOT EXISTS (
+              SELECT 1 FROM reactivation_offers claimed_offer
+              WHERE claimed_offer.tg_id = EXCLUDED.tg_id
+                AND claimed_offer.status = 'claimed'
+          )
+        """,
+        (new_user_cutoff,),
+    )
+
+
+async def get_reactivation_offers_due(day_start_utc, max_sends: int):
+    """Получить предложения, которые ещё не обновлялись в текущую дату МСК."""
+    return await db_execute(
+        """
+        SELECT offer.*
+        FROM reactivation_offers offer
+        WHERE offer.status = 'offered'
+          AND offer.send_count < $2
+          AND (offer.last_sent_at IS NULL OR offer.last_sent_at < $1)
+          AND NOT EXISTS (
+              SELECT 1 FROM subscriptions active_subscription
+              WHERE active_subscription.tg_id = offer.tg_id
+                AND active_subscription.subscription_until IS NOT NULL
+                AND active_subscription.subscription_until > now() AT TIME ZONE 'UTC'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM notification_state delivery_state
+              WHERE delivery_state.tg_id = offer.tg_id
+                AND delivery_state.subscription_id = 0
+                AND delivery_state.notification_type = 'telegram_delivery_blocked'
+          )
+        ORDER BY offer.id ASC
+        """,
+        (day_start_utc, max_sends),
+        fetch_all=True,
+    )
+
+
+async def mark_reactivation_offer_sent(offer_id: int, message_id: int, day_start_utc, max_sends: int) -> bool:
+    result = await db_execute(
+        """
+        UPDATE reactivation_offers
+        SET send_count = send_count + 1,
+            last_message_id = $2,
+            first_sent_at = COALESCE(first_sent_at, now()),
+            last_sent_at = now(),
+            updated_at = now()
+        WHERE id = $1
+          AND status = 'offered'
+          AND send_count < $4
+          AND (last_sent_at IS NULL OR last_sent_at < $3)
+        RETURNING id
+        """,
+        (offer_id, message_id, day_start_utc, max_sends),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+async def has_open_reactivation_offer(tg_id: int) -> bool:
+    result = await db_execute(
+        """
+        SELECT 1
+        FROM reactivation_offers
+        WHERE tg_id = $1 AND status = 'offered'
+        LIMIT 1
+        """,
+        (tg_id,),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+async def cancel_open_reactivation_offers(tg_id: int):
+    """Закрыть предложения после покупки и убрать сломанные скрытые заготовки."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                UPDATE reactivation_offers
+                SET status = 'cancelled', updated_at = now()
+                WHERE tg_id = $1 AND status = 'offered'
+                RETURNING id, last_message_id, subscription_id
+                """,
+                tg_id,
+            )
+            for row in rows:
+                if row['subscription_id'] is not None:
+                    await conn.execute(
+                        """
+                        DELETE FROM subscriptions
+                        WHERE id = $1
+                          AND tg_id = $2
+                          AND is_active = FALSE
+                          AND is_visible = FALSE
+                          AND remnawave_uuid IS NULL
+                        """,
+                        row['subscription_id'],
+                        tg_id,
+                    )
+            return rows
+
+
+async def prepare_reactivation_offer_claim(offer_id: int, tg_id: int, days: int):
+    """Зафиксировать срок и локальную подписку перед обращением к Remnawave."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            offer = await conn.fetchrow(
+                "SELECT * FROM reactivation_offers WHERE id = $1 AND tg_id = $2 FOR UPDATE",
+                offer_id,
+                tg_id,
+            )
+            if not offer:
+                return {'error': 'not_found'}
+            if offer['status'] == 'claimed':
+                return {'error': 'already_claimed'}
+            if offer['status'] != 'offered':
+                return {'error': 'not_available'}
+
+            claimed_elsewhere = await conn.fetchval(
+                """
+                SELECT 1 FROM reactivation_offers
+                WHERE tg_id = $1 AND status = 'claimed'
+                LIMIT 1
+                """,
+                tg_id,
+            )
+            if claimed_elsewhere:
+                return {'error': 'already_claimed'}
+
+            has_active = await conn.fetchval(
+                """
+                SELECT 1 FROM subscriptions
+                WHERE tg_id = $1
+                  AND subscription_until IS NOT NULL
+                  AND subscription_until > now() AT TIME ZONE 'UTC'
+                LIMIT 1
+                """,
+                tg_id,
+            )
+            if has_active:
+                return {'error': 'active_subscription'}
+
+            if offer['offer_type'] == 'new_user_1d':
+                disqualifying_payment = await conn.fetchval(
+                    """
+                    SELECT 1 FROM payments
+                    WHERE tg_id = $1
+                      AND payment_kind = 'subscription'
+                      AND status = 'paid'
+                      AND amount > 0
+                      AND refund_requested_at IS NULL
+                    LIMIT 1
+                    """,
+                    tg_id,
+                )
+            else:
+                disqualifying_payment = await conn.fetchval(
+                    """
+                    SELECT 1 FROM payments
+                    WHERE tg_id = $1
+                      AND payment_kind = 'subscription'
+                      AND status = 'paid'
+                      AND amount > 0
+                      AND refund_requested_at IS NULL
+                      AND updated_at > $2
+                    LIMIT 1
+                    """,
+                    tg_id,
+                    offer['created_at'],
+                )
+            if disqualifying_payment:
+                await conn.execute(
+                    "UPDATE reactivation_offers SET status = 'cancelled', updated_at = now() WHERE id = $1",
+                    offer_id,
+                )
+                return {'error': 'purchase_found'}
+
+            subscription = None
+            if offer['subscription_id'] is not None:
+                subscription = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE id = $1 AND tg_id = $2",
+                    offer['subscription_id'],
+                    tg_id,
+                )
+
+            if subscription is None:
+                subscription = await conn.fetchrow(
+                    """
+                    SELECT * FROM subscriptions
+                    WHERE tg_id = $1
+                      AND plan_kind = 'bypass'
+                      AND generation = 'v2'
+                      AND is_visible = TRUE
+                      AND (
+                            subscription_until IS NULL
+                         OR subscription_until <= now() AT TIME ZONE 'UTC'
+                      )
+                    ORDER BY subscription_until DESC NULLS LAST, id DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    tg_id,
+                )
+
+            if subscription is None:
+                rows = await conn.fetch(
+                    "SELECT slot_number, type_index, plan_kind, generation, is_visible FROM subscriptions WHERE tg_id = $1",
+                    tg_id,
+                )
+                taken_slots = {row['slot_number'] for row in rows}
+                taken_type_indexes = {
+                    row['type_index'] for row in rows
+                    if row['plan_kind'] == 'bypass'
+                    and row['generation'] == 'v2'
+                    and row['is_visible']
+                    and row['type_index'] is not None
+                }
+                slot_number = next(
+                    (slot for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER * 2 + 1) if slot not in taken_slots),
+                    None,
+                )
+                type_index = next(
+                    (index for index in range(1, MAX_SUBSCRIPTIONS_PER_USER + 1) if index not in taken_type_indexes),
+                    None,
+                )
+                if slot_number is None or type_index is None:
+                    return {'error': 'no_slot'}
+
+                subscription = await conn.fetchrow(
+                    """
+                    INSERT INTO subscriptions (
+                        tg_id, slot_number, is_active, plan_kind, type_index,
+                        generation, is_visible, is_renewable, purchase_days
+                    )
+                    VALUES ($1, $2, FALSE, 'bypass', $3, 'v2', FALSE, FALSE, $4)
+                    RETURNING *
+                    """,
+                    tg_id,
+                    slot_number,
+                    type_index,
+                    days,
+                )
+
+            trial_expires_at = offer['trial_expires_at'] or (datetime.utcnow() + timedelta(days=days))
+            prepared_offer = await conn.fetchrow(
+                """
+                UPDATE reactivation_offers
+                SET subscription_id = $2,
+                    activation_started_at = COALESCE(activation_started_at, now()),
+                    trial_expires_at = COALESCE(trial_expires_at, $3),
+                    updated_at = now()
+                WHERE id = $1 AND status = 'offered'
+                RETURNING *
+                """,
+                offer_id,
+                subscription['id'],
+                trial_expires_at,
+            )
+            return {
+                'offer': dict(prepared_offer),
+                'subscription': dict(subscription),
+            }
+
+
+async def finalize_reactivation_offer_claim(
+    offer_id: int,
+    tg_id: int,
+    subscription_id: int,
+    uuid: str,
+    username: str,
+    squad_uuid: str,
+    traffic_limit_bytes: int,
+    hwid_device_limit: int,
+    days: int,
+) -> bool:
+    """Атомарно показать подписку и навсегда отметить бесплатный доступ полученным."""
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                offer = await conn.fetchrow(
+                    "SELECT * FROM reactivation_offers WHERE id = $1 AND tg_id = $2 FOR UPDATE",
+                    offer_id,
+                    tg_id,
+                )
+                if (
+                    not offer
+                    or offer['status'] != 'offered'
+                    or offer['subscription_id'] != subscription_id
+                    or offer['trial_expires_at'] is None
+                ):
+                    return False
+
+                claimed_elsewhere = await conn.fetchval(
+                    """
+                    SELECT 1 FROM reactivation_offers
+                    WHERE tg_id = $1 AND status = 'claimed' AND id <> $2
+                    LIMIT 1
+                    """,
+                    tg_id,
+                    offer_id,
+                )
+                if claimed_elsewhere:
+                    return False
+
+                next_notification, notification_type = _calculate_notification_fields(offer['trial_expires_at'])
+                updated_subscription = await conn.fetchval(
+                    """
+                    UPDATE subscriptions
+                    SET remnawave_uuid = $1,
+                        remnawave_username = $2,
+                        subscription_until = $3,
+                        squad_uuid = $4,
+                        is_active = TRUE,
+                        plan_kind = 'bypass',
+                        generation = 'v2',
+                        is_visible = TRUE,
+                        is_renewable = TRUE,
+                        purchase_days = $5,
+                        traffic_enabled = TRUE,
+                        base_traffic_bytes = $6,
+                        current_paid_traffic_bytes = 0,
+                        carried_traffic_bytes = 0,
+                        current_period_limit_bytes = $6,
+                        traffic_reset_at = $7,
+                        last_known_used_traffic_bytes = 0,
+                        last_traffic_sync_at = now(),
+                        hwid_device_limit = $8,
+                        next_notification_time = $9,
+                        notification_type = $10,
+                        updated_at = now()
+                    WHERE id = $11 AND tg_id = $12
+                    RETURNING id
+                    """,
+                    uuid,
+                    username,
+                    offer['trial_expires_at'],
+                    squad_uuid,
+                    days,
+                    traffic_limit_bytes,
+                    datetime.utcnow() + timedelta(days=30),
+                    hwid_device_limit,
+                    next_notification,
+                    notification_type,
+                    subscription_id,
+                    tg_id,
+                )
+                if not updated_subscription:
+                    return False
+
+                claimed = await conn.fetchval(
+                    """
+                    UPDATE reactivation_offers
+                    SET status = 'claimed',
+                        claimed_at = now(),
+                        last_message_id = NULL,
+                        updated_at = now()
+                    WHERE id = $1 AND status = 'offered'
+                    RETURNING 1
+                    """,
+                    offer_id,
+                )
+                if not claimed:
+                    raise RuntimeError("reactivation offer claim conflicted during finalization")
+
+                await conn.execute(
+                    """
+                    UPDATE reactivation_offers
+                    SET status = 'cancelled', updated_at = now()
+                    WHERE tg_id = $1 AND id <> $2 AND status = 'offered'
+                    """,
+                    tg_id,
+                    offer_id,
+                )
+    except RuntimeError as exc:
+        logger.error(
+            "Could not atomically finalize reactivation offer %s for user %s: %s",
+            offer_id,
+            tg_id,
+            exc,
+        )
+        return False
+
+    try:
+        await sync_primary_subscription_to_user(tg_id)
+    except Exception as exc:
+        logger.warning(
+            "Reactivation offer %s was claimed, but primary subscription sync failed for user %s: %s",
+            offer_id,
+            tg_id,
+            exc,
+        )
+    return True
 
 
 # ────────────────────────────────────────────────

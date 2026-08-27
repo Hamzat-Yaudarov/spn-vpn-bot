@@ -23,8 +23,7 @@ def connection_app_url(platform: str) -> str:
 
 def connection_app_button_text(platform: str) -> str:
     _, app_name, _ = _platform_details(platform)
-    store_name = "Google Play" if platform == ANDROID_PLATFORM else "App Store"
-    return f"⬇️ Скачать {app_name} в {store_name}"
+    return f"⬇️ Скачать {app_name}"
 
 
 def build_connection_instruction(
@@ -39,33 +38,33 @@ def build_connection_instruction(
 
     if subscription_url:
         safe_subscription_url = escape(subscription_url, quote=False)
-        key_step = f"2. Скопируй ключ:\n<code>{safe_subscription_url}</code>\n"
+        key_step = f"2. Скопируйте ключ:\n<code>{safe_subscription_url}</code>\n"
         next_step = 3
     else:
         key_step = (
-            "2. Открой <b>🔐 Мои подписки</b>\n"
-            "3. Выбери подписку и скопируй ключ\n"
+            "2. Откройте <b>Мои подписки</b>\n"
+            "3. Выберите подписку и скопируйте ключ\n"
         )
         next_step = 4
 
     if platform == ANDROID_PLATFORM:
         app_steps = (
-            f"{next_step}. Открой <b>{app_name}</b>\n"
-            f"{next_step + 1}. Нажми <b>+</b> в правом верхнем углу\n"
-            f"{next_step + 2}. Выбери <b>Вставить из буфера обмена</b>\n"
-            f"{next_step + 3}. Подтверди добавление и включи подключение"
+            f"{next_step}. Откройте <b>{app_name}</b>\n"
+            f"{next_step + 1}. Нажмите <b>+</b> в правом верхнем углу\n"
+            f"{next_step + 2}. Выберите <b>Вставить из буфера</b>\n"
+            f"{next_step + 3}. Подтвердите добавление и включите VPN"
         )
     else:
         app_steps = (
-            f"{next_step}. Открой <b>{app_name}</b>\n"
-            f"{next_step + 1}. Нажми <b>+</b> и добавь подписку из буфера обмена\n"
-            f"{next_step + 2}. Разреши создание VPN-конфигурации, если iPhone попросит\n"
-            f"{next_step + 3}. Включи подключение"
+            f"{next_step}. Откройте <b>{app_name}</b>\n"
+            f"{next_step + 1}. Нажмите <b>+</b> и добавьте подписку из буфера\n"
+            f"{next_step + 2}. Разрешите создание VPN-конфигурации\n"
+            f"{next_step + 3}. Включите VPN"
         )
 
     return (
         f"📲 <b>Подключение на {platform_name}</b>\n\n"
-        f"1. Установи <b>{app_name}</b> кнопкой ниже\n"
+        f"1. Установите <b>{app_name}</b> кнопкой ниже\n"
         f"{key_step}"
         f"{app_steps}\n\n"
         f"Если что-то не получается: {safe_support_url}"

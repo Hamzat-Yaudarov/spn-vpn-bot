@@ -217,6 +217,24 @@ CREATE TABLE IF NOT EXISTS promo_codes (
     created_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS reactivation_offers (
+    id BIGSERIAL PRIMARY KEY,
+    tg_id BIGINT NOT NULL,
+    offer_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'offered',
+    send_count INT NOT NULL DEFAULT 0,
+    last_message_id BIGINT,
+    first_sent_at TIMESTAMP,
+    last_sent_at TIMESTAMP,
+    activation_started_at TIMESTAMP,
+    trial_expires_at TIMESTAMP,
+    claimed_at TIMESTAMP,
+    subscription_id BIGINT,
+    created_at TIMESTAMP DEFAULT now(),
+    updated_at TIMESTAMP DEFAULT now(),
+    UNIQUE(tg_id, offer_type)
+);
+
 CREATE TABLE IF NOT EXISTS promo_code_users (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT NOT NULL,
@@ -316,6 +334,8 @@ CREATE INDEX IF NOT EXISTS idx_users_remnawave_uuid ON users(remnawave_uuid);
 CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_users_tracking_code ON users(tracking_code);
 CREATE INDEX IF NOT EXISTS idx_users_next_notification ON users(next_notification_time) WHERE next_notification_time IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_reactivation_offers_due ON reactivation_offers(status, send_count, last_sent_at);
+CREATE INDEX IF NOT EXISTS idx_reactivation_offers_user ON reactivation_offers(tg_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_partnerships_tg_id ON partnerships(tg_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tg_id ON subscriptions(tg_id);

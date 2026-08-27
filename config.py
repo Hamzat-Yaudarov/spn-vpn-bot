@@ -138,6 +138,16 @@ CLEANUP_CHECK_INTERVAL = 300  # 5 минут - интервал удаления
 PAYMENT_EXPIRY_TIME = 86400  # 24 часа - время жизни неоплаченного счёта (достаточно для вебхука от Юкассы)
 TRACKING_ATTRIBUTION_DAYS = 30  # last-touch окно для привязки Telegram-платежа к рекламному переходу
 
+# Автоматические одноразовые предложения для неактивных Telegram-пользователей.
+REACTIVATION_SEND_HOUR_MSK = 18
+REACTIVATION_MAX_SENDS = 7
+REACTIVATION_WINBACK_DAYS = 7
+REACTIVATION_WINBACK_TRAFFIC_GB = 50
+REACTIVATION_NEW_USER_DAYS = 1
+REACTIVATION_NEW_USER_TRAFFIC_GB = 10
+REACTIVATION_WINBACK_INACTIVE_DAYS = 30
+REACTIVATION_NEW_USER_WAIT_DAYS = 7
+
 # ────────────────────────────────────────────────
 #           ANTI-SPAM COOLDOWNS
 # ────────────────────────────────────────────────

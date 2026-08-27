@@ -81,7 +81,9 @@ class ChannelOfferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("день подписки", text)
         self.assertNotIn("пробн", text)
         self.assertNotIn("подар", text)
-        self.assertIn("проверить", text)
+        self.assertIn("я подписался", text)
+        keyboard = bot.send_message.await_args.kwargs["reply_markup"]
+        self.assertEqual(keyboard.inline_keyboard[1][0].text, "✅ Я подписался")
 
 
 class ChannelCheckHandlerTests(unittest.IsolatedAsyncioTestCase):
@@ -120,7 +122,7 @@ class ChannelCheckHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.message.delete.assert_awaited_once()
         complete.assert_awaited_once_with(123)
         state.clear.assert_awaited_once()
-        show_main_menu.assert_awaited_once_with(callback.message, 123)
+        show_main_menu.assert_awaited_once_with(callback.message, 123, welcome=True)
         callback.bot.send_message.assert_not_awaited()
 
 

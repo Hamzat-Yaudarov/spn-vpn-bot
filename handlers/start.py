@@ -27,7 +27,7 @@ def mobile_auth_keyboard(challenge_id: str, device_name: str | None = None) -> t
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✅ Подтвердить вход в Way VPN",
+            text="✅ Подтвердить вход",
             callback_data=f"mobile_auth_approve:{challenge_id}",
             style="success",
         )],
@@ -140,11 +140,11 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     # Проверяем принял ли пользователь условия
     if not await db.has_accepted_terms(tg_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять", callback_data="accept_terms", style="success")],
-            [InlineKeyboardButton(text="📄 Прочитать соглашение", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
+            [InlineKeyboardButton(text="✅ Принять условия", callback_data="accept_terms", style="success")],
+            [InlineKeyboardButton(text="📄 Открыть условия", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
         ])
         await message.answer(
-            "Перед использованием бота необходимо ознакомиться и принять пользовательское соглашение.",
+            "Чтобы пользоваться ботом, примите пользовательское соглашение.",
             reply_markup=kb
         )
         await state.set_state(UserStates.waiting_for_agreement)
@@ -176,71 +176,56 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
     text = (
         f"{prefix}📢 <b>Подпишитесь на наш новостной канал</b>\n\n"
         "Так вы не пропустите новости и важные изменения Way SPN.\n\n"
-        "После подписки нажмите <b>«Проверить»</b>."
+        "После подписки нажмите <b>«Я подписался»</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Подписаться", url=news_channel_url(), style="primary")],
-        [InlineKeyboardButton(text="Проверить", callback_data="check_news_channel", style="success")],
+        [InlineKeyboardButton(text="📢 Открыть канал", url=news_channel_url(), style="primary")],
+        [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_news_channel", style="success")],
     ])
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
-async def show_main_menu(message: Message, user_id: int | None = None):
-    """Показать главное меню"""
-    tg_id = user_id if user_id is not None else message.from_user.id
-    is_partner = await db.is_partner(tg_id)
+def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    """Единый короткий главный экран для /start и callback-возврата."""
+    support_url = SUPPORT_URL or "https://t.me/wayspn_support"
+    text = (
+        "✅ <b>Всё готово!</b>\n\n"
+        "Чтобы начать, нажмите <b>«Купить подписку»</b>.\n"
+        "После оплаты бот выдаст ключ и покажет, как подключиться."
+        if welcome else
+        "🏠 <b>Way SPN</b>\n\nВыберите нужное действие."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="📲 Как подключить", callback_data="how_to_connect", style="primary")],
+        [InlineKeyboardButton(text="🆘 Помощь", url=support_url, style="primary")],
+        [InlineKeyboardButton(text="⋯ Ещё", callback_data="more_menu", style="primary")],
+    ])
+    return text, keyboard
 
+
+async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Второстепенные функции, не перегружающие главный экран."""
     keyboard = [
         [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
-        [InlineKeyboardButton(text="💳 Купить / Продлить подписку", callback_data="buy_subscription", style="success")],
+        [InlineKeyboardButton(text="📢 Новости", url=news_channel_url(), style="primary")],
+        [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="referral", style="primary")],
+        [InlineKeyboardButton(text="↩️ Оформить возврат", callback_data="refund_start", style="primary")],
     ]
-    if tg_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton(text="🛠 Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary")])
-    visible_subscriptions = await db.get_bot_visible_subscriptions(tg_id)
-    if visible_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-
-    active_bypass_subscriptions = await db.get_active_bypass_subscriptions(tg_id)
-    if active_bypass_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")])
-
-    keyboard.extend([
-        [InlineKeyboardButton(text="📲 Инструкция", callback_data="how_to_connect", style="primary")],
-        [InlineKeyboardButton(text="📢 Новостной канал", url=f"https://t.me/{NEWS_CHANNEL_USERNAME}", style="primary")],
-        [InlineKeyboardButton(text="👥 Бонус за друга", callback_data="referral", style="primary")],
-    ])
-
-    # Добавляем кнопку партнёрства если пользователь партнёр
-    if is_partner:
+    if await db.is_partner(tg_id):
         keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
+    if tg_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton(
+            text="🛠 Админ-панель",
+            web_app=WebAppInfo(url=ADMIN_PANEL_URL),
+            style="primary",
+        )])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
+    return "⋯ <b>Ещё</b>\n\nВыберите нужный раздел.", InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    keyboard.append([InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_URL, style="primary")])
 
-    kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-    text = (
-        "<b>SPN — стабильное и быстрое интернет-соединение</b>\n\n"
-        "<b>Что вы получаете:</b>\n"
-        "<blockquote>"
-        "• Улучшенную работу сайтов, мессенджеров и онлайн-сервисов\n"
-        "• Более стабильное соединение даже при перегрузках сети\n"
-        "• Поддержку Android, iOS, Windows, macOS и Linux\n"
-        "• Простое подключение за 1–2 минуты\n"
-        "• Защиту и оптимизацию интернет-трафика"
-        "</blockquote>\n\n"
-        "<b>После активации:</b>\n"
-        "<blockquote>"
-        "🔐 Персональный доступ SPN на выбранный срок\n"
-        "📥 Пошаговую инструкцию по подключению\n"
-        "🛟 Поддержку в Telegram\n"
-        "🌍 Свободную и стабильную работу в интернете"
-        "</blockquote>\n\n"
-        "<b>Реферальная программа:</b>\n"
-        "<blockquote>"
-        "👥 За каждого приглашённого пользователя:\n"
-        "💰 35% от первой покупки\n"
-        "💰 15% от повторных покупок"
-        "</blockquote>"
-    )
-
-    await send_text_with_photo(message, text, kb, "Главное меню")
+async def show_main_menu(message: Message, user_id: int | None = None, *, welcome: bool = False):
+    """Отправить единый главный экран."""
+    text, keyboard = build_main_menu(welcome=welcome)
+    await send_text_with_photo(message, text, keyboard, "Главное меню")

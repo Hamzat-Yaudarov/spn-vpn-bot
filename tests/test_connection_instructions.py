@@ -21,8 +21,7 @@ class ConnectionInstructionTests(unittest.TestCase):
             "https://play.google.com/store/apps/details?id=com.happproxy",
         )
         self.assertEqual(connection_app_url(ANDROID_PLATFORM), ANDROID_APP_URL)
-        self.assertIn("Happ Plus", connection_app_button_text(ANDROID_PLATFORM))
-        self.assertIn("Google Play", connection_app_button_text(ANDROID_PLATFORM))
+        self.assertEqual(connection_app_button_text(ANDROID_PLATFORM), "⬇️ Скачать Happ Plus")
 
     def test_iphone_uses_incy_app_store_page(self):
         self.assertEqual(
@@ -30,8 +29,7 @@ class ConnectionInstructionTests(unittest.TestCase):
             "https://apps.apple.com/ru/app/incy/id6756943388",
         )
         self.assertEqual(connection_app_url(IPHONE_PLATFORM), IPHONE_APP_URL)
-        self.assertIn("INCY", connection_app_button_text(IPHONE_PLATFORM))
-        self.assertIn("App Store", connection_app_button_text(IPHONE_PLATFORM))
+        self.assertEqual(connection_app_button_text(IPHONE_PLATFORM), "⬇️ Скачать INCY")
 
     def test_general_instructions_are_platform_specific(self):
         android = build_connection_instruction(
@@ -101,7 +99,8 @@ class ConnectionInstructionHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback_data = [row[0].callback_data for row in keyboard.inline_keyboard]
         self.assertIn("instruction_connect_android", callback_data)
         self.assertIn("instruction_connect_iphone", callback_data)
-        self.assertIn("instruction_buy", callback_data)
+        self.assertNotIn("instruction_buy", callback_data)
+        self.assertEqual(callback_data[-1], "back_to_menu")
 
     async def test_android_handler_attaches_google_play_button(self):
         callback = self._callback("instruction_connect_android")

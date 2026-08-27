@@ -4,6 +4,7 @@ import unicodedata
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import SUPPORT_URL
@@ -47,10 +48,10 @@ def _button(text: str, callback_data: str | None = None, url: str | None = None,
 
 def _default_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [_button("💳 Купить / Продлить", "buy_subscription", style="success")],
-        [_button("🔐 Мои подписки", "my_subscriptions")],
+        [_button("🛒 Купить подписку", "buy_subscription", style="success")],
+        [_button("🔑 Мои подписки", "my_subscriptions")],
         [_button("✅ Проверить оплату", "check_payment")],
-        [_button("📲 Инструкция", "how_to_connect")],
+        [_button("📲 Как подключить", "how_to_connect")],
     ]
     if SUPPORT_URL:
         rows.append([_button("🆘 Поддержка", url=SUPPORT_URL)])
@@ -99,54 +100,54 @@ def _detect_intent(text: str) -> str:
 def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
     if intent == "buy":
         return (
-            "Чтобы купить или продлить доступ, нажми кнопку ниже. Бот покажет тарифы и способы оплаты.",
+            "Нажмите кнопку ниже. Бот покажет виды подписки, сроки и способы оплаты.",
             InlineKeyboardMarkup(inline_keyboard=[
-                [_button("💳 Купить / Продлить подписку", "buy_subscription", style="success")],
-                [_button("📲 Инструкция", "how_to_connect")],
+                [_button("🛒 Купить подписку", "buy_subscription", style="success")],
+                [_button("📲 Как подключить", "how_to_connect")],
             ]),
         )
 
     if intent == "my_key":
         return (
-            "Ключ и все активные подписки находятся в разделе «Мои подписки». Открой его кнопкой ниже.",
+            "Ключ находится в разделе «Мои подписки». Нажмите кнопку ниже.",
             InlineKeyboardMarkup(inline_keyboard=[
-                [_button("🔐 Мои подписки", "my_subscriptions")],
-                [_button("💳 Купить / Продлить", "buy_subscription", style="success")],
+                [_button("🔑 Мои подписки", "my_subscriptions")],
+                [_button("🛒 Купить подписку", "buy_subscription", style="success")],
             ]),
         )
 
     if intent == "payment_check":
         return (
-            "Если ты уже оплатил, нажми «Проверить оплату». Если платёж прошёл, бот активирует подписку и пришлёт ключ.",
+            "Если вы уже оплатили, нажмите «Проверить оплату». Бот проверит платёж и активирует подписку.",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("✅ Проверить оплату", "check_payment", style="success")],
-                [_button("🔐 Мои подписки", "my_subscriptions")],
+                [_button("🔑 Мои подписки", "my_subscriptions")],
             ]),
         )
 
     if intent == "connect":
         return (
-            "Чтобы подключить VPN, открой инструкцию. Там коротко показано, куда вставить ключ и как включить подключение.",
+            "Откройте инструкцию и выберите Android или iPhone.",
             InlineKeyboardMarkup(inline_keyboard=[
-                [_button("📲 Инструкция", "how_to_connect", style="success")],
-                [_button("🔐 Мои подписки", "my_subscriptions")],
+                [_button("📲 Как подключить", "how_to_connect", style="success")],
+                [_button("🔑 Мои подписки", "my_subscriptions")],
             ]),
         )
 
     if intent == "promo":
         return (
-            "Промокод можно ввести из раздела «Мои подписки». Открой раздел и нажми «Ввести промокод».",
+            "Промокод находится в разделе «Мои подписки».",
             InlineKeyboardMarkup(inline_keyboard=[
-                [_button("🔐 Мои подписки", "my_subscriptions", style="success")],
+                [_button("🔑 Мои подписки", "my_subscriptions", style="success")],
                 [_button("🎟 Ввести промокод", "enter_promo")],
             ]),
         )
 
     if intent == "refund":
         return (
-            "Для возврата нажми команду «Оформить возврат» в меню или отправь /refund. Возврат доступен только в течение 3 суток после покупки или продления.",
+            "Возврат доступен в течение 3 суток после покупки или продления.",
             InlineKeyboardMarkup(inline_keyboard=[
-                [_button("↩️ Оформить возврат", "refund_hint", style="success")],
+                [_button("↩️ Оформить возврат", "refund_start", style="success")],
                 [_button("🆘 Поддержка", url=SUPPORT_URL)] if SUPPORT_URL else [_button("🏠 Главное меню", "back_to_menu")],
             ]),
         )
@@ -155,12 +156,12 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
         rows = [[_button("🆘 Написать в поддержку", url=SUPPORT_URL, style="success")]] if SUPPORT_URL else []
         rows.append([_button("🏠 Главное меню", "back_to_menu")])
         return (
-            "Если что-то не получается, напиши в поддержку. Мы поможем разобраться.",
+            "Если что-то не получается, напишите в поддержку.",
             InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
     return (
-        "Я могу помочь с покупкой, оплатой, ключом или подключением. Выбери нужное действие ниже.",
+        "Я могу помочь с покупкой, оплатой, ключом или подключением. Выберите действие.",
         _default_keyboard(),
     )
 
@@ -183,5 +184,7 @@ async def process_free_text_help(message: Message):
 
 
 @router.callback_query(F.data == "refund_hint")
-async def process_refund_hint(callback: CallbackQuery):
-    await callback.answer("Отправь команду /refund или открой «Оформить возврат» в меню Telegram.", show_alert=True)
+async def process_refund_hint(callback: CallbackQuery, state: FSMContext):
+    """Старая кнопка из уже отправленных сообщений открывает новый возврат."""
+    from handlers.subscription import process_refund_start
+    await process_refund_start(callback, state)

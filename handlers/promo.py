@@ -30,11 +30,11 @@ def _build_v2_remnawave_username(tg_id: int, plan_kind: str, type_index: int) ->
 
 def _subscription_name(subscription) -> str:
     plan_kind = subscription.get("plan_kind") or "regular"
-    title = "Обычная" if plan_kind == "regular" else "С антиглушилкой"
-    return f"{title} #{subscription.get('type_index') or subscription['slot_number']}"
+    title = "Обычная" if plan_kind == "regular" else "Антиглушилка"
+    return f"{title} №{subscription.get('type_index') or subscription['slot_number']}"
 
 
-async def _prompt_promo_input(message_or_callback, state: FSMContext, text: str = "Введи промокод:"):
+async def _prompt_promo_input(message_or_callback, state: FSMContext, text: str = "Введите промокод:"):
     if hasattr(message_or_callback, "message"):
         await message_or_callback.message.answer(text)
     else:
@@ -53,7 +53,7 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
 
     if not subscriptions:
         await state.update_data(promo_target_mode="new", promo_target_type_index=next_type_index or 1)
-        await _prompt_promo_input(callback, state, "Введи промокод для новой обычной подписки #1:")
+        await _prompt_promo_input(callback, state, "Введите промокод для новой обычной подписки №1:")
         return
 
     if len(subscriptions) == 1 and next_type_index is None:
@@ -61,7 +61,7 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
             promo_target_mode="existing",
             promo_target_subscription_id=subscriptions[0]["id"],
         )
-        await _prompt_promo_input(callback, state, f"Введи промокод для {_subscription_name(subscriptions[0]).lower()}:")
+        await _prompt_promo_input(callback, state, f"Введите промокод для {_subscription_name(subscriptions[0]).lower()}:")
         return
 
     if len(subscriptions) == 1 and next_type_index is not None:
@@ -70,24 +70,24 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
             promo_target_subscription_id=subscriptions[0]["id"],
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}", style="success")],
-            [InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")],
+            [InlineKeyboardButton(text=f"К {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}", style="success")],
+            [InlineKeyboardButton(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")],
+            [InlineKeyboardButton(text="← Назад", callback_data="my_subscriptions", style="primary")],
         ])
         await callback.message.answer("Куда применить промокод?", reply_markup=kb)
         await state.set_state(UserStates.waiting_for_promo_target)
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"Применить к {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}", style="success")]
+        [InlineKeyboardButton(text=f"К {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
     if next_type_index is not None:
-        keyboard.append([InlineKeyboardButton(text=f"Активировать новую обычную #{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")])
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")])
+        keyboard.append([InlineKeyboardButton(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")])
+    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="my_subscriptions", style="primary")])
 
     await callback.message.answer(
-        "Выбери, куда применить промокод:",
+        "Выберите, куда применить промокод:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
     )
     await state.set_state(UserStates.waiting_for_promo_target)
@@ -108,7 +108,7 @@ async def process_promo_target_existing(callback: CallbackQuery, state: FSMConte
         promo_target_subscription_id=subscription_id,
         promo_target_type_index=subscription.get("type_index"),
     )
-    await _prompt_promo_input(callback, state, f"Введи промокод для {_subscription_name(subscription).lower()}:")
+    await _prompt_promo_input(callback, state, f"Введите промокод для {_subscription_name(subscription).lower()}:")
 
 
 @router.callback_query(F.data.startswith("promo_target_new_"))
@@ -119,7 +119,7 @@ async def process_promo_target_new(callback: CallbackQuery, state: FSMContext):
         promo_target_subscription_id=None,
         promo_target_type_index=type_index,
     )
-    await _prompt_promo_input(callback, state, f"Введи промокод для новой обычной подписки #{type_index}:")
+    await _prompt_promo_input(callback, state, f"Введите промокод для новой обычной подписки №{type_index}:")
 
 
 @router.message(UserStates.waiting_for_promo)
@@ -142,7 +142,7 @@ async def process_promo_input(message: Message, state: FSMContext):
     await db.update_last_promo_attempt(tg_id)
 
     if not await db.acquire_user_lock(tg_id):
-        await message.answer("Подожди пару секунд ⏳")
+        await message.answer("Подождите несколько секунд ⏳")
         await state.clear()
         await show_main_menu(message)
         return
@@ -184,7 +184,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
             target_slot = await db.get_next_subscription_slot(tg_id)
             if target_type_index is None or target_slot is None:
-                await message.answer("❌ У тебя уже максимум обычных подписок")
+                await message.answer("❌ У вас уже максимум обычных подписок")
                 await state.clear()
                 await show_main_menu(message)
                 return
@@ -297,7 +297,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         # Отправляем успешное сообщение
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu", style="danger")]
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")]
         ])
 
         text = (
