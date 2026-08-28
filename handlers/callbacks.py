@@ -14,6 +14,7 @@ from handlers.start import (
 )
 from services.image_handler import edit_text_with_photo
 from services.mobile_auth import approve_challenge, pending_challenge_for_user
+from services.custom_emoji import semantic_button
 from services.connection_instructions import (
     ANDROID_PLATFORM,
     IPHONE_PLATFORM,
@@ -132,7 +133,7 @@ async def process_mobile_auth_approval(callback: CallbackQuery, state: FSMContex
     await callback.message.edit_text(
         "✅ <b>Вход в Way VPN подтверждён.</b>\n\nНажмите кнопку ниже, чтобы безопасно вернуться в приложение.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
+            semantic_button(
                 text="↩️ Вернуться в Way VPN",
                 url=f"{PUBLIC_SITE_URL.rstrip('/')}/mobile/auth-return",
                 style="success",
@@ -168,9 +169,9 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} clicked: how_to_connect")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
-        [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
+        [semantic_button(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
+        [semantic_button(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
+        [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
@@ -188,8 +189,8 @@ async def process_instruction_buy(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} opened buy instruction")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="← Назад", callback_data="how_to_connect", style="primary")]
+        [semantic_button(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+        [semantic_button(text="← Назад", callback_data="how_to_connect", style="primary")]
     ])
 
     text = (
@@ -212,9 +213,9 @@ async def process_instruction_connect(callback: CallbackQuery, state: FSMContext
     logging.info(f"User {tg_id} opened connection platform selection")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
-        [InlineKeyboardButton(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
+        [semantic_button(text="🤖 Android", callback_data="instruction_connect_android", style="primary")],
+        [semantic_button(text="🍎 iPhone", callback_data="instruction_connect_iphone", style="primary")],
+        [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
@@ -233,14 +234,14 @@ async def process_instruction_connect_platform(callback: CallbackQuery, state: F
     logging.info(f"User {tg_id} opened {platform} connection instruction")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [semantic_button(
             text=connection_app_button_text(platform),
             url=connection_app_url(platform),
             style="success",
         )],
-        [InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="📱 Другое устройство", callback_data="instruction_connect", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [semantic_button(text="📱 Другое устройство", callback_data="instruction_connect", style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(

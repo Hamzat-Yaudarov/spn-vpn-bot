@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import database as db
 from config import SUPPORT_URL
 from services.reactivation_campaigns import activate_reactivation_offer
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -75,19 +76,19 @@ async def process_reactivation_claim(callback: CallbackQuery):
     expires_at_msk = expires_at_utc.astimezone(MSK)
     support_url = SUPPORT_URL or "https://t.me/wayspn_support"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [semantic_button(
             text="🤖 Подключить Android",
             callback_data=f"subscription_instruction_android_{subscription_id}",
             style="success",
         )],
-        [InlineKeyboardButton(
+        [semantic_button(
             text="🍎 Подключить iPhone",
             callback_data=f"subscription_instruction_iphone_{subscription_id}",
             style="success",
         )],
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=support_url, style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [semantic_button(text="🆘 Поддержка", url=support_url, style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
     await callback.bot.send_message(
         callback.message.chat.id,

@@ -24,6 +24,7 @@ from services.remnawave import (
 from services.device_addons import device_count_text, effective_device_limit
 from services.traffic_periods import build_traffic_period_state
 from services.reactivation_campaigns import cancel_reactivation_offers_after_purchase
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -372,10 +373,10 @@ async def process_paid_payment(
                 f"<b>Ваш ключ:</b>\n{sub_url}"
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription['id']}", style="primary")],
-                [InlineKeyboardButton(text="📲 Подключить", callback_data=f"subscription_instruction_{subscription['id']}", style="success")],
-                [InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
-                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+                [semantic_button(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription['id']}", style="primary")],
+                [semantic_button(text="📲 Подключить", callback_data=f"subscription_instruction_{subscription['id']}", style="success")],
+                [semantic_button(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
+                [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
             ])
             if bot is not None and tg_id > 0:
                 try:
@@ -443,8 +444,8 @@ async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, paymen
     await db.update_payment_status_by_invoice(invoice_id, "paid")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
     if bot is not None and tg_id > 0:
         try:
@@ -513,8 +514,8 @@ async def _process_paid_device_addon(bot, tg_id: int, invoice_id: str, payment_r
 
     count = int(purchase.get("device_count") or 0)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🔑 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
     if bot is not None and tg_id > 0:
         try:

@@ -39,6 +39,7 @@ from services.connection_instructions import (
     connection_app_url,
 )
 from services.payment_summary import build_payment_success_summary
+from services.custom_emoji import semantic_button
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
     remnawave_delete_hwid_device,
@@ -265,9 +266,9 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
         price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
         period = f"{tariff['days']} дней"
         label = f"{period} — {price_label}"
-        keyboard.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
+        keyboard.append([semantic_button(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
 
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     image_key = "Покупка обычной подписки" if plan_kind == "regular" else "Покупка подписки с антиглушилкой"
@@ -283,9 +284,9 @@ async def _show_new_subscription_type_choice(
 ):
     """Короткий понятный выбор типа новой подписки."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛡 С антиглушилкой", callback_data="plan_bypass", style="success")],
-        [InlineKeyboardButton(text="⚡ Обычная", callback_data="plan_regular", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data=back_callback, style="primary")],
+        [semantic_button(text="🛡 С антиглушилкой", callback_data="plan_bypass", style="success")],
+        [semantic_button(text="⚡ Обычная", callback_data="plan_regular", style="primary")],
+        [semantic_button(text="← Назад", callback_data=back_callback, style="primary")],
     ])
     text = (
         "🛒 <b>Выберите подписку</b>\n\n"
@@ -309,10 +310,10 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
 
     keyboard = []
     if renewable_subscriptions:
-        keyboard.append([InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="renew_existing_subscription", style="success")])
+        keyboard.append([semantic_button(text="🔄 Продлить подписку", callback_data="renew_existing_subscription", style="success")])
 
-    keyboard.append([InlineKeyboardButton(text="🛒 Купить новую", callback_data="buy_new_subscription", style="success")])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
+    keyboard.append([semantic_button(text="🛒 Купить новую", callback_data="buy_new_subscription", style="success")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await state.clear()
@@ -330,9 +331,9 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
 
     if not subscriptions:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
-            [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")],
-            [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")],
+            [semantic_button(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+            [semantic_button(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")],
+            [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")],
         ])
         await state.clear()
         await edit_text_with_photo(
@@ -344,7 +345,7 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
         return
 
     keyboard = [
-        [InlineKeyboardButton(
+        [semantic_button(
             text=(
                 f"{'🛡' if subscription.get('plan_kind') == 'bypass' else '⚡'} "
                 f"{_subscription_name(subscription)} · {_subscription_short_status(subscription)}"
@@ -354,8 +355,8 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
         )]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
+    keyboard.append([semantic_button(text="🎟 Ввести промокод", callback_data="enter_promo", style="primary")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")])
 
     await state.clear()
     await edit_text_with_photo(
@@ -377,8 +378,8 @@ async def _send_refund_subscription_choice(message: Message):
 
     if not subscriptions:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
-            [InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")],
+            [semantic_button(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+            [semantic_button(text="← Главное меню", callback_data="back_to_menu", style="primary")],
         ])
         await send_text_with_photo(
             message,
@@ -390,10 +391,10 @@ async def _send_refund_subscription_choice(message: Message):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=_refund_subscription_button_text(subscription), callback_data=f"refund_subscription_{subscription['id']}", style="primary")]
+        [semantic_button(text=_refund_subscription_button_text(subscription), callback_data=f"refund_subscription_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")])
+    keyboard.append([semantic_button(text="← Главное меню", callback_data="back_to_menu", style="primary")])
 
     await send_text_with_photo(
         message,
@@ -448,22 +449,22 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         )
 
     keyboard = [
-        [InlineKeyboardButton(text="📲 Подключить", callback_data=f"subscription_instruction_{subscription_id}", style="success")],
-        [InlineKeyboardButton(text="📱 Устройства", callback_data=f"subscription_devices_{subscription_id}", style="primary")],
+        [semantic_button(text="📲 Подключить", callback_data=f"subscription_instruction_{subscription_id}", style="success")],
+        [semantic_button(text="📱 Устройства", callback_data=f"subscription_devices_{subscription_id}", style="primary")],
     ]
     if subscription.get('generation') == 'v2' and subscription.get('is_renewable'):
-        keyboard.append([InlineKeyboardButton(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")])
+        keyboard.append([semantic_button(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")])
         if status_text == 'активна' and device_packages:
-            keyboard.append([InlineKeyboardButton(text="➕ Добавить устройства", callback_data=f"device_addons_{subscription_id}", style="success")])
+            keyboard.append([semantic_button(text="➕ Добавить устройства", callback_data=f"device_addons_{subscription_id}", style="success")])
     if (
         subscription.get('generation') == 'v2'
         and subscription.get('is_renewable')
         and subscription.get('plan_kind') == 'bypass'
         and status_text == 'активна'
     ):
-        keyboard.append([InlineKeyboardButton(text="📦 Докупить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
-    keyboard.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_subscription_{subscription_id}", style="danger")])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data=back_callback, style="primary")])
+        keyboard.append([semantic_button(text="📦 Докупить ГБ", callback_data=f"gb_sub_{subscription_id}", style="success")])
+    keyboard.append([semantic_button(text="🗑 Удалить", callback_data=f"delete_subscription_{subscription_id}", style="danger")])
+    keyboard.append([semantic_button(text="← Назад", callback_data=back_callback, style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     text = (
@@ -519,13 +520,13 @@ async def _show_subscription_devices(callback: CallbackQuery, subscription_id: i
             text_lines.append(f"   Подключено: {_html(created_at)}")
             if hwid:
                 text_lines.append(f"   HWID: <code>{_html(hwid)}</code>")
-                keyboard.append([InlineKeyboardButton(text=f"🗑 Удалить устройство {index}", callback_data=f"device_delete_{subscription_id}_{index - 1}", style="danger")])
+                keyboard.append([semantic_button(text=f"🗑 Удалить устройство {index}", callback_data=f"device_delete_{subscription_id}_{index - 1}", style="danger")])
             text_lines.append("")
-        keyboard.append([InlineKeyboardButton(text="🧹 Удалить все устройства", callback_data=f"device_delete_all_{subscription_id}", style="danger")])
+        keyboard.append([semantic_button(text="🧹 Удалить все устройства", callback_data=f"device_delete_all_{subscription_id}", style="danger")])
     else:
         text_lines.append("Подключённых устройств пока нет.")
 
-    keyboard.append([InlineKeyboardButton(text="🔙 Назад к подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
+    keyboard.append([semantic_button(text="🔙 Назад к подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
 
     await edit_text_with_photo(
         callback,
@@ -607,7 +608,7 @@ async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: 
 
     keyboard = [
         [
-            InlineKeyboardButton(
+            semantic_button(
                 text=_device_addon_label(package),
                 callback_data=f"device_addon_package_{subscription_id}_{package['count']}",
                 style="success",
@@ -615,7 +616,7 @@ async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: 
         ]
         for package in packages
     ]
-    keyboard.append([InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
+    keyboard.append([semantic_button(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")])
 
     await state.update_data(device_addon_subscription_id=subscription_id)
     await edit_text_with_photo(
@@ -659,9 +660,9 @@ async def _show_device_addon_payment_methods(callback: CallbackQuery, state: FSM
         device_addon_count=device_count,
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_devices_cryptobot", style="success")],
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_devices_yookassa", style="success")],
-        [InlineKeyboardButton(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
+        [semantic_button(text="💎 CryptoBot", callback_data="pay_devices_cryptobot", style="success")],
+        [semantic_button(text="💳 Банковская карта", callback_data="pay_devices_yookassa", style="success")],
+        [semantic_button(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -683,10 +684,10 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 Android", callback_data=f"subscription_instruction_android_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🍎 iPhone", callback_data=f"subscription_instruction_iphone_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🤖 Android", callback_data=f"subscription_instruction_android_{subscription_id}", style="primary")],
+        [semantic_button(text="🍎 iPhone", callback_data=f"subscription_instruction_iphone_{subscription_id}", style="primary")],
+        [semantic_button(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(
@@ -715,14 +716,14 @@ async def _show_subscription_instruction_platform(
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [semantic_button(
             text=connection_app_button_text(platform),
             url=connection_app_url(platform),
             style="success",
         )],
-        [InlineKeyboardButton(text="📱 Другое устройство", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="📱 Другое устройство", callback_data=f"subscription_instruction_{subscription_id}", style="primary")],
+        [semantic_button(text="← К подписке", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
     await edit_text_with_photo(
@@ -856,8 +857,8 @@ async def process_refund_subscription(callback: CallbackQuery):
         "slot_number": subscription.get("slot_number"),
     })
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Оформить возврат", callback_data=f"refund_confirm_{subscription_id}_{payment['id']}", style="danger")],
-        [InlineKeyboardButton(text="Отмена", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="✅ Оформить возврат", callback_data=f"refund_confirm_{subscription_id}_{payment['id']}", style="danger")],
+        [semantic_button(text="Отмена", callback_data="back_to_menu", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -940,8 +941,8 @@ async def process_refund_confirm(callback: CallbackQuery):
         }
         details = _refund_payment_details(payment_with_subscription)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+            [semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+            [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
         ])
         await edit_text_with_photo(
             callback,
@@ -1036,10 +1037,10 @@ async def process_renew_existing_subscription(callback: CallbackQuery, state: FS
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}", style="success")]
+        [semantic_button(text=f"{_subscription_name(subscription)} • {_subscription_short_status(subscription)}", callback_data=f"renew_subscription_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")])
 
     await edit_text_with_photo(
         callback,
@@ -1079,9 +1080,9 @@ async def process_delete_subscription_confirm(callback: CallbackQuery, state: FS
     await state.clear()
     subscription = result["subscription"]
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+        [semantic_button(text="💳 Купить подписку", callback_data="buy_subscription", style="success")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1103,8 +1104,8 @@ async def process_delete_subscription_request(callback: CallbackQuery, state: FS
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"delete_subscription_confirm_{subscription_id}", style="danger")],
-        [InlineKeyboardButton(text="↩️ Отмена", callback_data=f"subscription_view_{subscription_id}", style="primary")],
+        [semantic_button(text="✅ Да, удалить", callback_data=f"delete_subscription_confirm_{subscription_id}", style="danger")],
+        [semantic_button(text="↩️ Отмена", callback_data=f"subscription_view_{subscription_id}", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1211,10 +1212,10 @@ async def process_buy_gb(callback: CallbackQuery, state: FSMContext):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}", style="primary")]
+        [semantic_button(text=_subscription_name(subscription), callback_data=f"gb_sub_{subscription['id']}", style="primary")]
         for subscription in subscriptions
     ]
-    keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="back_to_menu", style="primary")])
+    keyboard.append([semantic_button(text="← Главное меню", callback_data="back_to_menu", style="primary")])
 
     await edit_text_with_photo(
         callback,
@@ -1246,13 +1247,13 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
         pricing = calculate_discounted_price(package["price"], discounts, product_type="traffic", code=package_code, plan_kind="bypass")
         price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
         keyboard.append([
-            InlineKeyboardButton(
+            semantic_button(
                 text=f"{package['gb']} ГБ — {price_label}",
                 callback_data=f"gb_package_{package_code}",
                 style="success",
             )
         ])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="buy_gb", style="primary")])
 
     await state.update_data(gb_subscription_id=subscription_id)
     await edit_text_with_photo(
@@ -1275,9 +1276,9 @@ async def process_gb_package_choice(callback: CallbackQuery, state: FSMContext):
     pricing = await current_price(package["price"], product_type="traffic", code=package_code, plan_kind="bypass")
     await state.update_data(gb_package_code=package_code)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_gb_yookassa", style="success")],
-        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_gb_cryptobot", style="success")],
-        [InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")],
+        [semantic_button(text="💳 Банковская карта", callback_data="pay_gb_yookassa", style="success")],
+        [semantic_button(text="💎 CryptoBot", callback_data="pay_gb_cryptobot", style="success")],
+        [semantic_button(text="← Назад", callback_data="buy_gb", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1349,9 +1350,9 @@ async def _create_gb_payment(callback: CallbackQuery, state: FSMContext, provide
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data="buy_gb", style="primary")],
+        [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
+        [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [semantic_button(text="← Назад", callback_data="buy_gb", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1446,9 +1447,9 @@ async def _create_device_addon_payment(callback: CallbackQuery, state: FSMContex
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
+        [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
+        [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [semantic_button(text="← Назад", callback_data=f"device_addons_{subscription_id}", style="primary")],
     ])
     await edit_text_with_photo(
         callback,
@@ -1469,9 +1470,9 @@ async def _show_checked_payment_success(callback: CallbackQuery, invoice_id: str
     subscription_id = summary.get("subscription_id")
     keyboard = []
     if subscription_id:
-        keyboard.append([InlineKeyboardButton(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")])
-    keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-    keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
+        keyboard.append([semantic_button(text="🔐 Открыть подписку", callback_data=f"subscription_view_{subscription_id}", style="primary")])
+    keyboard.append([semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
+    keyboard.append([semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
 
     await callback.answer(summary.get("toast") or "✅ Оплата прошла!", show_alert=True)
     await edit_text_with_photo(
@@ -1521,12 +1522,12 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
         purchase_text = "Новая подписка"
 
     keyboard = [
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="pay_yookassa", style="success")],
-        [InlineKeyboardButton(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
+        [semantic_button(text="💳 Банковская карта", callback_data="pay_yookassa", style="success")],
+        [semantic_button(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
     ]
     if referral_balance >= pricing["price"]:
-        keyboard.append([InlineKeyboardButton(text="💰 Бонусный баланс", callback_data="pay_referral_balance", style="success")])
-    keyboard.append([InlineKeyboardButton(
+        keyboard.append([semantic_button(text="💰 Бонусный баланс", callback_data="pay_referral_balance", style="success")])
+    keyboard.append([semantic_button(
         text="← Назад",
         callback_data=(f"subscription_view_{target_subscription_id}" if purchase_mode == "renew" and target_subscription_id else "buy_subscription"),
         style="primary",
@@ -1584,9 +1585,9 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
             pay_url = invoice.get("bot_invoice_url", "")
             if pay_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
-                    [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-                    [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
+                    [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
+                    [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+                    [semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")],
                 ])
                 await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
                 await state.clear()
@@ -1613,9 +1614,9 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить", url=pay_url, style="success")],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
+        [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
+        [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")],
     ])
     await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
     await state.clear()
@@ -1660,9 +1661,9 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
             confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
             if confirmation_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💳 Оплатить", url=confirmation_url, style="success")],
-                    [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-                    [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
+                    [semantic_button(text="💳 Оплатить", url=confirmation_url, style="success")],
+                    [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+                    [semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")],
                 ])
                 await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
                 await state.clear()
@@ -1693,9 +1694,9 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить", url=confirmation_url, style="success")],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-        [InlineKeyboardButton(text="← Назад", callback_data="buy_subscription", style="primary")],
+        [semantic_button(text="💳 Оплатить", url=confirmation_url, style="success")],
+        [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
+        [semantic_button(text="← Назад", callback_data="buy_subscription", style="primary")],
     ])
     await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
     await state.clear()
@@ -1847,8 +1848,8 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
 
         remaining_balance = referral_balance - amount
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+            [semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
+            [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
         ])
 
         text = (

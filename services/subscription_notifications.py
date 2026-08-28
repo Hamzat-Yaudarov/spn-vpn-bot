@@ -14,6 +14,7 @@ from services.notification_delivery import (
     mark_telegram_delivery_blocked,
 )
 from services.remnawave import remnawave_get_user_info
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,8 @@ def _subscription_name(subscription) -> str:
 
 def _buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+        [semantic_button(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
+        [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
     ])
 
 
@@ -173,10 +174,10 @@ async def _send_notifications_for_expiring(bot):
             f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
             f"{stage['body']}"
         )
-        keyboard = [[InlineKeyboardButton(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
+        keyboard = [[semantic_button(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
         if await _has_multiple_active_visible_subscriptions(tg_id):
-            keyboard.append([InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")])
-        keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
+            keyboard.append([semantic_button(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")])
+        keyboard.append([semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
         if await _send_message(bot, tg_id, text, kb):
             await db.mark_notification_state_sent(tg_id, stage["type"], subscription_id)
@@ -326,10 +327,10 @@ async def _send_notifications_for_low_traffic(bot):
                     f"До обновления: <b>{days_to_reset} дн.</b>\n\n"
                     "Что сделать: нажмите «Купить ГБ», если хотите сохранить работу без пауз."
                 )
-                keyboard = [[InlineKeyboardButton(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
+                keyboard = [[semantic_button(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
                 if await _has_multiple_active_visible_subscriptions(tg_id):
-                    keyboard.append([InlineKeyboardButton(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
-                keyboard.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
+                    keyboard.append([semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")])
+                keyboard.append([semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")])
                 kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
                 if await _send_message(bot, tg_id, text, kb):
                     await db.mark_notification_state_sent(tg_id, LOW_TRAFFIC_NOTIFICATION_TYPE, subscription_id)

@@ -10,7 +10,7 @@ import database as db
 from services.image_handler import send_text_with_photo
 from services.notification_delivery import clear_telegram_delivery_blocked
 from services.mobile_auth import claim_challenge
-from services.custom_emoji import custom_emoji_button
+from services.custom_emoji import custom_emoji_button, semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def mobile_auth_keyboard(challenge_id: str, device_name: str | None = None) -> t
         "Кнопка одноразовая и действует несколько минут."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [semantic_button(
             text="✅ Подтвердить вход",
             callback_data=f"mobile_auth_approve:{challenge_id}",
             style="success",
@@ -141,8 +141,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     # Проверяем принял ли пользователь условия
     if not await db.has_accepted_terms(tg_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Принять условия", callback_data="accept_terms", style="success")],
-            [InlineKeyboardButton(text="📄 Открыть условия", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
+            [semantic_button(text="✅ Принять условия", callback_data="accept_terms", style="success")],
+            [semantic_button(text="📄 Открыть условия", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
         ])
         await message.answer(
             "Чтобы пользоваться ботом, примите пользовательское соглашение.",
@@ -180,8 +180,8 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
         "После подписки нажмите <b>«Я подписался»</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Открыть канал", url=news_channel_url(), style="primary")],
-        [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_news_channel", style="success")],
+        [semantic_button(text="📢 Открыть канал", url=news_channel_url(), style="primary")],
+        [semantic_button(text="✅ Я подписался", callback_data="check_news_channel", style="success")],
     ])
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 

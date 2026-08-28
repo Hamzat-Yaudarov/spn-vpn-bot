@@ -48,6 +48,40 @@ class CustomEmojiButtonTests(unittest.TestCase):
         self.assertEqual(buy_button.text, "Купить подписку")
         self.assertEqual(buy_button.model_dump(exclude_none=True)["icon_custom_emoji_id"], "777")
 
+    def test_semantic_button_uses_payment_icon_and_removes_regular_fallback(self):
+        with patch.dict(custom_emoji.WAY_SPN_CUSTOM_EMOJI_IDS, {"bank_card": "900"}, clear=True):
+            button = custom_emoji.semantic_button(
+                text="💳 Банковская карта",
+                callback_data="pay_yookassa",
+                style="success",
+            )
+
+        self.assertEqual(button.text, "Банковская карта")
+        self.assertEqual(button.model_dump(exclude_none=True)["icon_custom_emoji_id"], "900")
+
+    def test_semantic_button_distinguishes_home_from_regular_back(self):
+        with patch.dict(
+            custom_emoji.WAY_SPN_CUSTOM_EMOJI_IDS,
+            {"home": "100", "back": "200"},
+            clear=True,
+        ):
+            home = custom_emoji.semantic_button(text="🏠 Главное меню", callback_data="back_to_menu")
+            back = custom_emoji.semantic_button(text="← Назад", callback_data="buy_subscription")
+
+        self.assertEqual(home.model_dump(exclude_none=True)["icon_custom_emoji_id"], "100")
+        self.assertEqual(back.model_dump(exclude_none=True)["icon_custom_emoji_id"], "200")
+
+    def test_semantic_button_leaves_unmapped_destructive_action_unchanged(self):
+        with patch.dict(custom_emoji.WAY_SPN_CUSTOM_EMOJI_IDS, {"settings": "300"}, clear=True):
+            button = custom_emoji.semantic_button(
+                text="🗑 Удалить",
+                callback_data="delete_subscription_1",
+                style="danger",
+            )
+
+        self.assertEqual(button.text, "🗑 Удалить")
+        self.assertNotIn("icon_custom_emoji_id", button.model_dump(exclude_none=True))
+
 
 class CustomEmojiBroadcastTests(unittest.IsolatedAsyncioTestCase):
     def test_extracts_custom_emoji_from_text_and_media_caption(self):

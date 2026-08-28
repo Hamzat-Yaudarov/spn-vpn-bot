@@ -6,6 +6,7 @@ from config import PARTNERSHIP_AGREEMENTS
 from states import UserStates
 import database as db
 from services.image_handler import edit_text_with_photo, send_text_with_photo
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -38,9 +39,9 @@ async def show_partnership_agreement(callback: CallbackQuery, state: FSMContext,
     agreement_url = PARTNERSHIP_AGREEMENTS.get(percentage)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Открыть соглашение", url=agreement_url, style="primary")],
-        [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_partnership_agreement", style="success")],
-        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
+        [semantic_button(text="📄 Открыть соглашение", url=agreement_url, style="primary")],
+        [semantic_button(text="✅ Принять соглашение", callback_data="accept_partnership_agreement", style="success")],
+        [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
@@ -110,10 +111,10 @@ async def show_partnership_cabinet(callback: CallbackQuery, tg_id: int):
                 tariff_counts[tariff_code] = count
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
-        [InlineKeyboardButton(text="🏦 На карту (СБП)", callback_data="partnership_withdraw_sbp", style="success")],
-        [InlineKeyboardButton(text="💎 В USDT", callback_data="partnership_withdraw_usdt", style="success")],
-        [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
+        [semantic_button(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
+        [semantic_button(text="🏦 На карту (СБП)", callback_data="partnership_withdraw_sbp", style="success")],
+        [semantic_button(text="💎 В USDT", callback_data="partnership_withdraw_usdt", style="success")],
+        [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")]
     ])
 
     text = (
@@ -136,10 +137,10 @@ async def show_partnership_cabinet(callback: CallbackQuery, tg_id: int):
     # Если баланс меньше минимума, отключаем кнопки вывода
     if stats['current_balance'] < 5000:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
-            [InlineKeyboardButton(text="🏦 На карту (СБП)", callback_data="partnership_withdraw_sbp", style="success")],
-            [InlineKeyboardButton(text="💎 В USDT", callback_data="partnership_withdraw_usdt", style="success")],
-            [InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")]
+            [semantic_button(text="🔗 Скопировать ссылку", url=partner_link, style="primary")],
+            [semantic_button(text="🏦 На карту (СБП)", callback_data="partnership_withdraw_sbp", style="success")],
+            [semantic_button(text="💎 В USDT", callback_data="partnership_withdraw_usdt", style="success")],
+            [semantic_button(text="← Назад", callback_data="back_to_menu", style="primary")]
         ])
         text += "\n\n⚠️ <i>Баланс меньше минимальной суммы вывода (5000 ₽)</i>"
 
@@ -165,7 +166,7 @@ async def process_withdraw_sbp_start(callback: CallbackQuery, state: FSMContext)
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+        [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
     ])
 
     text = "💳 <b>Вывод на карту по СБП</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
@@ -194,7 +195,7 @@ async def process_sbp_amount(message: Message, state: FSMContext):
         await state.update_data(withdrawal_amount=amount)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+            [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
         ])
 
         text = f"🏦 <b>Укажите банк</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите название вашего банка:"
@@ -219,7 +220,7 @@ async def process_sbp_bank(message: Message, state: FSMContext):
     await state.update_data(bank_name=bank_name)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+        [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
     ])
 
     text = f"📱 <b>Укажите номер телефона</b>\n\n✅ Введите номер телефона, к которому привязана карта (с кодом страны, например +7XXXXXXXXXX):"
@@ -251,7 +252,7 @@ async def process_sbp_phone(message: Message, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+        [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
     ])
 
     text = (
@@ -301,7 +302,7 @@ async def process_withdraw_usdt_start(callback: CallbackQuery, state: FSMContext
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+        [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
     ])
 
     text = "💎 <b>Вывод в USDT</b>\n\n✅ Введите сумму вывода (минимум 5000 ₽):"
@@ -330,7 +331,7 @@ async def process_usdt_amount(message: Message, state: FSMContext):
         await state.update_data(withdrawal_amount=amount)
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+            [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
         ])
 
         text = f"💎 <b>Введите адрес USDT кошелька</b>\n\n✅ Вы хотите вывести: <b>{amount:.2f} ₽</b>\n\nВведите адрес вашего USDT кошелька (TRC-20 или ERC-20):"
@@ -363,7 +364,7 @@ async def process_usdt_address(message: Message, state: FSMContext):
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Назад", callback_data="partnership", style="primary")]
+        [semantic_button(text="← Назад", callback_data="partnership", style="primary")]
     ])
 
     text = (

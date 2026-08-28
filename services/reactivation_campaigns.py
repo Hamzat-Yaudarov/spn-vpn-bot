@@ -22,6 +22,7 @@ from config import (
     REACTIVATION_WINBACK_TRAFFIC_GB,
 )
 from services.notification_delivery import mark_telegram_delivery_blocked
+from services.custom_emoji import semantic_button
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
@@ -75,7 +76,7 @@ def offer_config(offer_type: str) -> dict | None:
 def _offer_keyboard(offer_id: int, offer_type: str) -> InlineKeyboardMarkup:
     config = OFFER_CONFIG[offer_type]
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
+        semantic_button(
             text=config["button"],
             callback_data=f"reactivation_claim:{offer_id}",
             style="success",

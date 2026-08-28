@@ -17,6 +17,7 @@ from services.device_addons import effective_device_limit
 from services.traffic_periods import build_traffic_period_state
 from handlers.start import show_main_menu
 from services.image_handler import send_text_with_photo
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -70,21 +71,21 @@ async def process_enter_promo(callback: CallbackQuery, state: FSMContext):
             promo_target_subscription_id=subscriptions[0]["id"],
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"К {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}", style="success")],
-            [InlineKeyboardButton(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")],
-            [InlineKeyboardButton(text="← Назад", callback_data="my_subscriptions", style="primary")],
+            [semantic_button(text=f"К {_subscription_name(subscriptions[0])}", callback_data=f"promo_target_existing_{subscriptions[0]['id']}", style="success")],
+            [semantic_button(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")],
+            [semantic_button(text="← Назад", callback_data="my_subscriptions", style="primary")],
         ])
         await callback.message.answer("Куда применить промокод?", reply_markup=kb)
         await state.set_state(UserStates.waiting_for_promo_target)
         return
 
     keyboard = [
-        [InlineKeyboardButton(text=f"К {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}", style="success")]
+        [semantic_button(text=f"К {_subscription_name(subscription)}", callback_data=f"promo_target_existing_{subscription['id']}", style="success")]
         for subscription in subscriptions
     ]
     if next_type_index is not None:
-        keyboard.append([InlineKeyboardButton(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="my_subscriptions", style="primary")])
+        keyboard.append([semantic_button(text=f"Новая обычная №{next_type_index}", callback_data=f"promo_target_new_{next_type_index}", style="success")])
+    keyboard.append([semantic_button(text="← Назад", callback_data="my_subscriptions", style="primary")])
 
     await callback.message.answer(
         "Выберите, куда применить промокод:",
@@ -297,7 +298,7 @@ async def process_promo_input(message: Message, state: FSMContext):
 
         # Отправляем успешное сообщение
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")]
+            [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")]
         ])
 
         text = (

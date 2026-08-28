@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import SUPPORT_URL
+from services.custom_emoji import semantic_button
 
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,8 @@ def _has_keyword_like(text: str, words: tuple[str, ...]) -> bool:
 
 def _button(text: str, callback_data: str | None = None, url: str | None = None, style: str = "primary") -> InlineKeyboardButton:
     if url:
-        return InlineKeyboardButton(text=text, url=url, style=style)
-    return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+        return semantic_button(text=text, url=url, style=style)
+    return semantic_button(text=text, callback_data=callback_data, style=style)
 
 
 def _default_keyboard() -> InlineKeyboardMarkup:
