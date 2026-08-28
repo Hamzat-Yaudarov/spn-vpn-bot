@@ -3,6 +3,7 @@ import logging
 import aiohttp
 import asyncio
 import html
+import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,7 @@ from services.subscription_adjustment import SubscriptionAdjustmentError, adjust
 from services.device_addons import effective_device_limit
 from services.traffic_periods import build_traffic_period_state
 from services.traffic_resets import reset_all_active_bypass_traffic
+from services.custom_emoji import CUSTOM_EMOJI_KEYS, custom_emoji_button
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +106,64 @@ async def admin_help(message: Message):
         "• <code>/send ТГ_ИД текст</code> — отправить сообщение пользователю. Можно ответить командой на фото/сообщение.\n"
         "• <code>/all_sms</code> — рассылка всем пользователям.\n"
         "• <code>/not_sub_sms</code> — рассылка пользователям без активной подписки.\n"
+        "• <code>/emoji_ids</code> — показать ID премиум-эмодзи из сообщения.\n"
         "• <code>/enable_collab ТГ_ИД %</code> — включить партнёрство: 15, 20, 25 или 30%.\n"
         "• <code>/stats</code> — статистика бота.\n\n"
         "Подсказка: ID подписки удобнее брать из веб-админки."
+    )
+
+
+def _message_custom_emoji_ids(message: Message | None) -> list[str]:
+    """Извлечь custom_emoji_id из текста или подписи к медиа."""
+    if message is None:
+        return []
+
+    result = []
+    for entity in [
+        *(getattr(message, "entities", None) or []),
+        *(getattr(message, "caption_entities", None) or []),
+    ]:
+        entity_type = getattr(entity.type, "value", entity.type)
+        custom_id = getattr(entity, "custom_emoji_id", None)
+        if entity_type == "custom_emoji" and custom_id:
+            result.append(str(custom_id))
+    return result
+
+
+@router.message(Command("emoji_ids"))
+async def admin_custom_emoji_ids(message: Message):
+    """Показать ID custom emoji и собрать готовую настройку для .env."""
+    if not is_admin(message.from_user.id):
+        await message.answer("Откройте главное меню: /start")
+        return
+
+    source = message.reply_to_message or message
+    emoji_ids = _message_custom_emoji_ids(source)
+    if not emoji_ids:
+        await message.answer(
+            "Ответьте командой <code>/emoji_ids</code> на сообщение с премиум-эмодзи."
+        )
+        return
+
+    lines = "\n".join(
+        f"{index}. <code>{custom_id}</code>"
+        for index, custom_id in enumerate(emoji_ids, 1)
+    )
+    env_hint = ""
+    if len(emoji_ids) == len(CUSTOM_EMOJI_KEYS):
+        mapping = dict(zip(CUSTOM_EMOJI_KEYS, emoji_ids))
+        env_value = json.dumps(mapping, ensure_ascii=False, separators=(",", ":"))
+        env_hint = (
+            "\n\n<b>Готовая строка для .env:</b>\n"
+            f"<code>WAY_SPN_CUSTOM_EMOJI_IDS={html.escape(env_value)}</code>"
+        )
+    else:
+        env_hint = (
+            f"\n\nДля готовой строки .env отправьте ровно "
+            f"<b>{len(CUSTOM_EMOJI_KEYS)}</b> эмодзи в порядке из инструкции."
+        )
+    await message.answer(
+        f"✅ <b>Найдено премиум-эмодзи: {len(emoji_ids)}</b>\n\n{lines}{env_hint}"
     )
 
 
@@ -232,13 +289,13 @@ async def _send_direct_message(
 
 
 BROADCAST_BUTTONS = {
-    "buy_subscription": {"text": "🛒 Купить подписку", "callback_data": "buy_subscription", "style": "success"},
-    "my_subscriptions": {"text": "🔑 Мои подписки", "callback_data": "my_subscriptions", "style": "primary"},
-    "buy_gb": {"text": "📦 Докупить ГБ", "callback_data": "buy_gb", "style": "success"},
-    "miniapp": {"text": "📱 Личный кабинет", "web_app": MINIAPP_URL, "style": "primary"},
-    "how_to_connect": {"text": "📲 Как подключить", "callback_data": "how_to_connect", "style": "primary"},
-    "support": {"text": "🆘 Поддержка", "url": SUPPORT_URL, "style": "primary"},
-    "back_to_menu": {"text": "🏠 Главное меню", "callback_data": "back_to_menu", "style": "primary"},
+    "buy_subscription": {"text": "Купить подписку", "fallback": "🛒", "emoji_key": "buy", "callback_data": "buy_subscription", "style": "success"},
+    "my_subscriptions": {"text": "Мои подписки", "fallback": "🔑", "emoji_key": "subscriptions", "callback_data": "my_subscriptions", "style": "primary"},
+    "buy_gb": {"text": "Докупить ГБ", "fallback": "📦", "emoji_key": "traffic", "callback_data": "buy_gb", "style": "success"},
+    "miniapp": {"text": "Личный кабинет", "fallback": "📱", "emoji_key": "device", "web_app": MINIAPP_URL, "style": "primary"},
+    "how_to_connect": {"text": "Как подключить", "fallback": "📲", "emoji_key": "connect", "callback_data": "how_to_connect", "style": "primary"},
+    "support": {"text": "Поддержка", "fallback": "🆘", "emoji_key": "support", "url": SUPPORT_URL, "style": "primary"},
+    "back_to_menu": {"text": "Главное меню", "fallback": "🏠", "emoji_key": "home", "callback_data": "back_to_menu", "style": "primary"},
 }
 
 BROADCAST_BUTTON_ORDER = (
@@ -254,14 +311,24 @@ BROADCAST_BUTTON_ORDER = (
 
 def _make_broadcast_button(key: str) -> InlineKeyboardButton:
     spec = BROADCAST_BUTTONS[key]
-    kwargs = {"text": spec["text"], "style": spec["style"]}
+    kwargs = {"style": spec["style"]}
     if "callback_data" in spec:
         kwargs["callback_data"] = spec["callback_data"]
     if "url" in spec:
         kwargs["url"] = spec["url"]
     if "web_app" in spec:
         kwargs["web_app"] = WebAppInfo(url=spec["web_app"])
-    return InlineKeyboardButton(**kwargs)
+    return custom_emoji_button(
+        spec["text"],
+        emoji_key=spec.get("emoji_key"),
+        fallback_emoji=spec.get("fallback"),
+        **kwargs,
+    )
+
+
+def _broadcast_button_label(key: str) -> str:
+    spec = BROADCAST_BUTTONS[key]
+    return f"{spec.get('fallback', '')} {spec['text']}".strip()
 
 
 def _build_broadcast_user_keyboard(selected_buttons: list[str] | None) -> InlineKeyboardMarkup | None:
@@ -275,11 +342,10 @@ def _build_broadcast_admin_keyboard(selected_buttons: list[str] | None) -> Inlin
     selected = set(selected_buttons or [])
     rows = []
     for key in BROADCAST_BUTTON_ORDER:
-        spec = BROADCAST_BUTTONS[key]
         marker = "✅" if key in selected else "⬜"
         rows.append([
             InlineKeyboardButton(
-                text=f"{marker} {spec['text']}",
+                text=f"{marker} {_broadcast_button_label(key)}",
                 callback_data=f"broadcast_toggle:{key}",
                 style="primary",
             )
@@ -294,7 +360,7 @@ def _build_broadcast_admin_keyboard(selected_buttons: list[str] | None) -> Inlin
 
 
 def _broadcast_button_selection_text(selected_buttons: list[str] | None) -> str:
-    selected_labels = [BROADCAST_BUTTONS[key]["text"] for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
+    selected_labels = [_broadcast_button_label(key) for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
     selected_text = "\n".join(f"• {label}" for label in selected_labels) if selected_labels else "• без кнопок"
     return (
         "🔘 <b>Выбор кнопок для рассылки</b>\n\n"
@@ -307,13 +373,18 @@ def _broadcast_mode_text(mode: str) -> str:
     return "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
 
 
-def _broadcast_summary_text(mode: str, selected_buttons: list[str] | None = None) -> str:
-    selected_labels = [BROADCAST_BUTTONS[key]["text"] for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
+def _broadcast_summary_text(
+    mode: str,
+    selected_buttons: list[str] | None = None,
+    custom_emoji_ids: list[str] | None = None,
+) -> str:
+    selected_labels = [_broadcast_button_label(key) for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
     selected_text = ", ".join(selected_labels) if selected_labels else "пока не выбраны"
     return (
         "📤 <b>Рассылка подготовлена</b>\n\n"
         f"Кому: <b>{_broadcast_mode_text(mode)}</b>\n"
         "Сообщение: <b>получено</b>\n"
+        f"Премиум-эмодзи: <b>{len(custom_emoji_ids or [])}</b>\n"
         f"Кнопки: <b>{selected_text}</b>\n\n"
         "Следующий шаг: выбери кнопки или перейди к предпросмотру без кнопок."
     )
@@ -1579,12 +1650,13 @@ async def handle_broadcast_all_message(message: Message, state: FSMContext):
         broadcast_mode="all",
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
+        custom_emoji_ids=_message_custom_emoji_ids(message),
         selected_buttons=[],
         preview_sent=False,
     )
     await state.set_state(BroadcastStates.reviewing_broadcast)
     await message.answer(
-        _broadcast_summary_text("all", []),
+        _broadcast_summary_text("all", [], _message_custom_emoji_ids(message)),
         reply_markup=_build_broadcast_summary_keyboard(),
     )
 
@@ -1626,12 +1698,13 @@ async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
         broadcast_mode="no_sub",
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
+        custom_emoji_ids=_message_custom_emoji_ids(message),
         selected_buttons=[],
         preview_sent=False,
     )
     await state.set_state(BroadcastStates.reviewing_broadcast)
     await message.answer(
-        _broadcast_summary_text("no_sub", []),
+        _broadcast_summary_text("no_sub", [], _message_custom_emoji_ids(message)),
         reply_markup=_build_broadcast_summary_keyboard(),
     )
 
@@ -1716,7 +1789,11 @@ async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
             return
         data = await state.get_data()
         await callback.message.edit_text(
-            _broadcast_summary_text(data.get("broadcast_mode"), data.get("selected_buttons") or [])
+            _broadcast_summary_text(
+                data.get("broadcast_mode"),
+                data.get("selected_buttons") or [],
+                data.get("custom_emoji_ids") or [],
+            )
             + "\n\n✅ <b>Предпросмотр отправлен.</b> Если всё выглядит правильно, запускай рассылку.",
             reply_markup=_build_broadcast_ready_keyboard(),
         )

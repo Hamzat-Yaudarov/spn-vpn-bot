@@ -1,3 +1,4 @@
+import json
 import os
 from dotenv import load_dotenv
 
@@ -12,6 +13,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 MINIAPP_URL = os.getenv("MINIAPP_URL", "https://wayspn.ru/app")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "WaySPN_robot").lstrip("@")
+try:
+    WAY_SPN_CUSTOM_EMOJI_IDS = {
+        str(key): str(value)
+        for key, value in json.loads(os.getenv("WAY_SPN_CUSTOM_EMOJI_IDS", "{}") or "{}").items()
+        if value
+    }
+except (AttributeError, TypeError, ValueError):
+    WAY_SPN_CUSTOM_EMOJI_IDS = {}
 _MINIAPP_URL_WITHOUT_SLASH = MINIAPP_URL.rstrip("/")
 ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", f"{_MINIAPP_URL_WITHOUT_SLASH.rsplit('/', 1)[0]}/admin")
 PUBLIC_SITE_URL = os.getenv("PUBLIC_SITE_URL", _MINIAPP_URL_WITHOUT_SLASH.rsplit("/", 1)[0]).rstrip("/")

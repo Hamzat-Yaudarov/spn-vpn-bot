@@ -53,7 +53,6 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
             "📱 Личный кабинет",
             "📢 Новости",
             "👥 Пригласить друга",
-            "↩️ Оформить возврат",
             "← Назад",
         ])
         self.assertTrue(all(len(label) <= 24 for label in labels))
@@ -209,9 +208,11 @@ class SubscriptionSimplificationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SmartAssistantSimplificationTests(unittest.TestCase):
-    def test_refund_intent_opens_refund_flow_directly(self):
+    def test_refund_intent_sends_user_to_support_without_refund_button(self):
         _text, keyboard = smart_assistant._response_for_intent("refund")
-        self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "refund_start")
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        self.assertNotIn("refund_start", [button.callback_data for button in buttons])
+        self.assertTrue(any(button.url for button in buttons))
 
 
 if __name__ == "__main__":

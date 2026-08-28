@@ -144,13 +144,9 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
         )
 
     if intent == "refund":
-        return (
-            "Возврат доступен в течение 3 суток после покупки или продления.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [_button("↩️ Оформить возврат", "refund_start", style="success")],
-                [_button("🆘 Поддержка", url=SUPPORT_URL)] if SUPPORT_URL else [_button("🏠 Главное меню", "back_to_menu")],
-            ]),
-        )
+        rows = [[_button("🆘 Написать в поддержку", url=SUPPORT_URL, style="success")]] if SUPPORT_URL else []
+        rows.append([_button("🏠 Главное меню", "back_to_menu")])
+        return "По вопросам возврата напишите в поддержку.", InlineKeyboardMarkup(inline_keyboard=rows)
 
     if intent == "support":
         rows = [[_button("🆘 Написать в поддержку", url=SUPPORT_URL, style="success")]] if SUPPORT_URL else []

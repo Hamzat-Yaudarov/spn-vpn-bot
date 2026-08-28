@@ -10,6 +10,7 @@ import database as db
 from services.image_handler import send_text_with_photo
 from services.notification_delivery import clear_telegram_delivery_blocked
 from services.mobile_auth import claim_challenge
+from services.custom_emoji import custom_emoji_button
 
 
 logger = logging.getLogger(__name__)
@@ -196,11 +197,11 @@ def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup
         "🏠 <b>Way SPN</b>\n\nВыберите нужное действие."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_subscription", style="success")],
-        [InlineKeyboardButton(text="🔑 Мои подписки", callback_data="my_subscriptions", style="primary")],
-        [InlineKeyboardButton(text="📲 Как подключить", callback_data="how_to_connect", style="primary")],
-        [InlineKeyboardButton(text="🆘 Помощь", url=support_url, style="primary")],
-        [InlineKeyboardButton(text="⋯ Ещё", callback_data="more_menu", style="primary")],
+        [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
+        [custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
+        [custom_emoji_button("Как подключить", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
+        [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary")],
+        [custom_emoji_button("Ещё", emoji_key="more", fallback_emoji="⋯", callback_data="more_menu", style="primary")],
     ])
     return text, keyboard
 
@@ -208,20 +209,21 @@ def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup
 async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Второстепенные функции, не перегружающие главный экран."""
     keyboard = [
-        [InlineKeyboardButton(text="📱 Личный кабинет", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
-        [InlineKeyboardButton(text="📢 Новости", url=news_channel_url(), style="primary")],
-        [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="referral", style="primary")],
-        [InlineKeyboardButton(text="↩️ Оформить возврат", callback_data="refund_start", style="primary")],
+        [custom_emoji_button("Личный кабинет", emoji_key="device", fallback_emoji="📱", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
+        [custom_emoji_button("Новости", emoji_key="news", fallback_emoji="📢", url=news_channel_url(), style="primary")],
+        [custom_emoji_button("Пригласить друга", emoji_key="invite", fallback_emoji="👥", callback_data="referral", style="primary")],
     ]
     if await db.is_partner(tg_id):
-        keyboard.append([InlineKeyboardButton(text="🤝 Партнёрство", callback_data="partnership", style="primary")])
+        keyboard.append([custom_emoji_button("Партнёрство", emoji_key="invite", fallback_emoji="🤝", callback_data="partnership", style="primary")])
     if tg_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton(
-            text="🛠 Админ-панель",
+        keyboard.append([custom_emoji_button(
+            "Админ-панель",
+            emoji_key="settings",
+            fallback_emoji="🛠",
             web_app=WebAppInfo(url=ADMIN_PANEL_URL),
             style="primary",
         )])
-    keyboard.append([InlineKeyboardButton(text="← Назад", callback_data="back_to_menu", style="primary")])
+    keyboard.append([custom_emoji_button("Назад", emoji_key="back", fallback_emoji="←", callback_data="back_to_menu", style="primary")])
     return "⋯ <b>Ещё</b>\n\nВыберите нужный раздел.", InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
