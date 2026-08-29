@@ -1,28 +1,20 @@
 import asyncio
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import aiohttp
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
 from config import (
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     GB_BYTES,
-    REACTIVATION_MAX_SENDS,
     REACTIVATION_NEW_USER_DAYS,
     REACTIVATION_NEW_USER_TRAFFIC_GB,
-    REACTIVATION_NEW_USER_WAIT_DAYS,
-    REACTIVATION_SEND_HOUR_MSK,
     REACTIVATION_WINBACK_DAYS,
-    REACTIVATION_WINBACK_INACTIVE_DAYS,
     REACTIVATION_WINBACK_TRAFFIC_GB,
 )
-from services.notification_delivery import mark_telegram_delivery_blocked
-from services.custom_emoji import semantic_button
 from services.remnawave import (
     remnawave_get_or_create_user,
     remnawave_get_subscription_url,
@@ -36,35 +28,19 @@ logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
 CAMPAIGN_CHECK_INTERVAL_SECONDS = 60
-CANDIDATE_REFRESH_INTERVAL = timedelta(hours=1)
+CLEANUP_RETRY_INTERVAL_SECONDS = 10 * 60
 TELEGRAM_RATE_LIMIT_SECONDS = 0.1
+# Одноразовое отключение кампаний по решению владельца сервиса.
+CAMPAIGN_RETIRE_AT_MSK = datetime(2026, 8, 29, 18, 0, tzinfo=MSK)
 
 OFFER_CONFIG = {
     "winback_7d": {
         "days": REACTIVATION_WINBACK_DAYS,
         "traffic_gb": REACTIVATION_WINBACK_TRAFFIC_GB,
-        "button": "🎁 Активировать 7 дней бесплатно",
-        "text": (
-            "Ассаламу алайкум!\n\n"
-            "<b>Мы хотим вернуть ваше доверие не словами, а делом.</b>\n\n"
-            "Для вас доступны <b>7 дней Way SPN с антиглушилкой бесплатно</b> "
-            "и <b>50 ГБ трафика</b>. Ничего оплачивать и писать в поддержку не нужно.\n\n"
-            "Нажмите кнопку ниже — бот сразу выдаст новый доступ и поможет подключиться.\n\n"
-            "Предложение доступно один раз."
-        ),
     },
     "new_user_1d": {
         "days": REACTIVATION_NEW_USER_DAYS,
         "traffic_gb": REACTIVATION_NEW_USER_TRAFFIC_GB,
-        "button": "⚡️ Попробовать бесплатно",
-        "text": (
-            "Ассаламу алайкум!\n\n"
-            "Хотите проверить, работает ли Way SPN именно на вашем устройстве и в вашей сети?\n\n"
-            "Получите <b>1 день бесплатного доступа с антиглушилкой</b> и "
-            "<b>10 ГБ трафика</b>. Без оплаты и банковской карты.\n\n"
-            "Нажмите кнопку — доступ появится сразу.\n\n"
-            "Предложение доступно один раз."
-        ),
     },
 }
 
@@ -73,35 +49,12 @@ def offer_config(offer_type: str) -> dict | None:
     return OFFER_CONFIG.get(offer_type)
 
 
-def _offer_keyboard(offer_id: int, offer_type: str) -> InlineKeyboardMarkup:
-    config = OFFER_CONFIG[offer_type]
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        semantic_button(
-            text=config["button"],
-            callback_data=f"reactivation_claim:{offer_id}",
-            style="success",
-        )
-    ]])
-
-
-def _day_start_utc(now_msk: datetime) -> datetime:
-    local_midnight = datetime.combine(now_msk.date(), time.min, tzinfo=MSK)
-    return local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-async def refresh_reactivation_candidates() -> None:
-    now = datetime.utcnow()
-    await db.ensure_reactivation_candidates(
-        now - timedelta(days=REACTIVATION_WINBACK_INACTIVE_DAYS),
-        now - timedelta(days=REACTIVATION_NEW_USER_WAIT_DAYS),
-    )
-
-
-async def _delete_offer_message(bot, tg_id: int, message_id: int | None) -> None:
+async def _delete_offer_message(bot, tg_id: int, message_id: int | None) -> bool:
     if not message_id:
-        return
+        return True
     try:
         await bot.delete_message(tg_id, message_id)
+        return True
     except Exception as exc:
         logger.debug(
             "Could not delete reactivation message %s for user %s: %s",
@@ -109,61 +62,31 @@ async def _delete_offer_message(bot, tg_id: int, message_id: int | None) -> None
             tg_id,
             exc,
         )
+        return False
 
 
-async def send_due_reactivation_offers(bot, now_msk: datetime | None = None) -> int:
-    now_msk = now_msk or datetime.now(MSK)
-    day_start_utc = _day_start_utc(now_msk)
-    offers = await db.get_reactivation_offers_due(day_start_utc, REACTIVATION_MAX_SENDS)
-    sent_count = 0
+async def retire_reactivation_campaigns(bot) -> tuple[int, int]:
+    """Закрыть обе бесплатные кампании и удалить их последние сообщения."""
+    offers = await db.retire_reactivation_offers()
+    deleted_count = 0
 
     for index, offer in enumerate(offers or []):
+        offer_id = int(offer["id"])
         tg_id = int(offer["tg_id"])
-        config = OFFER_CONFIG.get(offer["offer_type"])
-        if not config:
-            logger.error("Unknown reactivation offer type %s", offer["offer_type"])
-            continue
-
-        await _delete_offer_message(bot, tg_id, offer.get("last_message_id"))
-        try:
-            message = await bot.send_message(
-                tg_id,
-                config["text"],
-                reply_markup=_offer_keyboard(int(offer["id"]), offer["offer_type"]),
-            )
-        except TelegramAPIError as exc:
-            error_text = str(exc).lower()
-            if any(marker in error_text for marker in ("chat not found", "bot was blocked", "user is deactivated")):
-                try:
-                    await mark_telegram_delivery_blocked(tg_id)
-                except Exception as state_error:
-                    logger.error("Failed to mark reactivation recipient %s blocked: %s", tg_id, state_error)
-            elif "429" in error_text or "too many requests" in error_text:
-                logger.warning("Telegram rate limit during reactivation campaign: %s", exc)
-                await asyncio.sleep(5)
-            else:
-                logger.warning("Could not send reactivation offer to %s: %s", tg_id, exc)
-            continue
-        except Exception as exc:
-            logger.warning("Unexpected reactivation delivery error for %s: %s", tg_id, exc)
-            continue
-
-        recorded = await db.mark_reactivation_offer_sent(
-            int(offer["id"]),
-            int(message.message_id),
-            day_start_utc,
-            REACTIVATION_MAX_SENDS,
-        )
-        if not recorded:
-            await _delete_offer_message(bot, tg_id, int(message.message_id))
-            continue
-
-        sent_count += 1
+        message_id = offer.get("last_message_id")
+        if await _delete_offer_message(bot, tg_id, message_id):
+            await db.clear_reactivation_offer_message(offer_id, message_id)
+            deleted_count += 1
         if index < len(offers) - 1:
             await asyncio.sleep(TELEGRAM_RATE_LIMIT_SECONDS)
 
-    logger.info("Reactivation campaign delivery complete: %s sent", sent_count)
-    return sent_count
+    pending_count = len(offers or []) - deleted_count
+    logger.info(
+        "Reactivation campaigns retired: %s message(s) deleted, %s pending; no new offers will be sent",
+        deleted_count,
+        pending_count,
+    )
+    return deleted_count, pending_count
 
 
 async def cancel_reactivation_offers_after_purchase(bot, tg_id: int) -> None:
@@ -277,26 +200,23 @@ async def activate_reactivation_offer(offer_id: int, tg_id: int) -> dict:
     }
 
 
-async def run_reactivation_campaign_loop(bot) -> None:
-    logger.info("Reactivation campaign service started")
-    last_refresh_at = None
-    last_delivery_date = None
+async def run_reactivation_cleanup_loop(bot) -> None:
+    logger.info("Retired reactivation campaign cleanup service started")
 
     while True:
+        retry_delay = CAMPAIGN_CHECK_INTERVAL_SECONDS
         try:
-            now_utc = datetime.utcnow()
-            if last_refresh_at is None or now_utc - last_refresh_at >= CANDIDATE_REFRESH_INTERVAL:
-                await refresh_reactivation_candidates()
-                last_refresh_at = now_utc
-
             now_msk = datetime.now(MSK)
-            if now_msk.hour >= REACTIVATION_SEND_HOUR_MSK and last_delivery_date != now_msk.date():
-                await send_due_reactivation_offers(bot, now_msk)
-                last_delivery_date = now_msk.date()
+            if now_msk >= CAMPAIGN_RETIRE_AT_MSK:
+                _deleted_count, pending_count = await retire_reactivation_campaigns(bot)
+                if pending_count == 0:
+                    logger.info("All retired reactivation campaign messages are cleaned up")
+                    return
+                retry_delay = CLEANUP_RETRY_INTERVAL_SECONDS
         except asyncio.CancelledError:
-            logger.info("Reactivation campaign service stopped")
+            logger.info("Retired reactivation campaign cleanup service stopped")
             raise
         except Exception as exc:
-            logger.error("Reactivation campaign loop failed: %s", exc, exc_info=True)
+            logger.error("Reactivation campaign cleanup failed: %s", exc, exc_info=True)
 
-        await asyncio.sleep(CAMPAIGN_CHECK_INTERVAL_SECONDS)
+        await asyncio.sleep(retry_delay)

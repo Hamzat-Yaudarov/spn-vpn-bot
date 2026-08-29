@@ -17,7 +17,7 @@ from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 from services.subscription_notifications import check_and_send_notifications
 from services.traffic_resets import run_traffic_reset_loop
 from services.device_addon_expiry import run_device_addon_expiry_loop
-from services.reactivation_campaigns import refresh_reactivation_candidates, run_reactivation_campaign_loop
+from services.reactivation_campaigns import run_reactivation_cleanup_loop
 import webhooks
 
 
@@ -152,13 +152,6 @@ async def main():
     # Список активных задач
     tasks = []
 
-    # Создаём состояния подходящих кампаний до запуска обычных уведомлений,
-    # чтобы пользователь не получил два разных сообщения об истёкшем доступе.
-    try:
-        await refresh_reactivation_candidates()
-    except Exception as exc:
-        logger.error("Initial reactivation candidate refresh failed: %s", exc, exc_info=True)
-
     # YooKassa проверяется всегда: webhook даёт мгновенную активацию,
     # а фоновая задача подхватывает платёж, если webhook не дошёл.
     tasks.append(asyncio.create_task(check_yookassa_payments(bot)))
@@ -173,8 +166,8 @@ async def main():
     # Запускаем задачу очистки истёкших платежей
     tasks.append(asyncio.create_task(cleanup_expired_payments()))
 
-    # Запускаем задачу отправки уведомлений о заканчивающихся подписках
-    tasks.append(asyncio.create_task(run_reactivation_campaign_loop(bot)))
+    # В 18:00 МСК окончательно закрываем старые бесплатные кампании и удаляем их сообщения.
+    tasks.append(asyncio.create_task(run_reactivation_cleanup_loop(bot)))
     tasks.append(asyncio.create_task(check_and_send_notifications(bot)))
     tasks.append(asyncio.create_task(run_traffic_reset_loop()))
     tasks.append(asyncio.create_task(run_device_addon_expiry_loop()))

@@ -3519,6 +3519,57 @@ async def cancel_open_reactivation_offers(tg_id: int):
             return rows
 
 
+async def retire_reactivation_offers():
+    """Навсегда закрыть обе бесплатные кампании и вернуть сообщения, которые нужно удалить."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE reactivation_offers
+                SET status = 'cancelled', updated_at = now()
+                WHERE status = 'offered'
+                  AND offer_type IN ('winback_7d', 'new_user_1d')
+                """
+            )
+            await conn.execute(
+                """
+                DELETE FROM subscriptions subscription
+                USING reactivation_offers offer
+                WHERE subscription.id = offer.subscription_id
+                  AND offer.status = 'cancelled'
+                  AND offer.offer_type IN ('winback_7d', 'new_user_1d')
+                  AND subscription.is_active = FALSE
+                  AND subscription.is_visible = FALSE
+                  AND subscription.remnawave_uuid IS NULL
+                """
+            )
+            return await conn.fetch(
+                """
+                SELECT id, tg_id, last_message_id
+                FROM reactivation_offers
+                WHERE status = 'cancelled'
+                  AND offer_type IN ('winback_7d', 'new_user_1d')
+                  AND last_message_id IS NOT NULL
+                ORDER BY id ASC
+                """
+            )
+
+
+async def clear_reactivation_offer_message(offer_id: int, message_id: int | None) -> None:
+    """Запомнить, что сообщение отключённой кампании уже удалено."""
+    await db_execute(
+        """
+        UPDATE reactivation_offers
+        SET last_message_id = NULL, updated_at = now()
+        WHERE id = $1
+          AND status = 'cancelled'
+          AND last_message_id IS NOT DISTINCT FROM $2
+        """,
+        (offer_id, message_id),
+    )
+
+
 async def prepare_reactivation_offer_claim(offer_id: int, tg_id: int, days: int):
     """Зафиксировать срок и локальную подписку перед обращением к Remnawave."""
     pool = await get_pool()

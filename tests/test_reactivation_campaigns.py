@@ -2,9 +2,8 @@ import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
-from zoneinfo import ZoneInfo
 
-from config import GB_BYTES, REACTIVATION_MAX_SENDS
+from config import GB_BYTES
 import database
 from handlers import reactivation
 from services import payment_processing, reactivation_campaigns, subscription_notifications
@@ -60,48 +59,45 @@ class ReactivationCandidateTests(unittest.IsolatedAsyncioTestCase):
 
 class ReactivationDeliveryTests(unittest.IsolatedAsyncioTestCase):
     @patch("services.reactivation_campaigns.asyncio.sleep", new_callable=AsyncMock)
-    @patch("services.reactivation_campaigns.db.mark_reactivation_offer_sent", new_callable=AsyncMock)
-    @patch("services.reactivation_campaigns.db.get_reactivation_offers_due", new_callable=AsyncMock)
-    async def test_daily_delivery_deletes_previous_and_records_only_new_message(
+    @patch("services.reactivation_campaigns.db.clear_reactivation_offer_message", new_callable=AsyncMock)
+    @patch("services.reactivation_campaigns.db.retire_reactivation_offers", new_callable=AsyncMock)
+    async def test_retired_campaign_deletes_message_without_sending_a_new_one(
         self,
-        get_due,
-        mark_sent,
+        retire,
+        clear_message,
         _sleep,
     ):
-        get_due.return_value = [{
+        retire.return_value = [{
             "id": 91,
             "tg_id": 123,
-            "offer_type": "winback_7d",
             "last_message_id": 700,
         }]
-        mark_sent.return_value = True
         bot = AsyncMock()
-        bot.send_message.return_value = SimpleNamespace(message_id=701)
-        now_msk = datetime(2026, 8, 27, 18, 0, tzinfo=ZoneInfo("Europe/Moscow"))
 
-        sent = await reactivation_campaigns.send_due_reactivation_offers(bot, now_msk)
+        deleted, pending = await reactivation_campaigns.retire_reactivation_campaigns(bot)
 
-        self.assertEqual(sent, 1)
+        self.assertEqual(deleted, 1)
+        self.assertEqual(pending, 0)
         bot.delete_message.assert_awaited_once_with(123, 700)
-        sent_text = bot.send_message.await_args.args[1]
-        self.assertIn("7 дней", sent_text)
-        self.assertIn("50 ГБ", sent_text)
-        keyboard = bot.send_message.await_args.kwargs["reply_markup"]
-        self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "reactivation_claim:91")
-        self.assertEqual(mark_sent.await_args.args[0:2], (91, 701))
-        self.assertEqual(mark_sent.await_args.args[3], REACTIVATION_MAX_SENDS)
+        clear_message.assert_awaited_once_with(91, 700)
+        bot.send_message.assert_not_awaited()
 
-    async def test_last_message_stays_when_database_returns_no_more_due_offers(self):
+    @patch("services.reactivation_campaigns.db.clear_reactivation_offer_message", new_callable=AsyncMock)
+    @patch("services.reactivation_campaigns.db.retire_reactivation_offers", new_callable=AsyncMock)
+    async def test_failed_delete_is_left_for_a_later_retry(self, retire, clear_message):
+        retire.return_value = [{
+            "id": 92,
+            "tg_id": 124,
+            "last_message_id": 701,
+        }]
         bot = AsyncMock()
-        with patch(
-            "services.reactivation_campaigns.db.get_reactivation_offers_due",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            sent = await reactivation_campaigns.send_due_reactivation_offers(bot)
+        bot.delete_message.side_effect = RuntimeError("temporary Telegram error")
 
-        self.assertEqual(sent, 0)
-        bot.delete_message.assert_not_awaited()
+        deleted, pending = await reactivation_campaigns.retire_reactivation_campaigns(bot)
+
+        self.assertEqual(deleted, 0)
+        self.assertEqual(pending, 1)
+        clear_message.assert_not_awaited()
         bot.send_message.assert_not_awaited()
 
 
