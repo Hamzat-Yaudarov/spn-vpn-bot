@@ -64,6 +64,9 @@ PARTNERSHIP_AGREEMENTS = {
 # ────────────────────────────────────────────────
 
 REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "https://panel.wayspn.online/api")
+REMNAWAVE_API_VERSION = int(os.getenv("REMNAWAVE_API_VERSION", "2"))
+if REMNAWAVE_API_VERSION not in (2, 3):
+    raise ValueError("REMNAWAVE_API_VERSION must be 2 or 3")
 REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
 SUBSCRIPTION_PUBLIC_BASE_URL = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "https://sub.wayspn.online").rstrip("/")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")

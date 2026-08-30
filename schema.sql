@@ -235,6 +235,16 @@ CREATE TABLE IF NOT EXISTS reactivation_offers (
     UNIQUE(tg_id, offer_type)
 );
 
+CREATE TABLE IF NOT EXISTS remnawave_user_identities (
+    panel_url TEXT NOT NULL,
+    local_uuid UUID NOT NULL,
+    user_id BIGINT NOT NULL CHECK (user_id > 0),
+    username TEXT NOT NULL,
+    disabled_expire_at TIMESTAMP,
+    PRIMARY KEY (panel_url, local_uuid),
+    UNIQUE (panel_url, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS promo_code_users (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT NOT NULL,

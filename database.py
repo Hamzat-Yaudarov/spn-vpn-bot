@@ -18,6 +18,19 @@ from config import (
 
 MAX_SUBSCRIPTIONS_PER_USER = 5
 
+# Keep existing UUID references intact; Remnawave 3 uses separate numeric user IDs.
+REMNAWAVE_IDENTITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS remnawave_user_identities (
+    panel_url TEXT NOT NULL,
+    local_uuid UUID NOT NULL,
+    user_id BIGINT NOT NULL CHECK (user_id > 0),
+    username TEXT NOT NULL,
+    disabled_expire_at TIMESTAMP,
+    PRIMARY KEY (panel_url, local_uuid),
+    UNIQUE (panel_url, user_id)
+)
+"""
+
 
 # Глобальный пул подключений
 _pool = None
@@ -121,6 +134,7 @@ async def run_migrations():
     async with pool.acquire() as conn:
         try:
             logging.info("Running migrations...")
+            await conn.execute(REMNAWAVE_IDENTITY_SCHEMA)
 
             # ═══════════════════════════════════════════════════════════
             # ОПРЕДЕЛЯЕМ ОЖИДАЕМУЮ СТРУКТУРУ ТАБЛИЦ

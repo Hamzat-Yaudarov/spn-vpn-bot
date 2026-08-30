@@ -18,6 +18,7 @@ from config import (
     REMNAWAVE_CA_BUNDLE,
 )
 from utils import retry_with_backoff, safe_api_call
+from services import remnawave_identity as identity
 
 
 MAX_SUBSCRIPTION_PROFILE_BYTES = 4 * 1024 * 1024
@@ -89,6 +90,8 @@ async def remnawave_resolve_user_uuid_by_short_uuid(short_uuid: str) -> str | No
     user = data.get("response") if isinstance(data, dict) else None
     if not isinstance(user, dict) or not hmac.compare_digest(str(user.get("shortUuid") or ""), short_uuid):
         return None
+    if identity.REMNAWAVE_API_VERSION == 3:
+        return await identity.remember_remote_user(user)
     try:
         return str(uuid.UUID(str(user.get("uuid") or "")))
     except (TypeError, ValueError):
@@ -195,11 +198,12 @@ async def remnawave_get_or_create_user(
                 if resp.status == 200:
                     data = await resp.json()
                     user_data = data.get("response", {})
-                    uuid = user_data.get("uuid")
-                    if uuid:
-                        return uuid
+                    return await identity.remember_remote_user(user_data)
                 elif resp.status == 404:
-                    return None  # Пользователь не существует
+                    error = await resp.json()
+                    if error.get("errorCode") == "A025":
+                        return None
+                    raise RuntimeError("User lookup endpoint unavailable")
                 else:
                     error_text = await resp.text()
                     raise RuntimeError(f"Remnawave HTTP {resp.status}: {error_text}")
@@ -208,9 +212,10 @@ async def remnawave_get_or_create_user(
         uuid = await retry_with_backoff(_get_existing_user, max_attempts=2)
         if uuid:
             if extend_if_exists:
-                await remnawave_extend_subscription(session, uuid, days)
+                if not await remnawave_extend_subscription(session, uuid, days):
+                    return None, None
             if any(value is not None for value in (traffic_limit_bytes, traffic_limit_strategy, active_internal_squads, hwid_device_limit, telegram_id)):
-                await remnawave_update_user_profile(
+                profile_updated = await remnawave_update_user_profile(
                     session,
                     uuid,
                     traffic_limit_bytes=traffic_limit_bytes,
@@ -219,9 +224,14 @@ async def remnawave_get_or_create_user(
                     hwid_device_limit=hwid_device_limit,
                     telegram_id=telegram_id,
                 )
+                if not profile_updated:
+                    return None, None
             return uuid, remna_username
     except Exception as e:
         logging.warning(f"Get existing user error: {e}")
+        # A timeout, incompatible response or missing mapping is NOT proof that
+        # the user does not exist. Never create another subscription in this case.
+        return None, None
 
     # Создаём нового пользователя если не нашли существующего
     async def _create_user():
@@ -238,9 +248,10 @@ async def remnawave_get_or_create_user(
 
         payload = {
             "username": remna_username,
-            "password": password,
             "expireAt": expire_at
         }
+        if identity.REMNAWAVE_API_VERSION == 2:
+            payload["password"] = password
 
         if traffic_limit_bytes is not None:
             payload["trafficLimitBytes"] = traffic_limit_bytes
@@ -264,7 +275,7 @@ async def remnawave_get_or_create_user(
                 if resp.status in (200, 201):
                     data = await resp.json()
                     user_data = data.get("response", {})
-                    uuid = user_data.get("uuid")
+                    uuid = await identity.remember_remote_user(user_data)
                     if uuid:
                         logging.info(f"Created new Remnawave user: {remna_username}")
                         return uuid
@@ -306,10 +317,10 @@ async def remnawave_update_user_profile(
     пользователя уже нет и удалять у него лимит больше не требуется.
     Для обычных покупок, продлений и синхронизаций значение остаётся False.
     """
-    payload = {"uuid": str(user_uuid)}
+    payload = {}
 
     if expire_at is not None:
-        payload["expireAt"] = expire_at.isoformat()
+        payload.update(identity.expiry_fields(expire_at))
     if traffic_limit_bytes is not None:
         payload["trafficLimitBytes"] = traffic_limit_bytes
     if traffic_limit_strategy is not None:
@@ -322,17 +333,54 @@ async def remnawave_update_user_profile(
         payload["telegramId"] = telegram_id
 
     async def _update():
+        user_id = await identity.api_user_id(user_uuid)
+        request_payload = {**payload, "id" if identity.REMNAWAVE_API_VERSION == 3 else "uuid": user_id}
+        reactivate = "expireAt" in payload and await identity.should_reactivate(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
+            if reactivate:
+                async with temp_session.get(
+                    f"{REMNAWAVE_BASE_URL}/users/{user_id}",
+                    headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"},
+                ) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"Could not verify disabled profile ({resp.status})")
+                    data = (await resp.json()).get("response", {})
+                    if identity.numeric_user_id(data) != user_id:
+                        raise identity.IdentityError("Remnawave returned a different user")
+                    if data.get("status") == "DISABLED":
+                        request_payload["status"] = "ACTIVE"
+            if identity.REMNAWAVE_API_VERSION == 3 and payload.get("status") == "DISABLED":
+                # In 3.4.1 PATCH status=DISABLED only disables ACTIVE users.
+                # The dedicated action also disables EXPIRED/LIMITED profiles.
+                # Disable BEFORE modifying limits, so raising a limit cannot
+                # accidentally reactivate an already exhausted/refunded user.
+                async with temp_session.post(
+                    f"{REMNAWAVE_BASE_URL}/users/{user_id}/actions/disable",
+                    headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"},
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        try:
+                            error = json.loads(error_text)
+                        except (TypeError, ValueError):
+                            error = {}
+                        if not (resp.status == 400 and isinstance(error, dict) and error.get("errorCode") == "A029"):
+                            raise RuntimeError(f"Disable user failed ({resp.status})")
+                await identity.remember_expiry(user_uuid, expire_at)
+                if len(payload) == 1:
+                    return True
             async with temp_session.patch(
                 f"{REMNAWAVE_BASE_URL}/users",
                 headers={
                     "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
                     "Content-Type": "application/json"
                 },
-                json=payload
+                json=request_payload
             ) as resp:
                 if resp.status == 200:
+                    if expire_at is not None:
+                        await identity.remember_expiry(user_uuid, expire_at)
                     return True
                 error_text = await resp.text()
                 if missing_user_is_success and resp.status == 404:
@@ -359,10 +407,11 @@ async def remnawave_update_user_profile(
 async def remnawave_delete_user(session: aiohttp.ClientSession, user_uuid: str) -> bool:
     """Физически удалить пользователя из Remnawave."""
     async def _delete():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.delete(
-                f"{REMNAWAVE_BASE_URL}/users/{user_uuid}",
+                f"{REMNAWAVE_BASE_URL}/users/{user_id}",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"},
             ) as resp:
                 if resp.status in (200, 201, 204):
@@ -387,8 +436,10 @@ async def remnawave_delete_user(session: aiohttp.ClientSession, user_uuid: str) 
                     logging.info("Deleted Remnawave user %s", user_uuid)
                     return True
                 if resp.status == 404:
-                    logging.info("Remnawave user %s already deleted", user_uuid)
-                    return True
+                    data = await resp.json()
+                    if data.get("errorCode") == "A025":
+                        logging.info("Remnawave user %s already deleted", user_uuid)
+                        return True
                 error_text = await resp.text()
                 raise RuntimeError(f"Delete user failed ({resp.status}): {error_text}")
 
@@ -403,10 +454,11 @@ async def remnawave_delete_user(session: aiohttp.ClientSession, user_uuid: str) 
 async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid: str) -> bool:
     """Сбросить трафик пользователя в Remnawave."""
     async def _reset():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
-                f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-traffic",
+                f"{REMNAWAVE_BASE_URL}/users/{user_id}/actions/reset-traffic",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
             ) as resp:
                 if resp.status == 200:
@@ -425,12 +477,16 @@ async def remnawave_reset_user_traffic(session: aiohttp.ClientSession, user_uuid
 async def remnawave_revoke_subscription(session: aiohttp.ClientSession, user_uuid: str) -> bool:
     """Перевыпустить подписочную ссылку пользователя в Remnawave."""
     async def _revoke():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         endpoints = [
+            f"{REMNAWAVE_BASE_URL}/users/{user_id}/actions/revoke",
             f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/revoke-subscription",
             f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/reset-subscription",
             f"{REMNAWAVE_BASE_URL}/users/{user_uuid}/actions/revoke-subscription-url",
         ]
+        if identity.REMNAWAVE_API_VERSION == 3:
+            endpoints = endpoints[:1]
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             errors = []
             for endpoint in endpoints:
@@ -465,10 +521,11 @@ async def remnawave_get_user_usage(session: aiohttp.ClientSession, user_uuid: st
 async def remnawave_get_hwid_devices(session: aiohttp.ClientSession, user_uuid: str) -> list[dict] | None:
     """Получить список HWID-устройств пользователя."""
     async def _get_devices():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.get(
-                f"{REMNAWAVE_BASE_URL}/hwid/devices/{user_uuid}",
+                f"{REMNAWAVE_BASE_URL}/hwid/devices/{user_id}",
                 headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
             ) as resp:
                 if resp.status == 200:
@@ -489,6 +546,7 @@ async def remnawave_get_hwid_devices(session: aiohttp.ClientSession, user_uuid: 
 async def remnawave_delete_hwid_device(session: aiohttp.ClientSession, user_uuid: str, hwid: str) -> bool:
     """Удалить одно HWID-устройство пользователя."""
     async def _delete_device():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
@@ -497,7 +555,7 @@ async def remnawave_delete_hwid_device(session: aiohttp.ClientSession, user_uuid
                     "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json={"userUuid": str(user_uuid), "hwid": hwid},
+                json={"userId" if identity.REMNAWAVE_API_VERSION == 3 else "userUuid": user_id, "hwid": hwid},
             ) as resp:
                 if resp.status == 200:
                     return True
@@ -518,6 +576,7 @@ async def remnawave_delete_hwid_device(session: aiohttp.ClientSession, user_uuid
 async def remnawave_delete_all_hwid_devices(session: aiohttp.ClientSession, user_uuid: str) -> bool:
     """Удалить все HWID-устройства пользователя."""
     async def _delete_all_devices():
+        user_id = await identity.api_user_id(user_uuid)
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(
@@ -526,7 +585,7 @@ async def remnawave_delete_all_hwid_devices(session: aiohttp.ClientSession, user
                     "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json={"userUuid": str(user_uuid)},
+                json={"userId" if identity.REMNAWAVE_API_VERSION == 3 else "userUuid": user_id},
             ) as resp:
                 if resp.status == 200:
                     return True
@@ -560,41 +619,7 @@ async def remnawave_set_subscription_expiry(
     Returns:
         True если успешно, False иначе
     """
-    async def _set_expiry():
-        # Конвертируем datetime в ISO формат
-        expire_iso = expire_at.isoformat() if not expire_at.isoformat().endswith('Z') else expire_at.isoformat()
-
-        payload = {
-            "uuid": str(user_uuid),
-            "expireAt": expire_iso
-        }
-
-        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
-            async with temp_session.patch(
-                f"{REMNAWAVE_BASE_URL}/users",
-                headers={
-                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json=payload
-            ) as resp:
-                if resp.status == 200:
-                    logging.info(f"Set subscription expiry for {user_uuid} to {expire_iso}")
-                    return True
-                else:
-                    error_text = await resp.text()
-                    raise RuntimeError(f"Set expiry failed ({resp.status}): {error_text}")
-
-    try:
-        result = await safe_api_call(
-            _set_expiry,
-            error_message=f"Failed to set subscription expiry for {user_uuid}"
-        )
-        return result is not None
-    except Exception as e:
-        logging.error(f"Set subscription expiry error: {e}")
-        return False
+    return await remnawave_update_user_profile(session, user_uuid, expire_at=expire_at)
 
 
 async def remnawave_extend_subscription(
@@ -613,55 +638,16 @@ async def remnawave_extend_subscription(
     Returns:
         True если успешно, False иначе
     """
-    async def _extend():
-        # 1. Получаем текущий expireAt
-        timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
-            async with temp_session.get(
-                f"{REMNAWAVE_BASE_URL}/users/{user_uuid}",
-                headers={"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise RuntimeError(f"Get user failed ({resp.status}): {error_text}")
-
-                data = await resp.json()
-                current_expire = data["response"].get("expireAt")
-                if not current_expire:
-                    raise RuntimeError("expireAt not found in response")
-
-        # 2. Считаем новую дату
-        current_dt = datetime.fromisoformat(current_expire.replace("Z", "+00:00"))
-        new_expire = current_dt + timedelta(days=days)
-
-        payload = {
-            "uuid": user_uuid,
-            "expireAt": new_expire.isoformat()
-        }
-
-        # 3. PATCH /users для обновления
-        async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
-            async with temp_session.patch(
-                f"{REMNAWAVE_BASE_URL}/users",
-                headers={
-                    "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json=payload
-            ) as resp:
-                if resp.status == 200:
-                    logging.info(f"Extended subscription for {user_uuid} by {days} days")
-                    return True
-                else:
-                    error_text = await resp.text()
-                    raise RuntimeError(f"Extend failed ({resp.status}): {error_text}")
-
     try:
-        result = await safe_api_call(
-            _extend,
-            error_message=f"Failed to extend subscription for {user_uuid}"
-        )
-        return result is not None
+        user_info = await remnawave_get_user_info(session, user_uuid)
+        if not user_info or not user_info.get("expireAt"):
+            return False
+        current_dt = datetime.fromisoformat(user_info["expireAt"].replace("Z", "+00:00"))
+        if current_dt.tzinfo is None:
+            current_dt = current_dt.replace(tzinfo=timezone.utc)
+        # Calculate once; retrying the PATCH must not add another set of days.
+        new_expire = max(current_dt, datetime.now(timezone.utc)) + timedelta(days=days)
+        return await remnawave_set_subscription_expiry(session, user_uuid, new_expire)
     except Exception as e:
         logging.error(f"Extend subscription error: {e}")
         return False
@@ -683,9 +669,22 @@ async def remnawave_add_to_squad(
     Returns:
         True если успешно, False иначе
     """
+    if identity.REMNAWAVE_API_VERSION == 2:
+        # v2 has no add-many-users endpoint. Update only this user's squads;
+        # the similarly named add-users action would affect EVERY panel user.
+        user_info = await remnawave_get_user_info(session, user_uuid)
+        if not user_info or not isinstance(user_info.get("activeInternalSquads"), list):
+            return False
+        squads = [item["uuid"] for item in user_info["activeInternalSquads"]]
+        if squad_uuid not in squads:
+            squads.append(squad_uuid)
+        return await remnawave_update_user_profile(session, user_uuid, active_internal_squads=squads)
+
     async def _add_to_squad():
-        url = f"{REMNAWAVE_BASE_URL}/internal-squads/{squad_uuid}/bulk-actions/add-users"
-        payload = {"userUuids": [user_uuid]}
+        user_id = await identity.api_user_id(user_uuid)
+        # add-users means ALL panel users, not the list supplied in the body.
+        url = f"{REMNAWAVE_BASE_URL}/internal-squads/{squad_uuid}/bulk-actions/add-many-users"
+        payload = {"userIds": [user_id]}
         headers = {
             "Authorization": f"Bearer {REMNAWAVE_API_TOKEN}",
             "Content-Type": "application/json"
@@ -694,8 +693,8 @@ async def remnawave_add_to_squad(
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
             async with temp_session.post(url, headers=headers, json=payload) as resp:
-                if resp.status in (200, 201):
-                    logging.info(f"Added user {user_uuid} to squad {squad_uuid}")
+                if resp.status in (200, 201, 202):
+                    logging.info(f"Requested adding user {user_uuid} to squad {squad_uuid}")
                     return True
                 else:
                     error_text = await resp.text()
@@ -728,7 +727,8 @@ async def remnawave_get_subscription_url(
         Ссылка подписки или None
     """
     async def _get_url():
-        url = f"{REMNAWAVE_BASE_URL}/users/{user_uuid}"
+        user_id = await identity.api_user_id(user_uuid)
+        url = f"{REMNAWAVE_BASE_URL}/users/{user_id}"
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
@@ -768,7 +768,8 @@ async def remnawave_get_user_info(
         Словарь с информацией пользователя или None
     """
     async def _get_info():
-        url = f"{REMNAWAVE_BASE_URL}/users/{user_uuid}"
+        user_id = await identity.api_user_id(user_uuid)
+        url = f"{REMNAWAVE_BASE_URL}/users/{user_id}"
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
@@ -776,7 +777,7 @@ async def remnawave_get_user_info(
             async with temp_session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("response", {})
+                    return await identity.normalize_user_info(user_uuid, data.get("response", {}))
                 else:
                     error_text = await resp.text()
                     raise RuntimeError(f"Get user info failed ({resp.status}): {error_text}")
