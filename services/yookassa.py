@@ -221,7 +221,7 @@ async def cleanup_expired_payments():
 
             try:
                 await db.delete_expired_payments()
-                logging.info("Expired payments cleaned up")
+                logging.debug("Pending payment records retained for provider reconciliation")
             except asyncio.CancelledError:
                 logging.info("Cleanup task cancelled")
                 raise

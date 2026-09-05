@@ -715,6 +715,8 @@ async def webhook_cryptobot(request: Request):
                 logger.warning(f"⚠️ Payment processing task cancelled for invoice {invoice_id}")
             elif t.exception():
                 logger.error(f"❌ Payment processing task failed for invoice {invoice_id}: {t.exception()}")
+            elif not t.result():
+                logger.error("Payment %s was confirmed but activation did not complete", invoice_id)
             else:
                 logger.info(f"✅ Payment processing task completed for invoice {invoice_id}")
 
@@ -813,6 +815,8 @@ async def webhook_yookassa(request: Request):
                 logger.warning(f"⚠️ Payment processing task cancelled for payment {payment_id}")
             elif t.exception():
                 logger.error(f"❌ Payment processing task failed for payment {payment_id}: {t.exception()}")
+            elif not t.result():
+                logger.error("Payment %s was confirmed but activation did not complete", payment_id)
             else:
                 logger.info(f"✅ Payment processing task completed for payment {payment_id}")
 

@@ -63,7 +63,7 @@ PARTNERSHIP_AGREEMENTS = {
 #              REMNAWAVE API CONFIG
 # ────────────────────────────────────────────────
 
-REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "https://panel.wayspn.online/api")
+REMNAWAVE_BASE_URL = os.getenv("REMNAWAVE_BASE_URL", "https://panel.wayspn.online/api").strip().rstrip("/")
 REMNAWAVE_API_VERSION = int(os.getenv("REMNAWAVE_API_VERSION", "2"))
 if REMNAWAVE_API_VERSION not in (2, 3):
     raise ValueError("REMNAWAVE_API_VERSION must be 2 or 3")

@@ -93,6 +93,27 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("устройств", " ".join(labels))
         self.assertTrue(all(len(label) <= 32 for label in labels))
 
+    @patch("handlers.subscription.edit_text_with_photo", new_callable=AsyncMock)
+    @patch("handlers.subscription.db.get_active_discounts", new_callable=AsyncMock)
+    async def test_discounted_tariff_uses_crossed_out_old_price_without_arrow(self, discounts, edit):
+        discounts.return_value = [{
+            "id": 1,
+            "name": "20%",
+            "discount_type": "percent",
+            "value": 20,
+            "target_type": "bypass",
+            "target_code": None,
+        }]
+        state = AsyncMock()
+        state.get_data.return_value = {"plan_kind": "bypass", "purchase_mode": "new"}
+
+        await subscription._show_tariff_selection(_callback(), state, "Выберите срок")
+
+        labels = _button_texts(edit.await_args.args[2])
+        month_label = next(label for label in labels if label.startswith("30 дней"))
+        self.assertEqual(month_label, "30 дней — 3̶0̶0̶₽ 240₽")
+        self.assertNotIn("→", month_label)
+
     async def test_bonus_payment_button_only_appears_when_balance_is_enough(self):
         callback = _callback("tariff_regular_1m")
         state = AsyncMock()

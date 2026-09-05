@@ -235,6 +235,13 @@ CREATE TABLE IF NOT EXISTS reactivation_offers (
     UNIQUE(tg_id, offer_type)
 );
 
+CREATE TABLE IF NOT EXISTS payment_subscription_activations (
+    invoice_id TEXT PRIMARY KEY,
+    subscription_id BIGINT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS remnawave_user_identities (
     panel_url TEXT NOT NULL,
     local_uuid UUID NOT NULL,

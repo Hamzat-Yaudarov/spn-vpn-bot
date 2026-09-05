@@ -232,11 +232,15 @@ class ReactivationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         cancel_offer,
     ):
         get_payment.return_value = {
+            "tg_id": 123,
+            "tariff_code": "bypass_1m",
             "status": "paid",
             "payment_kind": "subscription",
         }
 
-        result = await payment_processing.process_paid_payment(None, 123, "invoice-1", "bypass_1m")
+        with (patch.object(payment_processing.activation, "acquire_lock", AsyncMock(return_value=object())),
+              patch.object(payment_processing.activation, "release_lock", AsyncMock())):
+            result = await payment_processing.process_paid_payment(None, 123, "invoice-1", "bypass_1m")
 
         self.assertTrue(result)
         cancel_offer.assert_awaited_once_with(None, 123)

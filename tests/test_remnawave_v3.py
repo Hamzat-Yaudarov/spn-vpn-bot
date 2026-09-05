@@ -281,10 +281,44 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_lookup_error_does_not_create_user(self):
         for status, body in ((503, {}), (404, {"message": "wrong endpoint"})):
-            http = HTTP([Response(status, body), Response(status, body)])
+            http = HTTP([Response(status, body) for _ in range(4)])
             with patch.object(api.aiohttp, "ClientSession", http):
                 self.assertEqual(await api.remnawave_get_or_create_user(None, 123), (None, None))
-            self.assertEqual([call[0] for call in http.calls], ["GET", "GET"])
+            self.assertTrue(all(call[0] == "GET" for call in http.calls))
+
+    async def test_missing_404_code_requires_complete_listing_before_create(self):
+        http = HTTP([Response(404, {"message": "Not Found"}),
+                     Response(body={"response": {"users": [], "total": 0}}), Response()])
+        with (patch.object(api.aiohttp, "ClientSession", http),
+              patch.object(identity, "remember_remote_user", AsyncMock(return_value=LOCAL))):
+            self.assertEqual(await api.remnawave_get_or_create_user(None, 123, remna_username="tg_test"), (LOCAL, "tg_test"))
+        self.assertEqual([c[0] for c in http.calls], ["GET", "GET", "POST"])
+        self.assertTrue(http.calls[1][1].endswith("/users"))
+
+    async def test_lookup_fallback_preserves_existing_user_on_later_page(self):
+        http = HTTP([Response(404, {}),
+                     Response(body={"response": {"users": [dict(USER, id=9, username="a")], "total": 2}}),
+                     Response(body={"response": {"users": [USER], "total": 2}})])
+        with (patch.object(api.aiohttp, "ClientSession", http),
+              patch.object(identity, "remember_remote_user", AsyncMock(return_value=LOCAL))):
+            self.assertEqual(await api.remnawave_get_or_create_user(None, 123, remna_username="tg_test"), (LOCAL, "tg_test"))
+        self.assertEqual([c[0] for c in http.calls], ["GET", "GET", "GET"])
+        self.assertEqual(http.calls[2][2]["params"]["start"], 1)
+
+    async def test_fallback_never_creates_from_incomplete_or_invalid_listing(self):
+        for bad in ({"response": {"users": [], "total": 2}}, {"response": {"users": [], "total": False}},
+                    {"response": {"users": [{"username": "other"}], "total": 1}}, {}):
+            http = HTTP([Response(404, {}), Response(body=bad)] * 2)
+            with patch.object(api.aiohttp, "ClientSession", http):
+                self.assertEqual(await api.remnawave_get_or_create_user(None, 123), (None, None))
+            self.assertTrue(all(c[0] == "GET" for c in http.calls))
+
+    async def test_lookup_refuses_other_username_and_auth_errors(self):
+        for response in (Response(), Response(401, {}), Response(403, {})):
+            http = HTTP([response, response])
+            with patch.object(api.aiohttp, "ClientSession", http):
+                self.assertEqual(await api.remnawave_get_or_create_user(None, 123, remna_username="another"), (None, None))
+            self.assertEqual([c[0] for c in http.calls], ["GET", "GET"])
 
     async def test_create_v3_user_only_after_confirmed_not_found(self):
         http = HTTP([Response(404, {"errorCode": "A025"}), Response()])

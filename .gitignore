@@ -5,6 +5,8 @@
 .builder/config/data.json
 __pycache__/
 *.pyc
+payment-recovery-backup-*/
+artifacts/way-spn-payment-hotfix.tar.gz
 .android-sdk/
 .gradle-user-home/
 .release-secrets/

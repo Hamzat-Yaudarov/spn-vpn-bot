@@ -253,6 +253,17 @@ def _format_remaining(expire_at_str: str | None) -> str:
     return f"{days}д {hours}ч {minutes}м"
 
 
+def _strikethrough_price(value: int | float) -> str:
+    """Render a crossed-out price in Telegram button text without HTML entities."""
+    return "".join(f"{char}\u0336" for char in f"{value:g}") + "₽"
+
+
+def _discount_price_label(pricing: dict) -> str:
+    if pricing.get("discount"):
+        return f"{_strikethrough_price(pricing['original_price'])} {pricing['price']:g}₽"
+    return f"{pricing['price']:g}₽"
+
+
 async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, title: str):
     data = await state.get_data()
     plan_kind = data.get("plan_kind", "regular")
@@ -263,7 +274,7 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     keyboard = []
     for tariff_code, tariff in tariffs.items():
         pricing = calculate_discounted_price(tariff["price"], discounts, product_type="subscription", code=tariff_code, plan_kind=plan_kind)
-        price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
+        price_label = _discount_price_label(pricing)
         period = f"{tariff['days']} дней"
         label = f"{period} — {price_label}"
         keyboard.append([semantic_button(text=label, callback_data=f"tariff_{tariff_code}", style="primary")])
@@ -1245,7 +1256,7 @@ async def process_gb_subscription_choice(callback: CallbackQuery, state: FSMCont
     keyboard = []
     for package_code, package in BYPASS_TRAFFIC_PACKAGES.items():
         pricing = calculate_discounted_price(package["price"], discounts, product_type="traffic", code=package_code, plan_kind="bypass")
-        price_label = f"{pricing['original_price']:g}₽ → {pricing['price']:g}₽" if pricing["discount"] else f"{pricing['price']:g}₽"
+        price_label = _discount_price_label(pricing)
         keyboard.append([
             semantic_button(
                 text=f"{package['gb']} ГБ — {price_label}",

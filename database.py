@@ -18,6 +18,15 @@ from config import (
 
 MAX_SUBSCRIPTIONS_PER_USER = 5
 
+PAYMENT_ACTIVATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS payment_subscription_activations (
+    invoice_id TEXT PRIMARY KEY,
+    subscription_id BIGINT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+)
+"""
+
 # Keep existing UUID references intact; Remnawave 3 uses separate numeric user IDs.
 REMNAWAVE_IDENTITY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS remnawave_user_identities (
@@ -135,6 +144,7 @@ async def run_migrations():
         try:
             logging.info("Running migrations...")
             await conn.execute(REMNAWAVE_IDENTITY_SCHEMA)
+            await conn.execute(PAYMENT_ACTIVATION_SCHEMA)
 
             # ═══════════════════════════════════════════════════════════
             # ОПРЕДЕЛЯЕМ ОЖИДАЕМУЮ СТРУКТУРУ ТАБЛИЦ
@@ -1774,7 +1784,9 @@ async def get_next_subscription_slot(tg_id: int) -> int | None:
     subscriptions = await get_user_subscriptions(tg_id)
     taken_slots = {sub['slot_number'] for sub in subscriptions}
 
-    for slot in range(1, MAX_SUBSCRIPTIONS_PER_USER * 2 + 1):
+    # Physical slots include history/failed placeholders. The public limit is
+    # enforced by get_next_type_index, not by the number of historical rows.
+    for slot in range(1, len(taken_slots) + 2):
         if slot not in taken_slots:
             return slot
 
@@ -2304,8 +2316,8 @@ async def get_active_payment_for_user_and_tariff(
     age = datetime.utcnow() - created_at
 
     if age.total_seconds() > PAYMENT_EXPIRY_TIME:
-        # Счёт истёк, удаляем его
-        await delete_payment(result['id'])
+        # Stop reusing an old payment link, but retain its accounting record:
+        # a captured payment may still be waiting for subscription activation.
         return None
 
     # Счёт ещё активен
@@ -2321,23 +2333,11 @@ async def delete_payment(payment_id: int):
 
 
 async def delete_expired_payments(seconds: int = None):
-    """
-    Удалить все неоплаченные счёты старше N секунд
-
-    Args:
-        seconds: Время в секундах (по умолчанию PAYMENT_EXPIRY_TIME из конфига)
-    """
-    from datetime import datetime, timedelta, timezone
-
-    if seconds is None:
-        seconds = PAYMENT_EXPIRY_TIME
-
-    cutoff_time = datetime.utcnow() - timedelta(seconds=seconds)
-
-    await db_execute(
-        "DELETE FROM payments WHERE status = 'pending' AND created_at < $1",
-        (cutoff_time,)
-    )
+    """Compatibility no-op: pending payments cannot safely be deleted by age."""
+    # pending means NOT ACTIVATED locally, not necessarily unpaid at provider.
+    # Deleting by age can lose a captured payment during a panel outage. Only
+    # provider-confirmed cancellation may end retries; retain accounting rows.
+    return None
 
 
 async def get_last_pending_payment(tg_id: int):

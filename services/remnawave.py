@@ -161,6 +161,48 @@ def _extract_subscription_url(user_data: dict) -> str | None:
     return _build_subscription_url_from_short_uuid(short_uuid)
 
 
+async def _lookup_username_in_complete_list(session, username: str, headers: dict):
+    """Read-only fallback for proxies that strip the A025 error from a 404.
+
+    An arbitrary 404 is NOT permission to create a user. Only a complete,
+    validated API listing can establish absence when the lookup route fails.
+    """
+    start, expected_total = 0, None
+    seen_ids, seen_names = set(), set()
+    while True:
+        async with session.get(
+            f"{REMNAWAVE_BASE_URL}/users", headers=headers, allow_redirects=False,
+            params={"start": start, "size": 500,
+                    "sorting": json.dumps([{"id": "username", "desc": False}])},
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Username fallback listing failed (HTTP {resp.status})")
+            payload = await resp.json()
+        data = payload.get("response") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise RuntimeError("Invalid username fallback response")
+        users, total = data.get("users"), data.get("total")
+        if (not isinstance(users, list) or type(total) is not int or total < 0
+                or expected_total is not None and expected_total != total):
+            raise RuntimeError("Incomplete or changing username fallback listing")
+        expected_total = total
+        for user in users:
+            if not isinstance(user, dict) or not isinstance(user.get("username"), str) or not user["username"]:
+                raise RuntimeError("Invalid user in username fallback listing")
+            user_id = identity.numeric_user_id(user)
+            if user_id in seen_ids or user["username"] in seen_names:
+                raise RuntimeError("Repeated user in username fallback listing")
+            seen_ids.add(user_id)
+            seen_names.add(user["username"])
+            if user["username"] == username:
+                return await identity.remember_remote_user(user)
+        start += len(users)
+        if start == total:
+            return None
+        if not users or start > total:
+            raise RuntimeError("Incomplete username fallback listing")
+
+
 async def remnawave_get_or_create_user(
     session: aiohttp.ClientSession,
     tg_id: int,
@@ -189,24 +231,32 @@ async def remnawave_get_or_create_user(
 
     # Пытаемся получить существующего пользователя
     async def _get_existing_user():
-        url = f"{REMNAWAVE_BASE_URL}/users/by-username/{remna_username}"
+        url = f"{REMNAWAVE_BASE_URL}/users/by-username/{quote(remna_username, safe='')}"
         headers = {"Authorization": f"Bearer {REMNAWAVE_API_TOKEN}"}
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout, connector=_verified_connector()) as temp_session:
-            async with temp_session.get(url, headers=headers) as resp:
+            async with temp_session.get(url, headers=headers, allow_redirects=False) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     user_data = data.get("response", {})
+                    if user_data.get("username") != remna_username:
+                        raise identity.IdentityError("Username lookup returned a different user")
                     return await identity.remember_remote_user(user_data)
                 elif resp.status == 404:
-                    error = await resp.json()
-                    if error.get("errorCode") == "A025":
+                    try:
+                        error = await resp.json()
+                    except (ValueError, aiohttp.ContentTypeError):
+                        error = {}
+                    if isinstance(error, dict) and error.get("errorCode") == "A025":
                         return None
-                    raise RuntimeError("User lookup endpoint unavailable")
+                    if identity.REMNAWAVE_API_VERSION != 3:
+                        raise RuntimeError("User lookup endpoint unavailable (HTTP 404 without A025)")
                 else:
                     error_text = await resp.text()
                     raise RuntimeError(f"Remnawave HTTP {resp.status}: {error_text}")
+            logging.warning("Username lookup returned 404 without A025; verifying via read-only API listing")
+            return await _lookup_username_in_complete_list(temp_session, remna_username, headers)
 
     try:
         uuid = await retry_with_backoff(_get_existing_user, max_attempts=2)

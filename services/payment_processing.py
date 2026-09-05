@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import aiohttp
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -25,6 +25,7 @@ from services.device_addons import device_count_text, effective_device_limit
 from services.traffic_periods import build_traffic_period_state
 from services.reactivation_campaigns import cancel_reactivation_offers_after_purchase
 from services.custom_emoji import semantic_button
+from services import payment_activation as activation
 
 
 logger = logging.getLogger(__name__)
@@ -54,48 +55,10 @@ def _subscription_display_name(subscription) -> str:
 
 
 async def _get_or_create_target_subscription(tg_id: int, payment_record, tariff: dict):
-    payment_target = payment_record.get("payment_target") or "new"
-    plan_kind = tariff.get("kind", "regular")
-
-    if payment_target == "renew":
-        subscription_id = payment_record.get("subscription_id")
-        if not subscription_id:
-            return None, "Платёж не привязан к подписке"
-
-        subscription = await db.get_subscription_by_id(subscription_id, tg_id)
-        if (
-            not subscription
-            or subscription.get("generation") != "v2"
-            or not subscription.get("is_visible")
-            or not subscription.get("is_renewable")
-        ):
-            return None, "Эту подписку нельзя продлить"
-
-        return subscription, None
-
-    type_index = payment_record.get("target_slot_number")
-    if type_index is None:
-        type_index = await db.get_next_type_index(tg_id, plan_kind)
-
-    if type_index is None:
-        return None, f"Достигнут лимит подписок типа {plan_kind}"
-
-    storage_slot = await db.get_next_subscription_slot(tg_id)
-    if storage_slot is None:
-        return None, "Нет свободного внутреннего слота подписки"
-
-    subscription = await db.create_subscription_record(
-        tg_id,
-        storage_slot,
-        plan_kind=plan_kind,
-        type_index=type_index,
-        generation="v2",
-        is_visible=True,
-        is_renewable=True,
-        purchase_days=tariff["days"],
-    )
-
-    return subscription, None
+    try:
+        return await activation.reserve(tg_id, payment_record["invoice_id"], tariff), None
+    except activation.ActivationError as exc:
+        return None, str(exc)
 
 
 async def process_paid_payment(
@@ -124,16 +87,30 @@ async def process_paid_payment(
             )
             return False
 
+    db_lock = None
     try:
+        db_lock = await activation.acquire_lock(tg_id)
+        if db_lock is None:
+            logger.info("Payment activation already running for user %s", tg_id)
+            return False
         payment_record = await db.get_payment_by_invoice(invoice_id)
         if not payment_record:
             logger.error("Payment record not found for invoice %s", invoice_id)
             return False
 
+        if payment_record["tg_id"] != tg_id or payment_record.get("refund_requested_at"):
+            logger.error("Payment owner mismatch or refund requested for invoice %s", invoice_id)
+            return False
+        tariff_code = payment_record["tariff_code"]
+
         if payment_record.get("status") == "paid":
             logger.info("Payment %s is already marked paid, skipping activation", invoice_id)
             await _cancel_reactivation_safely(bot, tg_id)
             return True
+
+        if payment_record.get("status") != "pending":
+            logger.error("Payment %s is not pending", invoice_id)
+            return False
 
         if payment_record.get("payment_kind") == "traffic_package":
             return await _process_paid_traffic_package(bot, tg_id, invoice_id, payment_record)
@@ -158,6 +135,10 @@ async def process_paid_payment(
         plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
         squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
         now = datetime.utcnow()
+        new_until = subscription["payment_expires_at"]
+        if new_until <= now:
+            logger.error("Reserved activation deadline expired for payment %s; manual review required", invoice_id)
+            return False
         traffic_state = build_traffic_period_state(subscription, plan_kind, now)
         active_device_addons = await db.get_active_device_addon_count(subscription["id"])
         device_limit = effective_device_limit(plan_kind, active_device_addons)
@@ -172,13 +153,13 @@ async def process_paid_payment(
                 plan_kind,
                 subscription.get("type_index") or subscription["id"],
             )
-            extend_if_exists = payment_target == "renew" and bool(subscription.get("remnawave_uuid"))
-
             uuid, username = await remnawave_get_or_create_user(
                 session,
                 tg_id,
                 days,
-                extend_if_exists=extend_if_exists,
+                # Repeated provider checks must never add days again remotely.
+                # Apply the durable absolute expiry below, not an increment.
+                extend_if_exists=False,
                 remna_username=remna_username,
                 traffic_limit_bytes=traffic_limit_bytes if plan_kind == "bypass" else 0,
                 traffic_limit_strategy=traffic_limit_strategy,
@@ -188,6 +169,10 @@ async def process_paid_payment(
             )
             if not uuid:
                 logger.error("Failed to create/get Remnawave user for %s", tg_id)
+                return False
+
+            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
+                logger.error("Expiry sync failed for payment %s; kept pending", invoice_id)
                 return False
 
             sub_url = await remnawave_get_subscription_url(session, uuid)
@@ -218,6 +203,16 @@ async def process_paid_payment(
                     )
                     traffic_state.reset_at = now
                     traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
+
+            await activation.complete(
+                tg_id, invoice_id, subscription, uuid, username, squad_uuid,
+                traffic_state, device_limit, days,
+            )
+            try:
+                await db.sync_primary_subscription_to_user(tg_id)
+            except Exception:
+                logger.exception("Legacy subscription mirror update failed for user %s", tg_id)
+            await _cancel_reactivation_safely(bot, tg_id)
 
             try:
                 referrer = await db.get_referrer(tg_id)
@@ -288,75 +283,6 @@ async def process_paid_payment(
                     exc_info=True,
                 )
 
-            existing_subscription = subscription.get("subscription_until")
-
-            if existing_subscription and existing_subscription > now:
-                new_until = existing_subscription + timedelta(days=days)
-                logger.info(
-                    "Subscription %s for user %s extends from %s by %s days to %s",
-                    subscription["id"],
-                    tg_id,
-                    existing_subscription,
-                    days,
-                    new_until,
-                )
-            else:
-                new_until = now + timedelta(days=days)
-                logger.info(
-                    "Subscription %s for user %s starts with %s days until %s",
-                    subscription["id"],
-                    tg_id,
-                    days,
-                    new_until,
-                )
-
-            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
-                logger.warning("Failed to sync Remnawave expiry for subscription %s", subscription["id"])
-
-            await db.update_subscription_record(
-                subscription["id"],
-                uuid,
-                username,
-                new_until,
-                squad_uuid,
-            )
-            await db.link_payment_to_subscription(invoice_id, subscription["id"])
-            await db.db_execute(
-                """
-                UPDATE subscriptions
-                SET plan_kind = $1,
-                    generation = 'v2',
-                    is_visible = TRUE,
-                    is_renewable = TRUE,
-                    traffic_enabled = $2,
-                    base_traffic_bytes = $3,
-                    carried_traffic_bytes = $4,
-                    current_paid_traffic_bytes = $5,
-                    current_period_limit_bytes = $6,
-                    traffic_reset_at = $7,
-                    hwid_device_limit = $8,
-                    last_known_used_traffic_bytes = $9,
-                    last_traffic_sync_at = now(),
-                    purchase_days = $10
-                WHERE id = $11
-                """,
-                (
-                    plan_kind,
-                    traffic_state.enabled,
-                    traffic_state.base_bytes,
-                    traffic_state.carried_bytes,
-                    traffic_state.paid_bytes,
-                    traffic_limit_bytes,
-                    traffic_state.reset_at,
-                    device_limit,
-                    traffic_state.last_known_used_bytes,
-                    days,
-                    subscription["id"],
-                )
-            )
-            await db.update_payment_status_by_invoice(invoice_id, "paid")
-            await _cancel_reactivation_safely(bot, tg_id)
-
             action_text = "активирована" if payment_target == "new" else "продлена"
             traffic_text = (
                 f"\nТрафик антиглушилки: <b>{traffic_limit_bytes / GB_BYTES:.1f} ГБ</b>"
@@ -391,8 +317,14 @@ async def process_paid_payment(
         logger.error("Process paid payment exception: %s", e, exc_info=True)
         return False
     finally:
-        if lock_acquired:
-            await db.release_user_lock(tg_id)
+        try:
+            if db_lock is not None:
+                await activation.release_lock(db_lock, tg_id)
+        except Exception:
+            logger.exception("Could not release payment activation lock for user %s", tg_id)
+        finally:
+            if lock_acquired:
+                await db.release_user_lock(tg_id)
 
 
 async def _process_paid_traffic_package(bot, tg_id: int, invoice_id: str, payment_record) -> bool:
