@@ -180,6 +180,10 @@ class MobileAuthPrimitiveTests(unittest.IsolatedAsyncioTestCase):
 class MobileProfileSecurityTests(unittest.TestCase):
     def test_subscription_proxy_rejects_ssrf_hosts_and_http(self):
         self.assertEqual(
+            remnawave.validate_public_subscription_url("https://de11cdn.wayspn.com/sub/abcdefgh"),
+            "https://de11cdn.wayspn.com/sub/abcdefgh",
+        )
+        self.assertEqual(
             remnawave.validate_public_subscription_url("https://sub.wayspn.online/sub/abcdefgh"),
             "https://sub.wayspn.online/sub/abcdefgh",
         )
@@ -191,10 +195,21 @@ class MobileProfileSecurityTests(unittest.TestCase):
             "http://sub.wayspn.online/sub/abc",
             "https://evil.example/sub/abc",
             "https://sub.wayspn.online.evil.example/sub/abc",
+            "https://de11cdn.wayspn.com.evil.example/sub/abc",
             "https://sub.wayspn.online/admin",
         ):
             with self.assertRaises(ValueError):
                 remnawave.validate_public_subscription_url(value)
+
+    def test_remnawave_url_is_canonicalized_to_edge(self):
+        self.assertEqual(
+            remnawave.normalize_subscription_url("https://panel.example/original-short-id"),
+            "https://de11cdn.wayspn.com/sub/original-short-id",
+        )
+        self.assertEqual(
+            remnawave.normalize_subscription_url("https://panel.example/sub/original-short-id"),
+            "https://de11cdn.wayspn.com/sub/original-short-id",
+        )
 
     def test_only_supported_protocols_survive_profile_filter(self):
         source = b"vless://one\nvmess://blocked\ntrojan://two\nss://three\nhttp://blocked\n"

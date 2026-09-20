@@ -350,7 +350,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         http = HTTP([Response(body={"response": dict(USER, subscriptionUrl="https://old.example/same-short-id")})])
         with patch.object(api.aiohttp, "ClientSession", http):
             url = await api.remnawave_get_subscription_url(None, LOCAL)
-        self.assertTrue(url.endswith("/same-short-id"))
+        self.assertEqual(url, "https://de11cdn.wayspn.com/sub/same-short-id")
         self.assertTrue(http.calls[0][1].endswith("/users/1234"))
         self.assertEqual(http.calls[0][0], "GET")
 

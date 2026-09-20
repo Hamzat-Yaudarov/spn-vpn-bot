@@ -15,6 +15,7 @@ from config import (
     DEFAULT_SQUAD_UUID,
     API_REQUEST_TIMEOUT,
     SUBSCRIPTION_PUBLIC_BASE_URL,
+    SUBSCRIPTION_EDGE_BASE_URL,
     REMNAWAVE_CA_BUNDLE,
 )
 from utils import retry_with_backoff, safe_api_call
@@ -25,6 +26,41 @@ MAX_SUBSCRIPTION_PROFILE_BYTES = 4 * 1024 * 1024
 SUBSCRIPTION_SHORT_UUID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
+def _configured_subscription_bases() -> tuple[str, ...]:
+    """Return valid, unique HTTPS subscription bases, edge first."""
+    result = []
+    for value in (SUBSCRIPTION_EDGE_BASE_URL, SUBSCRIPTION_PUBLIC_BASE_URL):
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in ("", "/")
+        ):
+            continue
+        normalized = urlunsplit(("https", parsed.netloc, "", "", "")).rstrip("/")
+        if normalized not in result:
+            result.append(normalized)
+    return tuple(result)
+
+
+def _subscription_output_base() -> str | None:
+    bases = _configured_subscription_bases()
+    return bases[0] if bases else None
+
+
+def _short_uuid_from_path(path: str) -> str:
+    match = re.fullmatch(r"/(?:sub/)?([A-Za-z0-9_-]{8,128})", path or "")
+    if not match:
+        raise ValueError("Subscription URL path is invalid")
+    return match.group(1)
+
+
 def _verified_connector() -> aiohttp.TCPConnector:
     """TLS всегда проверяется; частный CA разрешён только явным bundle."""
     context = ssl.create_default_context(cafile=REMNAWAVE_CA_BUNDLE or None)
@@ -32,34 +68,24 @@ def _verified_connector() -> aiohttp.TCPConnector:
 
 
 def extract_public_subscription_short_uuid(sub_url: str) -> str:
-    """Извлечь short UUID только из URL закреплённого HTTPS subscription-host."""
-    configured = urlsplit(SUBSCRIPTION_PUBLIC_BASE_URL)
+    """Извлечь short UUID только из разрешённого HTTPS subscription-host."""
     candidate = urlsplit(sub_url)
-    configured_port = configured.port or 443
     candidate_port = candidate.port or 443
+    allowed_origins = {
+        (urlsplit(base).hostname, urlsplit(base).port or 443)
+        for base in _configured_subscription_bases()
+    }
     if (
-        configured.scheme.lower() != "https"
-        or candidate.scheme.lower() != "https"
-        or not configured.hostname
-        or candidate.hostname != configured.hostname
-        or candidate_port != configured_port
+        candidate.scheme.lower() != "https"
+        or not candidate.hostname
+        or (candidate.hostname, candidate_port) not in allowed_origins
         or candidate.username
         or candidate.password
         or candidate.query
         or candidate.fragment
     ):
         raise ValueError("Subscription URL is outside the configured HTTPS host")
-
-    path_parts = [part for part in candidate.path.split("/") if part]
-    if len(path_parts) == 1:
-        short_uuid = path_parts[0]
-    elif len(path_parts) == 2 and path_parts[0] == "sub":
-        short_uuid = path_parts[1]
-    else:
-        raise ValueError("Subscription URL path is invalid")
-    if not SUBSCRIPTION_SHORT_UUID_RE.fullmatch(short_uuid):
-        raise ValueError("Subscription short UUID is invalid")
-    return short_uuid
+    return _short_uuid_from_path(candidate.path)
 
 
 def validate_public_subscription_url(sub_url: str) -> str:
@@ -127,30 +153,33 @@ async def remnawave_fetch_subscription_profile(sub_url: str, device_headers: dic
 
 
 def normalize_subscription_url(sub_url: str | None) -> str | None:
-    """Показать пользователям подписочную ссылку на публичном sub-домене."""
-    if not sub_url or not SUBSCRIPTION_PUBLIC_BASE_URL:
-        return sub_url
+    """Вернуть каноническую ссылку через доступный публичный edge."""
+    if not sub_url:
+        return None
 
     try:
-        public = urlsplit(SUBSCRIPTION_PUBLIC_BASE_URL)
         original = urlsplit(sub_url)
-        if not public.scheme or not public.netloc or not original.scheme or not original.netloc:
-            return sub_url
-        return urlunsplit((public.scheme, public.netloc, original.path, original.query, original.fragment))
-    except Exception:
-        return sub_url
+        if original.scheme.lower() not in ("http", "https") or not original.netloc:
+            return None
+        short_uuid = _short_uuid_from_path(original.path)
+        return _build_subscription_url_from_short_uuid(short_uuid)
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_subscription_url_from_short_uuid(short_uuid: str | None) -> str | None:
-    if not short_uuid or not SUBSCRIPTION_PUBLIC_BASE_URL:
+    output_base = _subscription_output_base()
+    if not short_uuid or not output_base or not SUBSCRIPTION_SHORT_UUID_RE.fullmatch(str(short_uuid)):
         return None
-    return f"{SUBSCRIPTION_PUBLIC_BASE_URL}/sub/{short_uuid}"
+    return f"{output_base}/sub/{short_uuid}"
 
 
 def _extract_subscription_url(user_data: dict) -> str | None:
     sub_url = user_data.get("subscriptionUrl") or user_data.get("subscription_url")
     if sub_url:
-        return normalize_subscription_url(sub_url)
+        normalized = normalize_subscription_url(sub_url)
+        if normalized:
+            return normalized
 
     short_uuid = (
         user_data.get("shortUuid")
