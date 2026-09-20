@@ -69,13 +69,6 @@ if REMNAWAVE_API_VERSION not in (2, 3):
     raise ValueError("REMNAWAVE_API_VERSION must be 2 or 3")
 REMNAWAVE_API_TOKEN = os.getenv("REMNAWAVE_API_TOKEN", "")
 SUBSCRIPTION_PUBLIC_BASE_URL = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "https://sub.wayspn.online").rstrip("/")
-# The edge URL is shown to users and can stay available even when the bundled
-# Remnawave subscription page is unavailable.  Keep PUBLIC_BASE_URL as an
-# accepted legacy origin so already issued links remain valid.
-SUBSCRIPTION_EDGE_BASE_URL = os.getenv(
-    "SUBSCRIPTION_EDGE_BASE_URL",
-    "https://de11cdn.wayspn.com",
-).strip().rstrip("/")
 DEFAULT_SQUAD_UUID = os.getenv("DEFAULT_SQUAD_UUID", "")
 REGULAR_SQUAD_UUID = os.getenv("REGULAR_SQUAD_UUID", "89902b23-6765-425c-ae27-9bb43c121a70")
 BYPASS_SQUAD_UUID = os.getenv("BYPASS_SQUAD_UUID", "3766e220-ebe1-4a0c-b53f-a4731f805d7e")
