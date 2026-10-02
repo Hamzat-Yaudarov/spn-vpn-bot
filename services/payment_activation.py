@@ -63,11 +63,22 @@ def choose_target(payment, subscriptions, reusable_ids, kind):
         raise ActivationError("Достигнут лимит подписок этого типа")
     matches = [s for s in visible if s.get("type_index") == index]
     if matches:
-        # Never attach a new payment to an already issued key or steal a slot
-        # reserved by a different invoice. Ambiguity requires an operator audit.
-        if any(s["id"] not in reusable_ids or not valid_target(s, kind) for s in matches):
-            raise ActivationError("Номер подписки уже занят; требуется сверка платежа")
-        return min(matches, key=lambda s: s["id"]), index
+        reusable_matches = [
+            s for s in matches if s["id"] in reusable_ids and valid_target(s, kind)
+        ]
+        if len(reusable_matches) == len(matches):
+            return min(reusable_matches, key=lambda s: s["id"]), index
+
+        # Several checkout pages can be opened before any of them is paid.
+        # They may all contain the same preferred index. Once one purchase has
+        # occupied it, move the next independently paid invoice to a free index
+        # instead of losing a provider-confirmed purchase.
+        index = next(
+            (i for i in range(1, db.MAX_SUBSCRIPTIONS_PER_USER + 1) if i not in taken),
+            None,
+        )
+        if index is None:
+            raise ActivationError("Достигнут лимит подписок этого типа")
     return None, index
 
 

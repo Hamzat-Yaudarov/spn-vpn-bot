@@ -153,11 +153,8 @@ async def check_cryptobot_invoices(bot):
     Args:
         bot: Экземпляр Bot
     """
-    if not WEBHOOK_USE_POLLING:
-        logging.info("CryptoBot polling disabled (webhook mode enabled)")
-        return
-
-    logging.info("CryptoBot polling mode enabled")
+    mode = "primary" if WEBHOOK_USE_POLLING else "webhook fallback"
+    logging.info("CryptoBot payment status checker enabled (%s)", mode)
 
     try:
         while True:
@@ -166,34 +163,28 @@ async def check_cryptobot_invoices(bot):
             try:
                 pending = await db.get_pending_payments()
 
-                if not pending:
-                    continue
-
-                for payment_record in pending:
-                    payment_id = payment_record['id']
+                for payment_record in pending or []:
                     tg_id = payment_record['tg_id']
                     invoice_id = payment_record['invoice_id']
-                    tariff_code = payment_record['tariff_code']
-
-                    if not await db.acquire_user_lock(tg_id):
-                        continue
 
                     try:
-                        invoice = await get_invoice_status(invoice_id)
+                        from services.payment_reconciliation import reconcile_payment
 
-                        if invoice and invoice.get("status") == "paid":
-                            success = await process_paid_invoice(bot, tg_id, invoice_id, tariff_code)
-                            if success:
-                                logging.info(f"Processed payment for user {tg_id}, invoice {invoice_id}")
+                        result = await reconcile_payment(bot, invoice_id, expected_tg_id=tg_id)
+                        if result.status == "paid":
+                            logging.info("Processed CryptoBot payment for user %s, invoice %s", tg_id, invoice_id)
 
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         logging.error(f"Check invoice error for {tg_id}: {e}")
-
-                    finally:
-                        await db.release_user_lock(tg_id)
             except asyncio.CancelledError:
                 logging.info("CryptoBot polling task cancelled")
                 raise
+            except Exception as exc:
+                # Keep the safety net alive across temporary database or API
+                # outages. All pending invoices are retried on the next pass.
+                logging.error("CryptoBot payment checker pass failed: %s", exc, exc_info=True)
     except asyncio.CancelledError:
         logging.info("CryptoBot polling task shut down gracefully")
         raise

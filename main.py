@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonCommands
 
-from config import ADMIN_ID, BOT_TOKEN, LOG_LEVEL, WEBHOOK_USE_POLLING
+from config import ADMIN_ID, BOT_TOKEN, LOG_LEVEL
 import database as db
 
 # Импортируем все роутеры обработчиков
@@ -156,12 +156,9 @@ async def main():
     # а фоновая задача подхватывает платёж, если webhook не дошёл.
     tasks.append(asyncio.create_task(check_yookassa_payments(bot)))
 
-    # Для CryptoBot polling запускается только в соответствующем режиме.
-    if WEBHOOK_USE_POLLING:
-        logger.info("Polling mode enabled for payment checks")
-        tasks.append(asyncio.create_task(check_cryptobot_invoices(bot)))
-    else:
-        logger.info("Webhook mode enabled; YooKassa fallback checker is active")
+    # CryptoBot тоже всегда сверяется в фоне. Webhook остаётся быстрым путём,
+    # polling гарантирует выдачу при потерянном webhook или закрытом интерфейсе.
+    tasks.append(asyncio.create_task(check_cryptobot_invoices(bot)))
 
     # Запускаем задачу очистки истёкших платежей
     tasks.append(asyncio.create_task(cleanup_expired_payments()))

@@ -37,11 +37,34 @@ class TargetTests(unittest.TestCase):
         chosen, _ = activation.choose_target(payment(subscription_id=10), [sub], set(), "bypass")
         self.assertEqual(chosen, sub)
 
-    def test_new_payment_cannot_steal_existing_key_or_other_invoices_slot(self):
-        for matches in ([subscription(remnawave_uuid="uuid")],
-                        [subscription(id=10), subscription(id=11)]):
-            with self.assertRaises(activation.ActivationError):
-                activation.choose_target(payment(), matches, {11}, "bypass")
+    def test_new_payment_never_steals_existing_key_and_moves_to_free_index(self):
+        chosen, index = activation.choose_target(
+            payment(),
+            [subscription(remnawave_uuid="uuid")],
+            set(),
+            "bypass",
+        )
+        self.assertIsNone(chosen)
+        self.assertEqual(index, 2)
+
+        chosen, index = activation.choose_target(
+            payment(),
+            [subscription(id=10), subscription(id=11)],
+            {11},
+            "bypass",
+        )
+        self.assertIsNone(chosen)
+        self.assertEqual(index, 2)
+
+    def test_paid_invoices_with_same_preferred_index_get_distinct_slots(self):
+        first, first_index = activation.choose_target(payment(), [], set(), "bypass")
+        self.assertIsNone(first)
+        self.assertEqual(first_index, 1)
+
+        issued = subscription(type_index=first_index, remnawave_uuid="uuid")
+        second, second_index = activation.choose_target(payment(), [issued], set(), "bypass")
+        self.assertIsNone(second)
+        self.assertEqual(second_index, 2)
 
     def test_hidden_deleted_wrong_kind_and_unlinked_renewal_are_rejected(self):
         for subs in ([], [subscription(is_visible=False)], [subscription(is_renewable=False)],

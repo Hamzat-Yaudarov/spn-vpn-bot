@@ -24,7 +24,7 @@ from config import (
     SUPPORT_URL,
     TARIFFS,
 )
-from services.cryptobot import create_cryptobot_invoice, get_invoice_status, process_paid_invoice
+from services.cryptobot import create_cryptobot_invoice, get_invoice_status
 from services.device_addons import (
     available_device_addon_packages,
     device_count_text,
@@ -39,6 +39,7 @@ from services.connection_instructions import (
     connection_app_url,
 )
 from services.payment_summary import build_payment_success_summary
+from services.payment_reconciliation import reconcile_user_pending_payments
 from services.custom_emoji import semantic_button
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
@@ -56,7 +57,7 @@ from services.subscription_deletion import (
     SubscriptionNotFoundError,
     delete_subscription_everywhere,
 )
-from services.yookassa import create_yookassa_payment, get_payment_status, process_paid_yookassa_payment
+from services.yookassa import create_yookassa_payment, get_payment_status
 from services.subscription_sync import refresh_subscription_expiry
 from services.discounts import calculate_discounted_price, current_price
 from services.traffic_periods import build_traffic_period_state
@@ -1884,7 +1885,7 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data == "check_payment")
 async def process_check_payment(callback: CallbackQuery):
-    """Проверить статус последнего ожидающего платежа."""
+    """Проверить все ожидающие платежи, включая закрытые старые счета."""
     tg_id = callback.from_user.id
     logging.info(f"User {tg_id} checking payment status")
 
@@ -1895,42 +1896,25 @@ async def process_check_payment(callback: CallbackQuery):
 
     await db.update_last_payment_check(tg_id)
 
-    result = await db.get_last_pending_payment(tg_id)
-    if not result:
+    pending = await db.get_pending_payments_for_user(tg_id)
+    if not pending:
         await callback.answer("Нет ожидающих оплаты счетов", show_alert=True)
         return
 
-    invoice_id = result['invoice_id']
-    tariff_code = result['tariff_code']
-    provider = result['provider']
-
-    if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подождите несколько секунд ⏳", show_alert=True)
-        return
-
     try:
-        if provider == "yookassa":
-            payment = await get_payment_status(invoice_id)
-            if payment and payment.get("status") == "succeeded":
-                success = await process_paid_yookassa_payment(callback.bot, tg_id, invoice_id, tariff_code)
-                if success:
-                    await _show_checked_payment_success(callback, invoice_id)
-                else:
-                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напишите в поддержку.", show_alert=True)
-            else:
-                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
-        elif provider == "cryptobot":
-            invoice = await get_invoice_status(invoice_id)
-            if invoice and invoice.get("status") == "paid":
-                success = await process_paid_invoice(callback.bot, tg_id, invoice_id, tariff_code)
-                if success:
-                    await _show_checked_payment_success(callback, invoice_id)
-                else:
-                    await callback.answer("Оплата найдена, но покупку не удалось активировать. Напишите в поддержку.", show_alert=True)
-            else:
-                await callback.answer("Оплата ещё не прошла или уже активирована", show_alert=True)
+        results = await reconcile_user_pending_payments(callback.bot, tg_id)
+        paid = [result for result in results if result.status == "paid"]
+        if paid:
+            # Show the newest successfully reconciled purchase. Every older
+            # paid invoice in the list has also been activated above.
+            await _show_checked_payment_success(callback, paid[-1].invoice_id)
+        elif any(result.reason == "activation_pending" for result in results):
+            await callback.answer(
+                "Оплата найдена. Активация ещё выполняется — бот повторит её автоматически.",
+                show_alert=True,
+            )
+        else:
+            await callback.answer("Оплата ещё не прошла", show_alert=True)
     except Exception as e:
         logging.error(f"Check payment error: {e}", exc_info=True)
         await callback.answer("Ошибка при проверке платежа", show_alert=True)
-    finally:
-        await db.release_user_lock(tg_id)

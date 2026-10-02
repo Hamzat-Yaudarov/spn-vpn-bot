@@ -26,6 +26,7 @@ from services.cryptobot import (
     verify_cryptobot_webhook_signature,
 )
 from services.payment_processing import process_paid_payment
+from services.payment_reconciliation import reconcile_payment
 from services.device_addons import available_device_addon_packages, current_device_limit, device_count_text, effective_device_limit
 from services.payment_summary import build_payment_success_summary
 from services.remnawave import (
@@ -622,6 +623,9 @@ async def miniapp_payment_status(invoice_id: str, request: Request):
     payment = await db.get_payment_by_invoice(invoice_id)
     if not payment or payment["tg_id"] != int(user["id"]):
         raise HTTPException(status_code=404, detail="Payment not found")
+    if payment["status"] == "pending":
+        await reconcile_payment(_bot, invoice_id, expected_tg_id=int(user["id"]))
+        payment = await db.get_payment_by_invoice(invoice_id)
     summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None
     return JSONResponse({"invoice_id": invoice_id, "status": payment["status"], "summary": summary})
 

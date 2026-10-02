@@ -30,7 +30,7 @@ from config import (
 from services.discounts import calculate_discounted_price
 from services.device_addons import available_device_addon_packages, current_device_limit, effective_device_limit
 from services.payment_summary import build_payment_success_summary
-from services.payment_processing import process_paid_payment
+from services.payment_reconciliation import reconcile_payment
 from services.remnawave import remnawave_get_subscription_url, remnawave_get_user_info
 from services.subscription_deletion import (
     RemnawaveDeletionError,
@@ -46,7 +46,7 @@ from services.web_auth import (
     normalize_login,
     verify_password,
 )
-from services.yookassa import create_yookassa_payment, get_payment_status
+from services.yookassa import create_yookassa_payment
 
 
 router = APIRouter()
@@ -564,18 +564,8 @@ async def website_payment_status(invoice_id: str, account=Depends(require_web_ac
     if not payment or int(payment["tg_id"]) != service_user_id:
         raise HTTPException(status_code=404, detail="Платёж не найден")
 
-    if payment["status"] == "pending" and payment["provider"] == "yookassa":
-        provider_payment = await get_payment_status(invoice_id)
-        provider_status = (provider_payment or {}).get("status")
-        provider_amount = ((provider_payment or {}).get("amount") or {}).get("value")
-        if (
-            provider_status == "succeeded"
-            and provider_amount is not None
-            and abs(float(provider_amount) - float(payment["amount"])) <= 0.009
-        ):
-            await process_paid_payment(None, service_user_id, invoice_id, payment["tariff_code"])
-        elif provider_status == "canceled":
-            await db.update_payment_status_by_invoice(invoice_id, "canceled")
+    if payment["status"] == "pending":
+        await reconcile_payment(None, invoice_id, expected_tg_id=service_user_id)
         payment = await db.get_payment_by_invoice(invoice_id)
 
     summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None

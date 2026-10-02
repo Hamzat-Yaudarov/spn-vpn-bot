@@ -2356,6 +2356,20 @@ async def get_last_pending_payment(tg_id: int):
     return result
 
 
+async def get_pending_payments_for_user(tg_id: int):
+    """Получить все неактивированные счета пользователя, начиная со старого."""
+    return await db_execute(
+        """
+        SELECT *
+        FROM payments
+        WHERE tg_id = $1 AND status = 'pending'
+        ORDER BY id ASC
+        """,
+        (tg_id,),
+        fetch_all=True,
+    )
+
+
 async def get_payment_by_invoice(invoice_id: str):
     """Получить запись платежа по invoice_id."""
     return await db_execute(
@@ -2850,6 +2864,20 @@ async def update_payment_status_by_invoice(invoice_id: str, status: str):
     await db_execute(
         "UPDATE payments SET status = $1, updated_at = now() WHERE invoice_id = $2",
         (status, invoice_id)
+    )
+
+
+async def update_payment_status_if_pending(invoice_id: str, status: str):
+    """Обновить статус, не перезаписывая результат параллельной активации."""
+    return await db_execute(
+        """
+        UPDATE payments
+        SET status = $1, updated_at = now()
+        WHERE invoice_id = $2 AND status = 'pending'
+        RETURNING status
+        """,
+        (status, str(invoice_id)),
+        fetch_one=True,
     )
 
 

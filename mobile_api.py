@@ -46,6 +46,7 @@ from services.mobile_auth import (
     rotate_refresh_token,
 )
 from services.payment_summary import build_payment_success_summary
+from services.payment_reconciliation import reconcile_payment
 from services.remnawave import (
     remnawave_delete_hwid_device,
     remnawave_fetch_subscription_profile,
@@ -584,6 +585,9 @@ async def mobile_payment_status(invoice_id: str, session=Depends(_mobile_session
         )
     ):
         raise HTTPException(status_code=404, detail="Payment not found")
+    if payment["status"] == "pending":
+        await reconcile_payment(None, invoice_id, expected_tg_id=int(session["tg_id"]))
+        payment = await db.get_payment_by_invoice(invoice_id)
     summary = await build_payment_success_summary(payment) if payment["status"] == "paid" else None
     return JSONResponse({"invoice_id": invoice_id, "status": payment["status"], "summary": summary})
 

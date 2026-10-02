@@ -163,48 +163,30 @@ async def check_yookassa_payments(bot):
 
     while True:
         await asyncio.sleep(PAYMENT_CHECK_INTERVAL)
+        try:
+            pending = await db.get_pending_payments_by_provider('yookassa')
 
-        pending = await db.get_pending_payments_by_provider('yookassa')
+            for payment_record in pending or []:
+                tg_id = payment_record['tg_id']
+                invoice_id = payment_record['invoice_id']
 
-        if not pending:
-            continue
+                try:
+                    from services.payment_reconciliation import reconcile_payment
 
-        for payment_record in pending:
-            tg_id = payment_record['tg_id']
-            invoice_id = payment_record['invoice_id']
-            tariff_code = payment_record['tariff_code']
+                    result = await reconcile_payment(bot, invoice_id, expected_tg_id=tg_id)
+                    if result.status == "paid":
+                        logging.info("Processed Yookassa payment for user %s, payment %s", tg_id, invoice_id)
 
-            if not await db.acquire_user_lock(tg_id):
-                continue
-
-            try:
-                payment = await get_payment_status(invoice_id)
-
-                if payment and payment.get("status") == "succeeded":
-                    paid_amount = (payment.get("amount") or {}).get("value")
-                    if (
-                        paid_amount is None
-                        or abs(float(paid_amount) - float(payment_record["amount"])) > 0.009
-                    ):
-                        logging.error(
-                            "Yookassa amount mismatch for payment %s: expected=%s, received=%s",
-                            invoice_id,
-                            payment_record["amount"],
-                            paid_amount,
-                        )
-                        continue
-
-                    success = await process_paid_yookassa_payment(bot, tg_id, invoice_id, tariff_code)
-                    if success:
-                        logging.info(f"Processed Yookassa payment for user {tg_id}, payment {invoice_id}")
-                elif payment and payment.get("status") == "canceled":
-                    await db.update_payment_status_by_invoice(invoice_id, "canceled")
-
-            except Exception as e:
-                logging.error(f"Check Yookassa payment error for {tg_id}: {e}")
-
-            finally:
-                await db.release_user_lock(tg_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logging.error(f"Check Yookassa payment error for {tg_id}: {e}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A temporary database/provider outage must not kill the permanent
+            # recovery loop. The next pass retries every still-pending invoice.
+            logging.error("Yookassa payment checker pass failed: %s", exc, exc_info=True)
 
 
 async def cleanup_expired_payments():
