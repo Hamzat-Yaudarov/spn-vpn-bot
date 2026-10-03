@@ -145,6 +145,8 @@ async def run_migrations():
             logging.info("Running migrations...")
             await conn.execute(REMNAWAVE_IDENTITY_SCHEMA)
             await conn.execute(PAYMENT_ACTIVATION_SCHEMA)
+            from services.referral_store import SCHEMA as REFERRAL_SCHEMA
+            await conn.execute(REFERRAL_SCHEMA)
 
             # ═══════════════════════════════════════════════════════════
             # ОПРЕДЕЛЯЕМ ОЖИДАЕМУЮ СТРУКТУРУ ТАБЛИЦ
@@ -4078,7 +4080,7 @@ async def get_partner_stats(partner_id: int):
 
     # Всего выведено
     total_withdrawn = await db_execute(
-        "SELECT SUM(amount) as total FROM partner_withdrawals WHERE partner_id = $1 AND status = 'completed'",
+        "SELECT SUM(amount) as total FROM partner_withdrawals WHERE partner_id = $1 AND status IN ('pending', 'completed')",
         (partner_id,),
         fetch_one=True
     )
@@ -4168,18 +4170,8 @@ async def add_referral_earning(
     Returns:
         True если успешно
     """
-    # Определяем процент: 35% за первую покупку, 15% за последующие
-    percentage = 35 if is_first_purchase else 15
-    referral_share = amount * percentage / 100
-
-    await db_execute(
-        """
-        INSERT INTO referral_earnings (referrer_id, referred_user_id, tariff_code, amount, referral_share, is_first_purchase)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        """,
-        (referrer_id, referred_user_id, tariff_code, amount, referral_share, is_first_purchase)
-    )
-    return True
+    from services.referral_store import credit_referral
+    return await credit_referral(referrer_id, referred_user_id, tariff_code, amount, is_first_purchase)
 
 
 async def check_first_referral_purchase(referred_user_id: int, referrer_id: int) -> bool:
@@ -4318,7 +4310,7 @@ async def get_referral_stats(referrer_id: int) -> dict:
 
     # Всего выведено/зарезервировано на вывод
     total_withdrawn = await db_execute(
-        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1",
+        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1 AND status IN ('pending', 'completed')",
         (referrer_id,),
         fetch_one=True
     )

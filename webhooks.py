@@ -391,10 +391,17 @@ async def miniapp_delete_all_subscription_devices(subscription_id: int, request:
 async def miniapp_referral(request: Request):
     user = await _miniapp_user(request)
     tg_id = int(user["id"])
+    from services import referral_store
+    from services.referral_program import MIN_WITHDRAWAL, SHARE_TEXT
     stats = await db.get_referral_stats(tg_id)
+    history = await referral_store.history(tg_id, limit=20)
     bot_username = (await _bot.get_me()).username if _bot else "WaySPN_robot"
     return JSONResponse({
         "link": f"https://t.me/{bot_username}?start=ref_{tg_id}",
+        "minimum_withdrawal": int(MIN_WITHDRAWAL),
+        "share_text": SHARE_TEXT,
+        "bot_earning_url": f"https://t.me/{bot_username}?start=earn",
+        "history": [{**row, "amount": float(row["amount"]), "created_at": row["created_at"].isoformat() + "Z"} for row in history],
         "active_referrals": stats["active_referrals"],
         "total_earned": float(stats["total_earned"]),
         "total_withdrawn": float(stats["total_withdrawn"]),

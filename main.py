@@ -19,6 +19,7 @@ from services.traffic_resets import run_traffic_reset_loop
 from services.device_addon_expiry import run_device_addon_expiry_loop
 from services.reactivation_campaigns import run_reactivation_cleanup_loop
 import webhooks
+from services import referral_store
 
 
 # ────────────────────────────────────────────────
@@ -137,6 +138,7 @@ async def main():
 
     # Инициализируем БД
     await db.init_db()
+    await referral_store.initialize()
     logger.info("✅ Database initialized")
 
     # Регистрируем обработчики
@@ -150,7 +152,7 @@ async def main():
     webhooks.set_bot(bot)
 
     # Список активных задач
-    tasks = []
+    tasks = [asyncio.create_task(referral_store.run_delivery_loop(bot))]
 
     # YooKassa проверяется всегда: webhook даёт мгновенную активацию,
     # а фоновая задача подхватывает платёж, если webhook не дошёл.

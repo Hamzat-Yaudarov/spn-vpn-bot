@@ -622,17 +622,43 @@ async function payPrepared(provider) {
   }
 }
 
+
+function openEarningBot() {
+  const url = state.referral?.bot_earning_url;
+  if (!url) { showToast("Не удалось загрузить ссылку. Обновите кабинет."); return; }
+  if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank", "noopener");
+}
+function shareReferral() {
+  const r = state.referral;
+  if (!r?.link) return;
+  const url = 'https://t.me/share/url?' + new URLSearchParams({url: r.link, text: r.share_text || ''});
+  if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank", "noopener");
+}
+async function refreshReferral() {
+  try { state.referral = await api("/miniapp/api/referral"); renderReferral(); }
+  catch (error) { showToast(error.message); }
+}
 function renderReferral() {
   const r = state.referral;
-  el("view-ref").innerHTML = `<div class="grid">
-    <div class="section-note bonus-note"><p class="step">Партнёрская программа</p><p class="title">Бонус за друга</p><p class="muted">Получайте 35% с первой покупки друга и 15% с повторных.</p></div>
-    <div class="stats-grid">
-      <div class="stat-card blue"><span>Активных друзей</span><b>${r?.active_referrals || 0}</b></div>
-      <div class="stat-card bronze"><span>Всего заработано</span><b>${rub(r?.total_earned || 0)}</b></div>
-      <div class="stat-card green"><span>Баланс</span><b>${rub(r?.current_balance || 0)}</b></div>
-    </div>
-    <div class="card link-card"><p class="title">Ваша ссылка</p><p class="muted">Отправьте её другу. Бонус появится после оплаты.</p><div class="keybox">${r?.link || ""}</div><button class="button blue" onclick="copyText('${encodeURIComponent(r?.link || "")}')">Скопировать ссылку</button></div>
-  </div>`;
+  const minimum = r?.minimum_withdrawal || 1500;
+  const remaining = Math.max(0, minimum - Number(r?.current_balance || 0));
+  const statuses = {pending: "На рассмотрении", completed: "Выплачено", rejected: "Отклонено — резерв возвращён"};
+  const history = (r?.history || []).map(row => {
+    let title = 'Начисление за покупку друга', amount = '+' + rub(row.amount);
+    if (row.kind === 'withdrawal') {
+      title = row.detail.startsWith('subscription_') ? 'Оплата своей подписки' : 'Заявка R-' + row.id + ' · ' + (statuses[row.status] || row.status);
+      amount = rub(row.amount);
+    }
+    return '<div class="ref-history-row"><span>' + escapeHtml(title) + '<small>' + date(row.created_at) + '</small></span><b>' + escapeHtml(amount) + '</b></div>';
+  }).join('');
+  el("view-ref").innerHTML = '<div class="grid">' +
+    '<div class="section-note bonus-note"><p class="step">Приглашайте друзей</p><p class="title">💰 Зарабатывать</p><p class="muted">35% от первой покупки подписки друга и 15% от повторных — вам.</p></div>' +
+    '<div class="card"><p class="title">Три простых шага</p><ol><li>Отправьте другу свою ссылку.</li><li>Друг впервые запускает бота по ней и покупает подписку.</li><li>Получайте начисления на баланс.</li></ol><p class="muted">С оплаты 300 ₽ — 105 ₽ вам. С повторной оплаты 300 ₽ — 45 ₽. Считаем от фактически оплаченной суммы, с учётом скидок.</p></div>' +
+    '<div class="stats-grid"><div class="stat-card blue"><span>Друзей с покупками</span><b>' + (r?.active_referrals || 0) + '</b></div><div class="stat-card bronze"><span>Всего заработано</span><b>' + rub(r?.total_earned || 0) + '</b></div><div class="stat-card green"><span>Доступно</span><b>' + rub(r?.current_balance || 0) + '</b></div></div>' +
+    '<div class="card link-card"><p class="title">Ваша ссылка</p><div class="keybox">' + escapeHtml(r?.link || '') + '</div><div class="grid"><button class="button green" onclick="shareReferral()">📨 Пригласить друга</button><button class="button blue" onclick="copyText(encodeURIComponent(state.referral.link))">Скопировать ссылку</button></div></div>' +
+    '<div class="card"><p class="title">' + (remaining ? 'До вывода осталось ' + rub(remaining) : 'Можно оформить вывод') + '</p><p class="muted">Вывод через СБП / USDT от ' + rub(minimum) + '. Заявку проверяет администратор. Или оплатите свою подписку в боте, как только хватает на выбранный тариф.</p><div class="grid"><button class="button green" onclick="openEarningBot()">Вывести в боте</button><button class="button blue" onclick="openEarningBot()">Потратить баланс в боте</button></div></div>' +
+    '<div class="card"><p class="title">Последние операции</p>' + (history || '<p class="muted">Начислений и заявок пока нет.</p>') + '<button class="button ghost" onclick="refreshReferral()">Обновить</button><p class="small">Полная история доступна в боте.</p></div>' +
+    '<div class="card"><p class="title">Важно знать</p><p class="muted">Учитываются только новые пользователи, впервые запустившие бота по вашей ссылке. За приглашение без покупки начислений нет. Самоприглашения не учитываются. Делитесь лично, без спама.</p></div></div>';
 }
 
 function renderHelp() {
@@ -646,8 +672,8 @@ function renderHelp() {
 
 async function copyText(encoded) {
   const text = decodeURIComponent(encoded);
-  await navigator.clipboard.writeText(text).catch(() => {});
-  showToast("Скопировано");
+  try { await navigator.clipboard.writeText(text); showToast("Скопировано"); }
+  catch (_) { showToast("Не удалось скопировать. Выделите ссылку и скопируйте вручную."); }
 }
 
 function openKeyInHapp(encoded) {

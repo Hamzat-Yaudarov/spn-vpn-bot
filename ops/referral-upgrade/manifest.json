@@ -1,0 +1,102 @@
+[
+  {
+    "path": "admin_web.py",
+    "base_sha256": "e659ecdcac8a80cc5c4efc5582befdfd52dad867518d492a421d3dad6bb83e94",
+    "new_sha256": "17a85aa8561e42b6dc8e8fceaef8fdbf9eb7d3b5d5ece9cd1a99d3d2e57a27cf"
+  },
+  {
+    "path": "database.py",
+    "base_sha256": "2cfe179df74c0e2aa6dbc4dded75821503697d78fa7c1601bded817eb988a87c",
+    "new_sha256": "4a7b0fd447a64777ef02797a40155909f9e6351e60d5a5ed39bd4f391ecfe347"
+  },
+  {
+    "path": "handlers/partnership.py",
+    "base_sha256": "9839791f551a7045f2d4ca522a78156529f3598adcdce41a9a526c71e13db5b2",
+    "new_sha256": "ed7cf1d93613f3fa620768e60da5e52ef0f6467a938cd2631aa01815f430380a"
+  },
+  {
+    "path": "handlers/referral.py",
+    "base_sha256": "b9bb43d17820d84463343a310da7dfd5f5e62f70bd19d06ffdb164c1cf4681ae",
+    "new_sha256": "83193fcd205afe8269264b053b11e92210985eb13d51a3ddf0f271d2c13e2df8"
+  },
+  {
+    "path": "handlers/start.py",
+    "base_sha256": "445d9fcaa27dffdc66d834263fa032995f46f9ceb3320bfab7c60a039a9e25de",
+    "new_sha256": "fa08a2dc8c69a9fdfe89a089ec2dd63a355e0573fd87c8e066fd0edcedbeb0b2"
+  },
+  {
+    "path": "handlers/withdrawals.py",
+    "base_sha256": null,
+    "new_sha256": "1662c2ac56629abdae988d10b5ac3a1d2b3e786e1dcb22a855ee50dde30f8051"
+  },
+  {
+    "path": "main.py",
+    "base_sha256": "267bfe49fbf889cc3d6a7d667bb4c641e97dda8f34cc9dbe7878766a76ba191d",
+    "new_sha256": "5ffc215944c1637851948eb4347845dc71f0bbe93cf8ee41d666019875bf9c4f"
+  },
+  {
+    "path": "services/referral_program.py",
+    "base_sha256": null,
+    "new_sha256": "bfdb8a57068b06f55232b8c38fa6392dc97536ee44a85e847fd175f46bbea5ec"
+  },
+  {
+    "path": "services/referral_store.py",
+    "base_sha256": null,
+    "new_sha256": "3f91b487a26dec17b2b9819efd66b88629f39ebfa99c75e0ea3c3144c23c583f"
+  },
+  {
+    "path": "static/admin/assets/admin.js",
+    "base_sha256": "a46490673276da054663619035800640b66d9936ed8724e5927a2f64d6315ef4",
+    "new_sha256": "b1676aaad0e733ff7745172836c0db919bc837205dcdc8a0325a1dfd1be71f97"
+  },
+  {
+    "path": "static/admin/index.html",
+    "base_sha256": "e294d1d41b7a4468bdb2a6cc7bc9e43800d5aa61cceb2b9d9d6a490d7ecb954f",
+    "new_sha256": "f9dc2497957b7189d1c6795e9979b06a1f06797a854e3130091eefb3722ccdf0"
+  },
+  {
+    "path": "static/miniapp/assets/app.css",
+    "base_sha256": "b106ba32943bd8408d5fa9df42161d1bfe0f5a5c70b199cf5802ead7505b66f2",
+    "new_sha256": "ca427b2f3a1447254c844c5e8d1856905c2e5828921bad844a8d4cbdae2b80d4"
+  },
+  {
+    "path": "static/miniapp/assets/app.js",
+    "base_sha256": "9d7b0894abc81a7db079399a012659277299def58046721d2b047fcc8dd02d4e",
+    "new_sha256": "d1ced1df49603fca5e93926fd729578fb69acd3f62cb5e238146f89c2fe63d03"
+  },
+  {
+    "path": "static/miniapp/index.html",
+    "base_sha256": "03862e82f6215971b96ee3ce700e3665c95937688238c2ea704e60c1509b7ca3",
+    "new_sha256": "14c563738700a97f15ca6a7d91328f60e9391601c22b231bde93c53073288767"
+  },
+  {
+    "path": "static/site/index.html",
+    "base_sha256": "c2ede5a5bd876120b4bdda38586bbd64d48221a87db6eac83716522816b389b4",
+    "new_sha256": "7fde3aeb98c7348721dfa1746abef7eff44593ad81a260b12ee88d7ede8a1399"
+  },
+  {
+    "path": "static/site/assets/site.css",
+    "base_sha256": "00cecc3e7617d85e7aeba1072a8a566b5d9cd207cdae56d75b40ed8a3598b14b",
+    "new_sha256": "96e14386ecf54de59c98cb8747dd29ad7e6a9a6c525b30ea6581e551b3879aa1"
+  },
+  {
+    "path": "webhooks.py",
+    "base_sha256": "927535375b5bafae37d66d440554029504f681f5fa42ed1e5cddee4ef263ac24",
+    "new_sha256": "504642bb575cc51ed2c7de52162a62ad238e06f487c4e07e0ac5987041926908"
+  },
+  {
+    "path": "REFERRAL_PROGRAM.md",
+    "base_sha256": null,
+    "new_sha256": "6ed87c97efc514a19072b4042ca14f14f433918b7d63c1d9877c36a1325aff62"
+  },
+  {
+    "path": "tests/test_referral_program.py",
+    "base_sha256": null,
+    "new_sha256": "27d3520a3d112d84476230cb7604979d966d9be0a5782ce9d40a9fda9507fd5a"
+  },
+  {
+    "path": "tests/test_bot_ui_simplification.py",
+    "base_sha256": "8049a6bf0cdbd8a8cbfdc79bf4654df88565185dacf1d084995dd47544e99b3c",
+    "new_sha256": "f8d5c267774910296ad47fe9cac3f6062c143f7daa6f7bb676a6e2fae562d00e"
+  }
+]

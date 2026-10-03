@@ -26,6 +26,7 @@
           <button class="nav-item" data-section="promos">Промокоды</button>
           <button class="nav-item" data-section="links">Ссылки</button>
           <button class="nav-item" data-section="discounts">Скидки</button>
+          <button class="nav-item" data-section="withdrawals">Выплаты</button>
         </nav>
         <button id="closeButton" class="nav-item logout">Закрыть</button>
       </aside>
@@ -78,11 +79,16 @@
           </form>
           <div class="panel table-panel"><div id="discountsTable" class="table-wrap"></div></div>
         </section>
+        <section id="section-withdrawals" class="section">
+          <div class="section-head"><div><h2>Заявки на вывод</h2><p class="muted">Переводы выполняются вручную. «Выплачено» — только после реального перевода. При отклонении резерв возвращается на баланс.</p></div></div>
+          <div class="actions"><select id="withdrawalStatus"><option value="pending">На рассмотрении</option><option value="completed">Выплаченные</option><option value="rejected">Отклонённые</option><option value="all">Все</option></select><button class="button" id="refreshWithdrawals">Обновить</button></div>
+          <div class="panel table-panel"><div id="withdrawalsTable" class="table-wrap"></div><div id="withdrawalsPagination" class="pagination"></div></div>
+        </section>
       </main>
     </div>
 
     <dialog id="userDialog" class="dialog"><div class="dialog-head"><div><p class="eyebrow">Пользователь</p><h2 id="dialogTitle"></h2></div><button id="closeDialog" class="icon-button">×</button></div><div id="userDetails"></div></dialog>
     <div id="toast" class="toast"></div>
-    <script src="/admin/assets/admin.js?v=20260806-01"></script>
+    <script src="/admin/assets/admin.js?v=20261003-referral"></script>
   </body>
 </html>

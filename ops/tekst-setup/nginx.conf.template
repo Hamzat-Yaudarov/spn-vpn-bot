@@ -1,0 +1,87 @@
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_certificate /etc/letsencrypt/live/tekst.site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tekst.site/privkey.pem;
+    return 444;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name tekst.site www.tekst.site;
+    ssl_certificate /etc/letsencrypt/live/tekst.site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tekst.site/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:TEKST:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    server_tokens off;
+    root /var/www/tekst;
+    index index.html;
+    client_max_body_size 0;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        try_files $uri =404;
+    }
+
+    location ^~ __EDGE_PATH__ {
+        proxy_pass http://127.0.0.1:10085;
+        proxy_http_version 1.1;
+        proxy_set_header Host tekst.site;
+        proxy_set_header Connection "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location ^~ /direct/ws/ {
+        proxy_pass http://127.0.0.1:10088;
+        proxy_http_version 1.1;
+        proxy_set_header Host tekst.site;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location = /health {
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        return 200 '{"status":"ok"}\n';
+    }
+    location /assets/ {
+        try_files $uri =404;
+        expires 7d;
+        add_header X-Content-Type-Options nosniff always;
+    }
+    location / {
+        try_files $uri $uri/ =404;
+        add_header X-Content-Type-Options nosniff always;
+    }
+    location ~ /\. {
+        deny all;
+    }
+}

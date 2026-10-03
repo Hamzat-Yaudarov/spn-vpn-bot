@@ -213,3 +213,12 @@ body.view-payment-result-active .hero, body.view-payment-result-active .tabbar {
 .modal-card { width: min(560px, 100%); padding: 18px; border: 1px solid var(--line); border-radius: 28px; background: #12100c; box-shadow: var(--shadow); }
 .modal-card > .grid { margin-top: 12px; }
 @media (max-width: 380px) { .hero h1 { font-size: 22px; } .hero { padding: 16px; } .avatar { width: 56px; height: 56px; border-radius: 19px; } .summary-card { padding: 13px; } .summary-card b { font-size: 18px; } .orb { width: 46px; height: 46px; } .tab { font-size: 11px; } }
+/* Earnings history: allow narrow mobile screens without horizontal overflow. */
+.ref-history-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid rgba(140,160,190,.2); }
+.ref-history-row span { min-width:0; overflow-wrap:anywhere; }
+.ref-history-row small { display:block; opacity:.65; margin-top:4px; }
+.ref-history-row b { white-space:nowrap; }
+#view-ref ol { padding-left:22px; line-height:1.7; }
+.tabbar .tab span { font-size:10px; }
+.tabbar { grid-template-columns: 1fr 1fr 1fr 1.45fr 1fr; gap:3px; }
+.tabbar .tab[data-view="ref"] span { font-size:9px; letter-spacing:-.25px; }

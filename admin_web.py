@@ -37,6 +37,12 @@ class AdjustDaysBody(BaseModel):
     days: int = Field(ge=-3650, le=3650)
 
 
+class WithdrawalDecisionBody(BaseModel):
+    status: str
+    note: str = Field(default='', max_length=500)
+    confirm_paid: bool = False
+
+
 class PromoBody(BaseModel):
     code: str = Field(min_length=2, max_length=32)
     days: int = Field(ge=1, le=3650)
@@ -73,6 +79,29 @@ async def require_admin(request: Request):
         logger.warning("Admin panel access denied for Telegram user %s", user["id"])
         raise HTTPException(status_code=403, detail="Доступ разрешён только администратору")
     return int(user["id"])
+
+
+@router.get('/admin/api/withdrawals')
+async def admin_withdrawals(status: str = 'pending', offset: int = 0, admin_id: int = Depends(require_admin)):
+    from services.referral_store import list_requests
+    try:
+        items = await list_requests(status, max(0, min(offset, 100000)), 31)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'items': items[:30], 'has_more': len(items) > 30}
+
+
+@router.post('/admin/api/withdrawals/{program}/{withdrawal_id}')
+async def decide_withdrawal(program: str, withdrawal_id: int, body: WithdrawalDecisionBody, admin_id: int = Depends(require_admin)):
+    from services.referral_store import resolve_request
+    if body.status == 'completed' and not body.confirm_paid:
+        raise HTTPException(status_code=400, detail='Подтвердите, что перевод уже выполнен.')
+    try:
+        result = await resolve_request(program, withdrawal_id, body.status, admin_id, body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info('Withdrawal decision: program=%s id=%s status=%s actor=%s', program, withdrawal_id, body.status, admin_id)
+    return {'id': result['id'], 'status': result['status']}
 
 
 def _utc_naive(value: datetime) -> datetime:

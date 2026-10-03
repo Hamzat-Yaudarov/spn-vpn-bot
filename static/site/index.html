@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#07111f" />
     <meta name="description" content="SPN — стабильное интернет-соединение. Покупка и управление подпиской без Telegram." />
     <title>SPN — стабильный интернет</title>
-    <link rel="stylesheet" href="/site/assets/site.css?v=20260712-01" />
+    <link rel="stylesheet" href="/site/assets/site.css?v=20261003-referral" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -16,7 +16,7 @@
       <section id="authView" class="auth-view">
         <div class="auth-shell">
           <aside class="auth-guide">
-            <div class="auth-logo"><span class="logo-mark">S</span><b>SPN</b></div>
+            <p><a href="https://t.me/WaySPN_robot?start=earn" target="_blank" rel="noopener">💰 Зарабатывать с приглашений друзей</a></p>\n            <div class="auth-logo"><span class="logo-mark">S</span><b>SPN</b></div>
             <h1 id="authGuideTitle">Создайте аккаунт</h1>
             <p id="authGuideDescription" class="muted">Придумайте данные для входа. После регистрации сразу откроется выбор подписки.</p>
           </aside>
@@ -47,7 +47,7 @@
       <section id="accountView" class="account-view hidden">
         <aside class="account-sidebar">
           <div class="account-brand"><span class="logo-mark">S</span><div><b>SPN</b><small>Личный кабинет</small></div></div>
-          <nav><button class="active" data-account-section="overview">Главная</button><button data-account-section="plans">Купить подписку</button><button data-account-section="traffic">Купить ГБ</button><button data-account-section="history">История</button></nav>
+          <nav><button class="active" data-account-section="overview">Главная</button><button data-account-section="plans">Купить подписку</button><button data-account-section="traffic">Купить ГБ</button><button data-account-section="history">История</button><button data-account-section="earn">💰 Зарабатывать</button></nav>
           <button id="logoutButton" class="logout-button">Выйти из аккаунта</button>
         </aside>
         <div class="account-main">
@@ -77,6 +77,19 @@
             <div id="trafficPlans" class="traffic-grid"></div>
           </section>
 
+          <section id="account-earn" class="account-section">
+            <div class="account-heading"><div><p class="eyebrow">Приглашайте друзей</p><h2>💰 Зарабатывать</h2><p class="muted">35% от первой покупки подписки друга и 15% от повторных.</p></div></div>
+            <div class="history-card earning-card">
+              <h3>Как начать</h3>
+              <ol><li>Откройте бота SPN и раздел «💰 Зарабатывать».</li><li>Отправьте другу свою личную ссылку из этого раздела.</li><li>Друг впервые запускает бота по ней и покупает подписку — вам начисляется вознаграждение.</li></ol>
+              <p>Пример: с оплаты 300 ₽ — 105 ₽ вам, с повторной оплаты 300 ₽ — 45 ₽. Процент считается от фактически оплаченной суммы с учётом скидок.</p>
+              <h3>Как использовать заработанное</h3>
+              <p>Вывод через СБП / USDT — от <b>1 500 ₽</b>, после проверки администратором. Или оплатите подписку в боте, как только баланса хватает на тариф.</p>
+              <p class="muted">Реферальный кабинет работает в Telegram. Аккаунт и покупки на сайте не объединяются автоматически с Telegram; приглашённый друг должен зарегистрироваться и купить подписку в боте. За приглашение без покупки начислений нет.</p>
+              <a class="button primary" href="https://t.me/WaySPN_robot?start=earn" target="_blank" rel="noopener">Открыть заработок в Telegram</a>
+              <p class="muted">Самоприглашения не учитываются. Делитесь ссылкой лично, без спама.</p>
+            </div>
+          </section>
           <section id="account-history" class="account-section">
             <div class="account-heading"><div><p class="eyebrow">Операции</p><h2>История покупок</h2></div></div>
             <div class="history-card"><div id="paymentsTable" class="payments-list"></div></div>

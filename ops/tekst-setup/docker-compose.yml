@@ -1,0 +1,16 @@
+services:
+  remnanode:
+    container_name: remnanode
+    hostname: remnanode
+    image: remnawave/node:3.4.1
+    restart: always
+    network_mode: host
+    env_file:
+      - node.env
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"

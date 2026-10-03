@@ -1,0 +1,27 @@
+{
+  "duration_seconds": 19.2,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "build_id": "native-ru-v1",
+  "voice_file": "voice-native-ru-v1.aiff",
+  "output_file": "way-spn-native-chechen-ru-v1.mp4",
+  "poster_file": "way-spn-native-chechen-ru-v1.jpg",
+  "bot_handle": "@WaySPN_robot",
+  "regular": {
+    "title": "Обычный",
+    "price": "200 ₽ · 30 дней",
+    "details": "до 5 устройств · без заданного лимита трафика*"
+  },
+  "bypass": {
+    "title": "С антиглушилкой",
+    "price": "300 ₽ · 30 дней",
+    "details": "до 3 устройств · 200 ГБ"
+  },
+  "scenes": [
+    {"id": "home", "start": 0.0, "end": 3.2},
+    {"id": "work", "start": 3.2, "end": 6.5},
+    {"id": "road", "start": 6.5, "end": 10.0},
+    {"id": "plans", "start": 10.0, "end": 19.2}
+  ]
+}

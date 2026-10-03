@@ -1,5 +1,5 @@
 const state = { section: "dashboard", usersOffset: 0, usersSearch: "", usersTotal: 0, pageSize: 50 };
-const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки" };
+const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки", withdrawals: "Выплаты" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
 const money = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
@@ -57,6 +57,7 @@ function switchSection(section) {
   if (section === "promos") loadPromos();
   if (section === "links") loadLinks();
   if (section === "discounts") loadDiscounts();
+  if (section === "withdrawals") loadWithdrawals();
 }
 
 async function loadDashboard() {
@@ -136,5 +137,47 @@ $("discountForm").addEventListener("submit", async (e) => { e.preventDefault(); 
 function discountTarget(d) { return ({ all:"Всё", subscription:"Все подписки", regular:"Обычные", bypass:"Антиглушилка", tariff:`Тариф ${d.target_code || ""}`, traffic:"Все пакеты ГБ", traffic_package:`Пакет ${d.target_code || ""}` })[d.target_type] || d.target_type; }
 async function loadDiscounts() { try { const d = await api("/discounts"); $("discountsTable").innerHTML = d.items.length ? `<table><thead><tr><th>Название</th><th>Скидка</th><th>Цель</th><th>Период</th><th>Статус</th><th></th></tr></thead><tbody>${d.items.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${x.discount_type === "percent" ? `${Number(x.value)}%` : money(x.value)}</td><td>${esc(discountTarget(x))}</td><td>${date(x.starts_at, true)} — ${date(x.ends_at, true)}</td><td><span class="badge ${x.active ? "" : "off"}">${x.active ? "Включена" : "Выключена"}</span></td><td><div class="actions"><button class="button small" data-discount="${x.id}" data-active="${!x.active}">${x.active ? "Выключить" : "Включить"}</button><button class="button small danger" data-delete-discount="${x.id}">Удалить</button></div></td></tr>`).join("")}</tbody></table>` : `<div class="empty">Скидок пока нет</div>`; } catch (error) { toast(error.message, true); } }
 $("discountsTable").addEventListener("click", async (e) => { const toggle = e.target.closest("[data-discount]"); const del = e.target.closest("[data-delete-discount]"); try { if (toggle) await api(`/discounts/${toggle.dataset.discount}/toggle`, { method:"POST", body:JSON.stringify({ active:toggle.dataset.active === "true" }) }); if (del) { if (!confirm("Удалить эту скидку?")) return; await api(`/discounts/${del.dataset.deleteDiscount}`, { method:"DELETE" }); } if (toggle || del) loadDiscounts(); } catch (error) { toast(error.message, true); } });
+
+let withdrawalOffset = 0;
+const payoutStatus = { pending: "На рассмотрении", completed: "Выплачено", rejected: "Отклонено" };
+async function loadWithdrawals() {
+  try {
+    const d = await api('/withdrawals?status=' + encodeURIComponent($("withdrawalStatus").value) + '&offset=' + withdrawalOffset);
+    $("withdrawalsTable").innerHTML = d.items.length ? '<table><thead><tr><th>Заявка</th><th>Пользователь</th><th>Сумма и реквизиты</th><th>Статус</th><th>Уведомление</th><th>Решение</th></tr></thead><tbody>' + d.items.map(w => {
+      const number = (w.program === 'referral' ? 'R-' : 'P-') + w.id;
+      const details = w.withdrawal_type === 'sbp' ? esc(w.bank_name) + '<br>' + esc(w.phone_number) : 'USDT (' + (String(w.usdt_address).startsWith('T') ? 'TRC-20' : 'ERC-20') + ')<br><span class="mono">' + esc(w.usdt_address) + '</span>';
+      const actions = w.status === 'pending' ? '<button class="button small" data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="completed" data-amount="' + esc(w.amount) + '">Перевод выполнен</button> <button class="button small danger" data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="rejected" data-amount="' + esc(w.amount) + '">Отклонить</button>' : esc(w.decision_note || '—');
+      return '<tr><td><b>' + number + '</b><br>' + date(w.created_at, true) + '</td><td>' + esc(w.username || 'Без username') + '<br>' + esc(w.user_id) + '</td><td><b>' + money(w.amount) + '</b><br>' + details + '</td><td>' + esc(payoutStatus[w.status] || w.status) + '</td><td>' + (w.notified_at ? 'Доставлено' : 'В очереди · попыток ' + (w.notification_attempts || 0)) + (w.notification_error ? '<br>' + esc(w.notification_error) : '') + '</td><td>' + actions + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<div class="empty">Заявок с таким статусом нет</div>';
+    $("withdrawalsPagination").innerHTML = '<button class="button small" data-payout-page="prev" ' + (withdrawalOffset ? '' : 'disabled') + '>Назад</button><span>' + (withdrawalOffset + 1) + '</span><button class="button small" data-payout-page="next" ' + (d.has_more ? '' : 'disabled') + '>Дальше</button>';
+  } catch (error) { toast(error.message, true); }
+}
+$("withdrawalStatus").addEventListener("change", () => { withdrawalOffset = 0; loadWithdrawals(); });
+$("refreshWithdrawals").addEventListener("click", loadWithdrawals);
+$("withdrawalsPagination").addEventListener("click", e => {
+  const direction = e.target.dataset.payoutPage;
+  if (!direction) return;
+  withdrawalOffset = Math.max(0, withdrawalOffset + (direction === 'next' ? 30 : -30));
+  loadWithdrawals();
+});
+$("withdrawalsTable").addEventListener("click", async e => {
+  const button = e.target.closest('[data-payout]');
+  if (!button || button.disabled) return;
+  const [program, id] = button.dataset.payout.split(':');
+  const status = button.dataset.decision;
+  let note = '';
+  if (status === 'completed') {
+    if (!confirm('Вы уже перевели ' + money(button.dataset.amount) + ' по реквизитам заявки ' + (program === 'referral' ? 'R-' : 'P-') + id + '? Кнопка НЕ переводит деньги.')) return;
+  } else {
+    note = prompt('Причина отклонения (будет отправлена пользователю):');
+    if (!note?.trim()) return;
+  }
+  button.disabled = true;
+  try {
+    await api('/withdrawals/' + program + '/' + id, { method: 'POST', body: JSON.stringify({ status, note, confirm_paid: status === 'completed' }) });
+    toast(status === 'completed' ? 'Выплата отмечена' : 'Заявка отклонена, резерв освобождён');
+    await loadWithdrawals();
+  } catch (error) { toast(error.message, true); button.disabled = false; }
+});
 
 boot();

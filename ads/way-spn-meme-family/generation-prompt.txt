@@ -1,0 +1,9 @@
+Use case: ads-marketing
+Asset type: original reaction image for a vertical TikTok meme carousel
+Primary request: a deadpan gray tabby cat sitting at an ordinary kitchen table and very seriously using a cheap pocket calculator, as if counting something important; five everyday connected-device objects casually visible around it: two smartphones, one laptop, one tablet, and one TV remote
+Scene/backdrop: modest contemporary apartment kitchen, everyday North Caucasus city home without any ethnic or religious decor
+Style/medium: candid low-fi smartphone photo, believable real cat and objects, slightly imperfect framing and mild phone-camera noise, not glossy advertising
+Composition/framing: portrait 9:16, cat and calculator centered in the lower-middle, generous dark or neutral negative space across the upper quarter for meme text
+Lighting/mood: ordinary warm ceiling light, dry deadpan humor
+Constraints: no written text, no logos, no brand marks, no watermark, no flags, no mountains, no mosques, no national clothing, no luxury interior, no human faces; keep the five device objects identifiable but naturally scattered
+Avoid: polished studio advertising, surreal anatomy, extra paws, duplicated objects, cartoon style

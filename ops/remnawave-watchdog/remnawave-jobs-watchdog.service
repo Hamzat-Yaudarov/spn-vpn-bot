@@ -1,0 +1,16 @@
+[Unit]
+Description=Remnawave jobs queue watchdog
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/remnawave-jobs-watchdog
+User=root
+Group=root
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

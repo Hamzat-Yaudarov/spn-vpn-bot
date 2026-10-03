@@ -65,6 +65,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     if len(args) > 1:
         if is_mobile_auth:
             pass
+        elif start_payload == 'earn':
+            pass
         elif args[1].startswith("ref_"):
             try:
                 referrer_id = int(args[1].split("_")[1])
@@ -157,6 +159,10 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             mobile_challenge.get("device_name"),
         )
         await message.answer(text, reply_markup=keyboard)
+    elif start_payload == 'earn':
+        from handlers.referral import send_earning_screen
+        await state.clear()
+        await send_earning_screen(message, tg_id, bot)
     else:
         await show_main_menu(message)
 
@@ -199,6 +205,7 @@ def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
         [custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
+        [semantic_button(text="💰 Зарабатывать", callback_data="referral", style="success")],
         [custom_emoji_button("Как подключить", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
         [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary")],
         [custom_emoji_button("Ещё", emoji_key="more", fallback_emoji="⋯", callback_data="more_menu", style="primary")],
@@ -211,7 +218,6 @@ async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     keyboard = [
         [custom_emoji_button("Личный кабинет", emoji_key="device", fallback_emoji="📱", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
         [custom_emoji_button("Новости", emoji_key="news", fallback_emoji="📢", url=news_channel_url(), style="primary")],
-        [custom_emoji_button("Пригласить друга", emoji_key="invite", fallback_emoji="👥", callback_data="referral", style="primary")],
     ]
     if await db.is_partner(tg_id):
         keyboard.append([custom_emoji_button("Партнёрство", emoji_key="invite", fallback_emoji="🤝", callback_data="partnership", style="primary")])

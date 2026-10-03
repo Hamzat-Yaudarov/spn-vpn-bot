@@ -21,7 +21,7 @@ def _button_texts(keyboard):
 
 
 class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
-    def test_main_menu_has_only_five_short_actions(self):
+    def test_main_menu_has_six_short_actions_with_earnings(self):
         text, keyboard = start.build_main_menu()
         labels = _button_texts(keyboard)
 
@@ -29,6 +29,7 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(labels, [
             "🛒 Купить подписку",
             "🔑 Мои подписки",
+            "💰 Зарабатывать",
             "📲 Как подключить",
             "🆘 Помощь",
             "⋯ Ещё",
@@ -52,7 +53,6 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(labels, [
             "📱 Личный кабинет",
             "📢 Новости",
-            "👥 Пригласить друга",
             "← Назад",
         ])
         self.assertTrue(all(len(label) <= 24 for label in labels))

@@ -242,6 +242,23 @@ CREATE TABLE IF NOT EXISTS payment_subscription_activations (
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS subscription_compensations (
+    campaign_key TEXT NOT NULL,
+    subscription_id BIGINT NOT NULL,
+    tg_id BIGINT NOT NULL,
+    original_expires_at TIMESTAMP NOT NULL,
+    target_expires_at TIMESTAMP NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    remote_applied_at TIMESTAMP,
+    local_applied_at TIMESTAMP,
+    notification_status TEXT,
+    notified_at TIMESTAMP,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (campaign_key, subscription_id)
+);
+
 CREATE TABLE IF NOT EXISTS remnawave_user_identities (
     panel_url TEXT NOT NULL,
     local_uuid UUID NOT NULL,
