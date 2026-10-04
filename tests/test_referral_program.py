@@ -1,6 +1,7 @@
 import os
 import unittest
 from decimal import Decimal
+from datetime import datetime
 from html.parser import HTMLParser
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -17,6 +18,7 @@ import database as db
 from handlers import referral
 from handlers.withdrawals import install_withdrawal_handlers
 from services import referral_store as store
+from services import custom_emoji
 from services.referral_program import RULES, SHARE_TEXT, parse_amount, validate_details, share_link, referral_link
 from test_payment_recovery_postgres import Bridge
 
@@ -104,6 +106,22 @@ class ValidationTests(unittest.TestCase):
             self.assertIn(value, RULES)
         assert_telegram_copy(self, RULES, 800)
 
+    def test_earning_buttons_do_not_inherit_people_premium_icon(self):
+        icons = {'invite':'111', 'buy':'222', 'bank_card':'333', 'home':'444', 'back':'555'}
+        link = 'https://t.me/test?start=ref_123'
+        with patch.object(custom_emoji, 'WAY_SPN_CUSTOM_EMOJI_IDS', icons):
+            _, keyboard = referral.earning_screen({'current_balance':1500, 'total_earned':2000, 'active_referrals':3}, link)
+        buttons = [button.model_dump(exclude_none=True) for row in keyboard.inline_keyboard for button in row]
+        self.assertTrue(all(button.get('icon_custom_emoji_id') != icons['invite'] for button in buttons))
+        for index in (0, 1, 4, 5):
+            self.assertNotIn('icon_custom_emoji_id', buttons[index])
+        self.assertEqual(buttons[0]['text'], '📨 Пригласить друга')
+        self.assertEqual(parse_qs(urlparse(buttons[0]['url']).query)['url'], [link])
+        self.assertEqual(buttons[1]['copy_text']['text'], link)
+        self.assertEqual(buttons[2]['icon_custom_emoji_id'], icons['buy'])
+        self.assertEqual(buttons[2]['callback_data'], 'referral_spend')
+        self.assertEqual(buttons[3]['icon_custom_emoji_id'], icons['bank_card'])
+
     @unittest.skipUnless(TestClient, 'Optional httpx test client is not installed')
     def test_admin_routes_require_authentication(self):
         app = FastAPI()
@@ -114,6 +132,18 @@ class ValidationTests(unittest.TestCase):
 
 
 class FlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_history_pagination_does_not_use_people_premium_icon(self):
+        rows = [dict(kind='earning', amount=Decimal('10'), detail='regular_1m', created_at=datetime(2026,10,4)) for _ in range(11)]
+        for program in ('referral', 'partner'):
+            callback = SimpleNamespace(data=f'{program}_history:10', answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()), from_user=SimpleNamespace(id=123))
+            with patch.object(custom_emoji, 'WAY_SPN_CUSTOM_EMOJI_IDS', {'invite':'111','back':'555'}), patch.object(store, 'history', new=AsyncMock(return_value=rows)):
+                await referral.show_history(callback, AsyncMock())
+            keyboard = callback.message.answer.call_args.kwargs['reply_markup']
+            pagination = [button.model_dump(exclude_none=True) for button in keyboard.inline_keyboard[0]]
+            self.assertEqual([button['text'] for button in pagination], ['Новее', 'Ранее'])
+            self.assertEqual([button['callback_data'] for button in pagination], [f'{program}_history:0',f'{program}_history:20'])
+            self.assertTrue(all('icon_custom_emoji_id' not in button for button in pagination))
+
     async def test_spending_and_withdrawal_screens_use_valid_quotes(self):
         callback = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()), from_user=SimpleNamespace(id=123))
         state = AsyncMock()

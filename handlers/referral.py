@@ -1,6 +1,6 @@
 from html import escape
 from aiogram import Router, F
-from aiogram.types import InlineKeyboardMarkup, CopyTextButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
 import database as db
 from services.custom_emoji import semantic_button
 from services import referral_store as store
@@ -31,12 +31,13 @@ def earning_screen(stats, link):
         f'<b>Ваша ссылка</b>\n<code>{escape(link)}</code>'
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [semantic_button(text='📨 Пригласить друга', url=share_link(link), style='success')],
-        [semantic_button(text='🔗 Скопировать ссылку', copy_text=CopyTextButton(text=link), style='primary')],
-        [semantic_button(text='🛒 Оплатить подписку', callback_data='referral_spend', style='primary')],
+        # These actions should not inherit the shared "invite" premium icon.
+        [InlineKeyboardButton(text='📨 Пригласить друга', url=share_link(link), style='success')],
+        [InlineKeyboardButton(text='🔗 Скопировать ссылку', copy_text=CopyTextButton(text=link), style='primary')],
+        [semantic_button(text='🛒 Оплатить подписку', emoji_key='buy', callback_data='referral_spend', style='primary')],
         [semantic_button(text='🏦 Вывести деньги', callback_data='referral_withdraw', style='primary')],
-        [semantic_button(text='📋 История', callback_data='referral_history:0', style='primary'),
-         semantic_button(text='Как это работает', callback_data='referral_rules', style='primary')],
+        [InlineKeyboardButton(text='📋 История', callback_data='referral_history:0', style='primary'),
+         InlineKeyboardButton(text='Как это работает', callback_data='referral_rules', style='primary')],
         [semantic_button(text='← Назад', callback_data='back_to_menu', style='primary')],
     ])
     return text, keyboard
@@ -124,9 +125,9 @@ async def show_history(callback, state):
         lines.append('Здесь будут ваши начисления и выплаты.')
     buttons = []
     if offset:
-        buttons.append(semantic_button(text='Новее', callback_data=f'{program}_history:{max(0,offset-10)}', style='primary'))
+        buttons.append(InlineKeyboardButton(text='Новее', callback_data=f'{program}_history:{max(0,offset-10)}', style='primary'))
     if len(rows) > 10:
-        buttons.append(semantic_button(text='Ранее', callback_data=f'{program}_history:{offset+10}', style='primary'))
+        buttons.append(InlineKeyboardButton(text='Ранее', callback_data=f'{program}_history:{offset+10}', style='primary'))
     keyboard = ([buttons] if buttons else []) + [[semantic_button(text='← Назад', callback_data='partnership' if program == 'partner' else 'referral', style='primary')]]
     await callback.answer()
     await callback.message.answer('\n\n'.join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
