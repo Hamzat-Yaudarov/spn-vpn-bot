@@ -186,11 +186,11 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
         f"{prefix}📢 <b>Новости Way SPN</b>\n\n"
         "<blockquote>1. Откройте канал\n"
         "2. Подпишитесь\n"
-        "3. Вернитесь и нажмите «Я подписался»</blockquote>"
+        "3. Вернитесь и нажмите «Готово»</blockquote>"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [semantic_button(text="📢 Открыть канал", url=news_channel_url(), style="primary")],
-        [semantic_button(text="✅ Я подписался", callback_data="check_news_channel", style="success")],
+        [semantic_button(text="✅ Готово", callback_data="check_news_channel", style="success")],
     ])
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 

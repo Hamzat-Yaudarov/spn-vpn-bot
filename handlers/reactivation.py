@@ -93,14 +93,13 @@ async def process_reactivation_claim(callback: CallbackQuery):
     await callback.bot.send_message(
         callback.message.chat.id,
         (
-            "✅ <b>Доступ готов</b>\n\n"
-            "<blockquote>"
-            "С антиглушилкой\n"
-            f"{result['days']} дн. · {result['traffic_gb']} ГБ\n"
-            f"До {expires_at_msk.strftime('%d.%m.%Y %H:%M')} МСК"
-            "</blockquote>\n\n"
-            "Выберите устройство для подключения.\n\n"
-            "<b>Ваш ключ</b>\n"
+            "✅ <b>Бесплатный доступ активирован!</b>\n\n"
+            f"Срок: <b>{result['days']} дн.</b>\n"
+            f"Действует до: <b>{expires_at_msk.strftime('%d.%m.%Y %H:%M')} МСК</b>\n"
+            f"Трафик: <b>{result['traffic_gb']} ГБ</b>\n"
+            "Тип: <b>с антиглушилкой</b>\n\n"
+            "Выберите своё устройство — бот покажет приложение и короткую инструкцию.\n\n"
+            "<b>Ваш ключ:</b>\n"
             f"<code>{html.escape(result['subscription_url'])}</code>"
         ),
         reply_markup=keyboard,

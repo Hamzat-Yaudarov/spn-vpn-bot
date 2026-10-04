@@ -6,8 +6,7 @@ import re
 MIN_WITHDRAWAL = Decimal('1500')
 MIN_WITHDRAWAL_TEXT = '1 500 ₽'
 SHARE_TEXT = (
-    'Я пользуюсь Way SPN. Подключить можно через этого бота. '
-    'Если вы купите подписку, я получу вознаграждение.'
+    'Я пользуюсь Way SPN. Подключить можно через этого бота.'
 )
 RULES = (
     '<blockquote>'

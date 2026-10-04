@@ -34,25 +34,25 @@ EXPIRING_STAGES = [
         "type": "expires_today",
         "threshold": timedelta(hours=12),
         "title": "Подписка заканчивается сегодня",
-        "body": "Можно продлить сейчас. Новые дни добавятся к текущим.",
+        "body": "Лучше продлить сейчас, чтобы ключ не отключился.",
     },
     {
         "type": "expires_1d",
         "threshold": timedelta(days=1),
         "title": "Остался 1 день подписки",
-        "body": "При продлении оставшийся день сохранится.",
+        "body": "Продлите заранее: оставшиеся дни сохранятся и добавятся к новому сроку.",
     },
     {
         "type": "expires_3d",
         "threshold": timedelta(days=3),
         "title": "До окончания осталось меньше 3 дней",
-        "body": "При продлении оставшиеся дни сохранятся.",
+        "body": "Можно продлить в пару кликов, чтобы доступ продолжил работать без пауз.",
     },
     {
         "type": "expires_7d",
         "threshold": timedelta(days=7),
         "title": "До окончания осталось меньше 7 дней",
-        "body": "При продлении оставшиеся дни сохранятся.",
+        "body": "Если продлите заранее, текущие дни не сгорят.",
     },
 ]
 
@@ -170,10 +170,8 @@ async def _send_notifications_for_expiring(bot):
 
         text = (
             f"⏰ <b>{stage['title']}</b>\n\n"
-            "<blockquote>"
-            f"{_subscription_name(subscription)}\n"
-            f"Осталось: <b>{_format_time_left(time_left)}</b>"
-            "</blockquote>\n\n"
+            f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
+            f"Осталось: <b>{_format_time_left(time_left)}</b>\n\n"
             f"{stage['body']}"
         )
         keyboard = [[semantic_button(text="🔄 Продлить", callback_data=f"renew_subscription_{subscription_id}", style="success")]]
@@ -255,14 +253,14 @@ async def _send_notifications_for_expired(bot):
             last_expired_at = max(expired_dates)
             days_expired = max(0, (now - last_expired_at).days)
             text = (
-                "🕓 <b>Срок подписки закончился</b>\n\n"
-                f"<blockquote>{days_expired} дн. назад</blockquote>\n\n"
-                "Чтобы продолжить, выберите подписку."
+                "❌ <b>Подписка закончилась</b>\n\n"
+                f"Закончилась: <b>{days_expired} дн. назад</b>\n\n"
+                "Нажмите «Купить подписку», чтобы вернуть доступ."
             )
         else:
             text = (
-                "🔑 <b>Здесь пока нет подписки</b>\n\n"
-                "<blockquote>Чтобы начать, выберите подписку.</blockquote>"
+                "❌ <b>Активной подписки нет</b>\n\n"
+                "Нажмите «Купить подписку», чтобы получить доступ к VPN."
             )
 
         if await _send_message(bot, tg_id, text, _buy_keyboard()):
@@ -323,13 +321,11 @@ async def _send_notifications_for_low_traffic(bot):
                 reset_at = subscription["traffic_reset_at"]
                 days_to_reset = max(0, (reset_at - now).days)
                 text = (
-                    f"📦 <b>Осталось мало ГБ</b>\n\n"
-                    "<blockquote>"
-                    f"{_subscription_name(subscription)}\n"
+                    f"📦 <b>Мало ГБ антиглушилки</b>\n\n"
+                    f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
                     f"Осталось: <b>{remaining_bytes / GB_BYTES:.1f} ГБ</b>\n"
-                    f"Обновление через: <b>{days_to_reset} дн.</b>"
-                    "</blockquote>\n\n"
-                    "При необходимости можно добавить ГБ."
+                    f"До обновления: <b>{days_to_reset} дн.</b>\n\n"
+                    "Что сделать: нажмите «Купить ГБ», если хотите сохранить работу без пауз."
                 )
                 keyboard = [[semantic_button(text="📦 Купить ГБ", callback_data="buy_gb", style="success")]]
                 if await _has_multiple_active_visible_subscriptions(tg_id):

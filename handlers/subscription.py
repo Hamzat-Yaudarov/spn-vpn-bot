@@ -338,7 +338,7 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await edit_text_with_photo(
         callback,
-        "🛒 <b>Подписка</b>\n\n<blockquote>Что хотите сделать?</blockquote>",
+        "🛒 <b>Подписка</b>\n\nЧто вы хотите сделать?",
         kb,
         "Выбор покупки или продления",
     )
@@ -357,7 +357,7 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
         await state.clear()
         await edit_text_with_photo(
             callback,
-            "🔑 <b>Мои подписки</b>\n\n<blockquote>У вас пока нет подписок.</blockquote>",
+            "🔑 <b>Мои подписки</b>\n\n<blockquote>Здесь пока пусто.</blockquote>",
             keyboard,
             "Нет подписок",
         )
