@@ -192,7 +192,7 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
-def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+def build_main_menu(user_id: int | None = None, *, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     """Единый короткий главный экран для /start и callback-возврата."""
     support_url = SUPPORT_URL or "https://t.me/wayspn_support"
     text = (
@@ -202,15 +202,21 @@ def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup
         if welcome else
         "🏠 <b>Way SPN</b>\n\nВыберите нужное действие."
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
-        [custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
-        [semantic_button(text="💰 Зарабатывать", callback_data="referral", style="success")],
-        [custom_emoji_button("Как подключить", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
-        [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary")],
-        [custom_emoji_button("Ещё", emoji_key="more", fallback_emoji="⋯", callback_data="more_menu", style="primary")],
-    ])
-    return text, keyboard
+    rows = [
+        [custom_emoji_button("Личный кабинет", emoji_key="device", fallback_emoji="📱", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
+        [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success"),
+         custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
+        [InlineKeyboardButton(text="💰 Заработать", callback_data="referral", style="success")],
+        [custom_emoji_button("Как подключиться", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
+        [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary"),
+         custom_emoji_button("Новости", emoji_key="news", fallback_emoji="📢", url=news_channel_url(), style="primary")],
+    ]
+    if user_id is not None and user_id == ADMIN_ID:
+        rows.append([custom_emoji_button(
+            "Админ-панель", emoji_key="settings", fallback_emoji="🛠",
+            web_app=WebAppInfo(url=ADMIN_PANEL_URL), style="primary",
+        )])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -235,5 +241,7 @@ async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
 
 async def show_main_menu(message: Message, user_id: int | None = None, *, welcome: bool = False):
     """Отправить единый главный экран."""
-    text, keyboard = build_main_menu(welcome=welcome)
+    if user_id is None and message.from_user:
+        user_id = message.from_user.id
+    text, keyboard = build_main_menu(user_id, welcome=welcome)
     await send_text_with_photo(message, text, keyboard, "Главное меню")

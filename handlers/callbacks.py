@@ -150,7 +150,7 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     logging.info(f"User {tg_id} returned to main menu")
 
     await state.clear()
-    text, keyboard = build_main_menu()
+    text, keyboard = build_main_menu(tg_id)
     await edit_text_with_photo(callback, text, keyboard, "Главное меню")
 
 

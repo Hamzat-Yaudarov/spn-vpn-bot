@@ -182,7 +182,7 @@ async def credit_referral(referrer, referred_user, tariff, amount, first=False):
                 '<b>🎉 Друг купил подписку!</b>\n\n'
                 f'<blockquote>Вам на баланс: <b>+{share:.2f} ₽</b>\n'
                 f'{"35% с первой" if first else "15% с повторной"} покупки друга</blockquote>\n\n'
-                'Баланс и вывод — в разделе «💰 Зарабатывать».')
+                'Баланс и вывод — в разделе «💰 Заработать».')
     return True
 
 

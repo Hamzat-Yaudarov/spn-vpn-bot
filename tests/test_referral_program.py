@@ -201,20 +201,20 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         rows = [dict(kind='earning', amount=Decimal('10'), detail='regular_1m', created_at=datetime(2026,10,4)) for _ in range(11)]
         for program in ('referral', 'partner'):
             callback = SimpleNamespace(data=f'{program}_history:10', answer=AsyncMock(), message=SimpleNamespace(photo=None, edit_text=AsyncMock()), from_user=SimpleNamespace(id=123))
-            with patch.object(custom_emoji, 'WAY_SPN_CUSTOM_EMOJI_IDS', {'invite':'111','back':'555'}), patch.object(store, 'history', new=AsyncMock(return_value=rows)):
+            with patch.object(custom_emoji, 'WAY_SPN_CUSTOM_EMOJI_IDS', {'invite':'111','back':'555'}), patch.object(store, 'history', new=AsyncMock(return_value=rows)), patch('services.image_handler.get_image_path', return_value=None):
                 await referral.show_history(callback, AsyncMock())
             keyboard = callback.message.edit_text.call_args.kwargs['reply_markup']
             pagination = [button.model_dump(exclude_none=True) for button in keyboard.inline_keyboard[0]]
             self.assertEqual([button['text'] for button in pagination], ['Новее', 'Ранее'])
-            self.assertEqual([button['callback_data'] for button in pagination], [f'{program}_history:0',f'{program}_history:20'])
+            self.assertEqual([button['callback_data'] for button in pagination], [f'{program}_history:5',f'{program}_history:15'])
             self.assertTrue(all('icon_custom_emoji_id' not in button for button in pagination))
 
     async def test_spending_and_withdrawal_screens_use_valid_quotes(self):
         callback = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(photo=None, edit_text=AsyncMock()), from_user=SimpleNamespace(id=123))
         state = AsyncMock()
-        await referral.rules(callback, state)
-        await referral.spend(callback, state)
-        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})):
+        with patch('services.image_handler.get_image_path', return_value=None), patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})):
+            await referral.rules(callback, state)
+            await referral.spend(callback, state)
             await referral.withdraw_start(callback, state)
         for call in callback.message.edit_text.call_args_list:
             self.assertIn('<blockquote>', call.args[0])
@@ -231,7 +231,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
                 message = SimpleNamespace(text='1500', from_user=SimpleNamespace(id=123), answer=AsyncMock())
                 state = AsyncMock()
                 state.get_data.return_value = {'withdrawal_method':method}
-                with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})), patch.object(db, 'get_partner_stats', new=AsyncMock(return_value={'current_balance':2000})):
+                with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})), patch.object(db, 'get_partner_stats', new=AsyncMock(return_value={'current_balance':2000})), patch('services.image_handler.get_image_path', return_value=None):
                     await start(callback, state)
                     await amount(message, state)
                 text = callback.message.edit_text.call_args.args[0]
@@ -253,7 +253,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         state.get_data.side_effect = lambda: dict(data)
         state.clear.side_effect = data.clear
         message = SimpleNamespace(from_user=SimpleNamespace(id=123), text='+79991234567', answer=AsyncMock())
-        with patch.object(store, 'create_request', new=AsyncMock(return_value={'id':1,'amount':Decimal('1500')})) as create:
+        with patch.object(store, 'create_request', new=AsyncMock(return_value={'id':1,'amount':Decimal('1500')})) as create, patch('services.image_handler.get_image_path', return_value=None):
             await finish(message, state)
             await finish(message, state)
         create.assert_awaited_once()
@@ -262,6 +262,78 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('R-1', accepted)
         self.assertIn('отложена на выплату', accepted)
         assert_telegram_copy(self, accepted, 500)
+
+    async def test_all_earning_submenus_replace_photo_with_matching_banner(self):
+        message = SimpleNamespace(photo=[object()], edit_media=AsyncMock(), delete=AsyncMock(), answer=AsyncMock(), edit_text=AsyncMock())
+        callback = SimpleNamespace(message=message, from_user=SimpleNamespace(id=123), answer=AsyncMock(), data='referral_history:0')
+        screens = [(referral.rules, 'Earning_rules_v1.png'),
+                   (referral.spend, 'Earning_spend_v1.png'),
+                   (referral.withdraw_start, 'Earning_withdraw_v1.png'),
+                   (referral.show_history, 'Earning_history_v1.png')]
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})), patch.object(store, 'history', new=AsyncMock(return_value=[])):
+            for handler, filename in screens:
+                with self.subTest(screen=filename):
+                    message.edit_media.reset_mock()
+                    await handler(callback, AsyncMock())
+                    message.edit_media.assert_awaited_once()
+                    media = message.edit_media.await_args.kwargs['media']
+                    self.assertEqual(media.media.path.name, filename)
+                    self.assertTrue(media.media.path.is_file())
+                    assert_telegram_copy(self, media.caption, 1024)
+        message.delete.assert_not_awaited()
+        message.answer.assert_not_awaited()
+        message.edit_text.assert_not_awaited()
+
+    async def test_history_photo_caption_and_pagination_fit_long_entries(self):
+        rows = [dict(kind='withdrawal', id=9223372036854775807, amount=Decimal('999999999999.99'),
+                     detail='sbp', status='rejected', created_at=datetime(2026,10,4)) for _ in range(6)]
+        message = SimpleNamespace(photo=[object()], edit_media=AsyncMock())
+        callback = SimpleNamespace(message=message, from_user=SimpleNamespace(id=123), answer=AsyncMock(), data='referral_history:5')
+        with patch.object(store, 'history', new=AsyncMock(return_value=rows)) as history:
+            await referral.show_history(callback, AsyncMock())
+        history.assert_awaited_once_with(123, 'referral', offset=5, limit=6)
+        media = message.edit_media.await_args.kwargs['media']
+        assert_telegram_copy(self, media.caption, 1024)
+        self.assertEqual(media.caption.count('<blockquote>'), 5)
+        buttons = message.edit_media.await_args.kwargs['reply_markup'].inline_keyboard[0]
+        self.assertEqual([b.callback_data for b in buttons], ['referral_history:0', 'referral_history:10'])
+
+    async def test_withdrawal_banner_is_visible_below_minimum_but_form_is_blocked(self):
+        message = SimpleNamespace(photo=[object()], edit_media=AsyncMock())
+        callback = SimpleNamespace(message=message, from_user=SimpleNamespace(id=123), answer=AsyncMock(), data='referral_withdraw_sbp')
+        state = AsyncMock()
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':1400})):
+            await referral.withdraw_start(callback, state)
+            self.assertIn('не хватает 100.00 ₽', message.edit_media.await_args.kwargs['media'].caption)
+            message.edit_media.reset_mock()
+            callback.answer.reset_mock()
+            state.set_state.reset_mock()
+            router = Router()
+            install_withdrawal_handlers(router, 'referral')
+            start = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'start')
+            await start(callback, state)
+        message.edit_media.assert_not_awaited()
+        state.set_state.assert_not_awaited()
+        callback.answer.assert_awaited_once_with('Вывод доступен от 1 500 ₽.', show_alert=True)
+
+    async def test_referral_withdrawal_form_uses_banner_and_keeps_it_for_next_prompt(self):
+        router = Router()
+        install_withdrawal_handlers(router, 'referral')
+        start = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'start')
+        amount = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'amount')
+        callback = SimpleNamespace(data='referral_withdraw_sbp', from_user=SimpleNamespace(id=123), answer=AsyncMock(),
+            message=SimpleNamespace(photo=[object()], edit_media=AsyncMock()))
+        message = SimpleNamespace(text='1500', from_user=SimpleNamespace(id=123), answer_photo=AsyncMock(), answer=AsyncMock())
+        state = AsyncMock()
+        state.get_data.return_value = {'withdrawal_method':'sbp'}
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})):
+            await start(callback, state)
+            await amount(message, state)
+        self.assertEqual(callback.message.edit_media.await_args.kwargs['media'].media.path.name, 'Earning_withdraw_v1.png')
+        message.answer_photo.assert_awaited_once()
+        self.assertEqual(message.answer_photo.await_args.kwargs['photo'].path.name, 'Earning_withdraw_v1.png')
+        self.assertIn('В какой банк', message.answer_photo.await_args.kwargs['caption'])
+        message.answer.assert_not_awaited()
 
 
 @unittest.skipUnless(os.environ.get('PGLITE_MODULE'), 'Requires isolated PGlite database')

@@ -44,7 +44,7 @@ class CustomEmojiButtonTests(unittest.TestCase):
         with patch.dict(custom_emoji.WAY_SPN_CUSTOM_EMOJI_IDS, {"buy": "777"}, clear=True):
             _text, keyboard = start.build_main_menu()
 
-        buy_button = keyboard.inline_keyboard[0][0]
+        buy_button = keyboard.inline_keyboard[1][0]
         self.assertEqual(buy_button.text, "Купить подписку")
         self.assertEqual(buy_button.model_dump(exclude_none=True)["icon_custom_emoji_id"], "777")
 

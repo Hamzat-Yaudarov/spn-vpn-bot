@@ -1,10 +1,10 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from config import ADMIN_ID
-from handlers import smart_assistant, start, subscription
+from handlers import callbacks, smart_assistant, start, subscription
 
 
 def _callback(data: str = ""):
@@ -21,29 +21,54 @@ def _button_texts(keyboard):
 
 
 class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
-    def test_main_menu_has_six_short_actions_with_earnings(self):
+    def test_main_menu_has_requested_rows(self):
         text, keyboard = start.build_main_menu()
         labels = _button_texts(keyboard)
 
         self.assertIn("Way SPN", text)
-        self.assertEqual(labels, [
-            "🛒 Купить подписку",
-            "🔑 Мои подписки",
-            "💰 Зарабатывать",
-            "📲 Как подключить",
-            "🆘 Помощь",
-            "⋯ Ещё",
+        self.assertEqual([[b.text for b in row] for row in keyboard.inline_keyboard], [
+            ["📱 Личный кабинет"],
+            ["🛒 Купить подписку", "🔑 Мои подписки"],
+            ["💰 Заработать"],
+            ["📲 Как подключиться"],
+            ["🆘 Помощь", "📢 Новости"],
         ])
         self.assertTrue(all(len(label) <= 24 for label in labels))
-        self.assertNotIn("Личный кабинет", " ".join(labels))
         self.assertNotIn("Купить ГБ", " ".join(labels))
+        self.assertIsNotNone(keyboard.inline_keyboard[0][0].web_app)
+        self.assertEqual(keyboard.inline_keyboard[1][0].callback_data, "buy_subscription")
+        self.assertEqual(keyboard.inline_keyboard[1][1].callback_data, "my_subscriptions")
+        self.assertEqual(keyboard.inline_keyboard[-1][1].url, start.news_channel_url())
 
     def test_welcome_menu_tells_new_user_what_to_press(self):
         text, keyboard = start.build_main_menu(welcome=True)
 
         self.assertIn("Всё готово", text)
         self.assertIn("Купить подписку", text)
-        self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "buy_subscription")
+        self.assertEqual(keyboard.inline_keyboard[1][0].callback_data, "buy_subscription")
+
+    def test_admin_panel_only_appears_for_admin(self):
+        with patch.object(start, 'ADMIN_ID', 999):
+            for user_id in (None, 123, 999):
+                _, keyboard = start.build_main_menu(user_id)
+                labels = _button_texts(keyboard)
+                self.assertEqual('🛠 Админ-панель' in labels, user_id == 999)
+                if user_id == 999:
+                    self.assertEqual(keyboard.inline_keyboard[-1][0].web_app.url, start.ADMIN_PANEL_URL)
+
+    async def test_start_and_callback_return_preserve_admin_menu(self):
+        with patch.object(start, 'ADMIN_ID', 999):
+            message = SimpleNamespace(from_user=SimpleNamespace(id=999))
+            with patch.object(start, 'send_text_with_photo', new_callable=AsyncMock) as send:
+                await start.show_main_menu(message)
+            self.assertIn('🛠 Админ-панель', _button_texts(send.await_args.args[2]))
+            callback = _callback('back_to_menu')
+            callback.from_user.id = 999
+            state = AsyncMock()
+            with patch.object(callbacks, 'edit_text_with_photo', new_callable=AsyncMock) as edit:
+                await callbacks.back_to_menu(callback, state)
+            self.assertIn('🛠 Админ-панель', _button_texts(edit.await_args.args[2]))
+            state.clear.assert_awaited_once()
 
     @patch("handlers.start.db.is_partner", new_callable=AsyncMock, return_value=False)
     async def test_more_menu_contains_secondary_actions(self, _is_partner):
@@ -58,7 +83,7 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(label) <= 24 for label in labels))
 
     @patch("handlers.start.db.is_partner", new_callable=AsyncMock, return_value=True)
-    async def test_admin_and_partner_actions_only_appear_in_more(self, _is_partner):
+    async def test_legacy_more_menu_keeps_partner_access(self, _is_partner):
         _text, keyboard = await start.build_more_menu(ADMIN_ID)
         labels = _button_texts(keyboard)
 
@@ -214,7 +239,7 @@ class SubscriptionSimplificationTests(unittest.IsolatedAsyncioTestCase):
     @patch("handlers.subscription._get_subscription_access_data", new_callable=AsyncMock)
     @patch("handlers.subscription.db.get_subscription_by_id", new_callable=AsyncMock)
     @patch("handlers.subscription.edit_text_with_photo", new_callable=AsyncMock)
-    async def test_subscription_card_keeps_all_actions_but_shortens_them(
+    async def test_active_subscription_card_has_requested_rows_without_delete(
         self,
         edit,
         get_subscription,
@@ -244,17 +269,135 @@ class SubscriptionSimplificationTests(unittest.IsolatedAsyncioTestCase):
         await subscription._show_subscription_card(_callback(), 7, back_callback="my_subscriptions")
 
         labels = _button_texts(edit.await_args.args[2])
-        for expected in (
-            "📲 Подключить",
-            "📱 Устройства",
-            "🔄 Продлить",
-            "➕ Добавить устройства",
-            "📦 Докупить ГБ",
-            "🗑 Удалить",
-            "← Назад",
-        ):
-            self.assertIn(expected, labels)
+        self.assertEqual([[b.text for b in row] for row in edit.await_args.args[2].inline_keyboard], [
+            ['📲 Подключить'],
+            ['🔄 Продлить'],
+            ['📱 Устройства'],
+            ['➕ Докупить устройства', '📦 Докупить ГБ'],
+            ['← Назад'],
+        ])
         self.assertTrue(all(len(label) <= 24 for label in labels))
+
+    async def test_delete_button_uses_effective_expiry_and_no_date_is_not_expired(self):
+        base = dict(id=7, tg_id=123, generation='v2', is_visible=True, is_renewable=True,
+                    plan_kind='regular', type_index=1, remnawave_uuid=None)
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        past = datetime.now(timezone.utc) - timedelta(days=1)
+        for local, effective, expired in ((future, past, True), (past, future, False), (None, None, False)):
+            with (
+                self.subTest(local=local, effective=effective),
+                patch.object(subscription.db, 'get_subscription_by_id', new=AsyncMock(return_value={**base, 'subscription_until':local})),
+                patch.object(subscription.db, 'get_active_device_addon_count', new=AsyncMock(return_value=0)),
+                patch.object(subscription, '_get_subscription_access_data', new=AsyncMock(return_value=('https://sub.example/key', '1д', effective))),
+                patch.object(subscription, 'available_device_addon_packages', return_value=[]),
+                patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+            ):
+                await subscription._show_subscription_card(_callback(), 7)
+            rows = edit.await_args.args[2].inline_keyboard
+            self.assertEqual('🗑 Удалить' in _button_texts(edit.await_args.args[2]), expired)
+            self.assertEqual(rows[-1][0].callback_data, 'my_subscriptions')
+            if expired:
+                self.assertEqual(rows[-2][0].callback_data, 'delete_subscription_7')
+
+
+class SubscriptionNavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_renewal_tariff_back_returns_to_selected_subscription(self):
+        state = AsyncMock()
+        state.get_data.return_value = {'purchase_mode':'renew', 'plan_kind':'bypass', 'target_subscription_id':7}
+        with (
+            patch.object(subscription.db, 'get_active_discounts', new=AsyncMock(return_value=[])),
+            patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+        ):
+            await subscription._show_tariff_selection(_callback(), state, 'Продление')
+        self.assertEqual(edit.await_args.args[2].inline_keyboard[-1][0].callback_data, 'subscription_view_7')
+        with patch.object(subscription, '_show_subscription_card', new_callable=AsyncMock) as card:
+            callback = _callback('subscription_view_7')
+            await subscription.process_subscription_view(callback, state)
+        card.assert_awaited_once_with(callback, 7)
+        state.clear.assert_awaited_once()
+
+    async def test_direct_gb_purchase_back_returns_to_selected_subscription(self):
+        state = AsyncMock()
+        record = dict(id=7, tg_id=123, slot_number=1, generation='v2', is_visible=True, is_renewable=True, plan_kind='bypass')
+        with (
+            patch.object(subscription.db, 'get_subscription_by_id', new=AsyncMock(return_value=record)) as get,
+            patch.object(subscription.db, 'get_active_discounts', new=AsyncMock(return_value=[])),
+            patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+        ):
+            await subscription.process_gb_subscription_choice(_callback('gb_sub_7'), state)
+        get.assert_awaited_once_with(7, 123)
+        state.update_data.assert_awaited_once_with(gb_subscription_id=7)
+        self.assertEqual(edit.await_args.args[2].inline_keyboard[-1][0].callback_data, 'subscription_view_7')
+
+    async def test_gb_payment_methods_back_keeps_subscription_context(self):
+        state = AsyncMock()
+        state.get_data.return_value = {'gb_subscription_id':7}
+        code = next(iter(subscription.BYPASS_TRAFFIC_PACKAGES))
+        with (
+            patch.object(subscription, 'current_price', new=AsyncMock(return_value={'price':100})),
+            patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+        ):
+            await subscription.process_gb_package_choice(_callback(f'gb_package_{code}'), state)
+        self.assertEqual(edit.await_args.args[2].inline_keyboard[-1][0].callback_data, 'gb_sub_7')
+
+    async def test_stale_gb_package_click_does_not_open_payment_methods(self):
+        state = AsyncMock()
+        state.get_data.return_value = {}
+        code = next(iter(subscription.BYPASS_TRAFFIC_PACKAGES))
+        callback = _callback(f'gb_package_{code}')
+        with patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit:
+            await subscription.process_gb_package_choice(callback, state)
+        edit.assert_not_awaited()
+        callback.answer.assert_awaited_once_with('Выберите подписку заново.', show_alert=True)
+
+    async def test_subscription_invoice_back_keeps_renewal_context_for_both_providers(self):
+        for provider in ('cryptobot', 'yookassa'):
+            for reused in (False, True):
+                with self.subTest(provider=provider, reused=reused):
+                    state = AsyncMock()
+                    state.get_data.return_value = {'tariff_code':'regular_1m', 'purchase_mode':'renew',
+                        'target_subscription_id':7, 'target_slot_number':1}
+                    callback = _callback(f'pay_{provider}')
+                    callback.bot = SimpleNamespace()
+                    invoice = {'invoice_id':123, 'status':'active', 'bot_invoice_url':'https://pay.example/invoice'}
+                    payment = {'id':'test-payment', 'status':'pending', 'confirmation':{'confirmation_url':'https://pay.example/payment'}}
+                    with (
+                        patch.object(subscription, 'current_price', new=AsyncMock(return_value={'price':200})),
+                        patch.object(subscription.db, 'get_active_payment_for_user_and_tariff', new=AsyncMock(return_value='existing' if reused else None)),
+                        patch.object(subscription.db, 'create_payment', new_callable=AsyncMock) as create,
+                        patch.object(subscription, 'get_invoice_status', new=AsyncMock(return_value=invoice)),
+                        patch.object(subscription, 'get_payment_status', new=AsyncMock(return_value=payment)),
+                        patch.object(subscription, 'create_cryptobot_invoice', new=AsyncMock(return_value=invoice)),
+                        patch.object(subscription, 'create_yookassa_payment', new=AsyncMock(return_value=payment)),
+                        patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+                    ):
+                        await getattr(subscription, f'process_pay_{provider}')(callback, state)
+                    self.assertEqual(edit.await_args.args[2].inline_keyboard[-1][0].callback_data, 'subscription_view_7')
+                    self.assertEqual(create.await_count, 0 if reused else 1)
+                    if not reused:
+                        self.assertEqual(create.await_args.kwargs['subscription_id'], 7)
+                        self.assertEqual(create.await_args.kwargs['payment_target'], 'renew')
+                    state.clear.assert_awaited_once()
+
+    async def test_active_or_unknown_expiry_cannot_open_delete_confirmation(self):
+        for until in (None, datetime.now(timezone.utc) + timedelta(days=1)):
+            callback = _callback('delete_subscription_7')
+            with (
+                patch.object(subscription.db, 'get_subscription_by_id', new=AsyncMock(return_value={
+                    'id':7, 'tg_id':123, 'generation':'v2', 'is_visible':True, 'subscription_until':until})),
+                patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
+            ):
+                await subscription.process_delete_subscription_request(callback, AsyncMock())
+            edit.assert_not_awaited()
+            callback.answer.assert_awaited_once_with('Удалить можно только истёкшую подписку.', show_alert=True)
+
+    async def test_delete_confirmation_requires_expired_even_for_old_button(self):
+        callback = _callback('delete_subscription_confirm_7')
+        with patch.object(subscription, 'delete_subscription_everywhere', new=AsyncMock(
+            side_effect=subscription.SubscriptionActiveError('Удалить можно только истёкшую подписку.'))) as delete:
+            await subscription.process_delete_subscription_confirm(callback, AsyncMock())
+        delete.assert_awaited_once_with(7, tg_id=123, actor='user_bot', require_expired=True)
+        callback.answer.assert_awaited_once_with('Удалить можно только истёкшую подписку.', show_alert=True)
 
 
 class SmartAssistantSimplificationTests(unittest.TestCase):
