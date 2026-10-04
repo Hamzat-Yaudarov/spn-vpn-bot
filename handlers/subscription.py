@@ -126,11 +126,12 @@ def _tariff_display_name(tariff: dict) -> str:
 def _subscription_invoice_text(tariff: dict, amount: float) -> str:
     return (
         "💳 <b>Оплата подписки</b>\n\n"
-        f"Подписка: <b>{_tariff_display_name(tariff)}</b>\n"
-        f"Срок: <b>{tariff['days']} дней</b>\n"
-        f"Сумма: <b>{amount:g} ₽</b>\n\n"
-        "Нажмите <b>«Оплатить»</b>. После оплаты бот активирует подписку автоматически.\n"
-        "Если результат не появился, вернитесь и нажмите <b>«Проверить оплату»</b>."
+        "<blockquote>"
+        f"{_tariff_display_name(tariff)}\n"
+        f"{tariff['days']} дней · <b>{amount:g} ₽</b>"
+        "</blockquote>\n\n"
+        "Нажмите <b>«Оплатить»</b>.\n"
+        "Потом вернитесь и нажмите <b>«Проверить оплату»</b>."
     )
 
 
@@ -302,9 +303,15 @@ async def _show_new_subscription_type_choice(
     ])
     text = (
         "🛒 <b>Выберите подписку</b>\n\n"
-        f"🛡 <b>С антиглушилкой</b> — рекомендуем. {BYPASS_BASE_TRAFFIC_GB} ГБ, "
-        f"до {BYPASS_HWID_DEVICE_LIMIT} устройств.\n"
-        f"⚡ <b>Обычная</b> — до {REGULAR_HWID_DEVICE_LIMIT} устройств."
+        "<blockquote>"
+        "⚡ <b>Обычная — от 200 ₽</b>\n"
+        f"Без лимита трафика · до {REGULAR_HWID_DEVICE_LIMIT} устройств"
+        "</blockquote>\n"
+        "<blockquote>"
+        "🛡 <b>С антиглушилкой — от 300 ₽</b>\n"
+        f"{BYPASS_BASE_TRAFFIC_GB} ГБ · до {BYPASS_HWID_DEVICE_LIMIT} устройств\n"
+        "Помогает при глушилках"
+        "</blockquote>"
     )
     await state.update_data(purchase_mode="new", target_subscription_id=None, target_slot_number=None)
     await edit_text_with_photo(callback, text, kb, "Выбор типа подписки")
@@ -331,7 +338,7 @@ async def _show_subscriptions_hub(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await edit_text_with_photo(
         callback,
-        "🛒 <b>Подписка</b>\n\nЧто вы хотите сделать?",
+        "🛒 <b>Подписка</b>\n\n<blockquote>Что хотите сделать?</blockquote>",
         kb,
         "Выбор покупки или продления",
     )
@@ -350,7 +357,7 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
         await state.clear()
         await edit_text_with_photo(
             callback,
-            "🔑 <b>Мои подписки</b>\n\nУ вас пока нет подписок.",
+            "🔑 <b>Мои подписки</b>\n\n<blockquote>У вас пока нет подписок.</blockquote>",
             keyboard,
             "Нет подписок",
         )
@@ -373,7 +380,7 @@ async def _show_my_subscriptions_type_choice(callback: CallbackQuery, state: FSM
     await state.clear()
     await edit_text_with_photo(
         callback,
-        "🔑 <b>Мои подписки</b>\n\nВыберите подписку:",
+        "🔑 <b>Мои подписки</b>\n\n<blockquote>Выберите подписку.</blockquote>",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Мои подписки",
     )
@@ -479,6 +486,12 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
     keyboard.append([semantic_button(text="← Назад", callback_data=back_callback, style="primary")])
     kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+    key_text = (
+        "<b>Ключ для подключения</b>\n"
+        f"<code>{_html(sub_url)}</code>"
+        if sub_url else
+        "<blockquote>Ключ ещё готовится. Попробуйте открыть подписку позже.</blockquote>"
+    )
     text = (
         f"🔑 <b>{_subscription_name(subscription)}</b>\n\n"
         "<blockquote>"
@@ -487,8 +500,7 @@ async def _show_subscription_card(callback: CallbackQuery, subscription_id: int,
         f"Устройства: <b>до {limit_text}</b>"
         f"{traffic_text}"
         "</blockquote>\n\n"
-        "<b>Ключ для подключения:</b>\n"
-        f"{sub_url or '<i>Ошибка получения ссылки</i>'}"
+        f"{key_text}"
     )
 
     await edit_text_with_photo(callback, text, kb, "Моя подписка")
@@ -633,13 +645,14 @@ async def _show_device_addon_packages(callback: CallbackQuery, subscription_id: 
     await state.update_data(device_addon_subscription_id=subscription_id)
     await edit_text_with_photo(
         callback,
-        f"➕ <b>Докупить устройства</b>\n\n"
-        f"Подписка: <b>{_subscription_name(subscription)}</b>\n"
-        f"Сейчас доступно: <b>{device_count_text(int(current_limit))}</b>\n"
-        f"Максимум: <b>{device_count_text(DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT)}</b>\n\n"
-        f"Выберите, сколько устройств добавить.\n"
-        f"Действует до конца текущего периода: <b>{_format_date(subscription['subscription_until'])}</b>.\n"
-        f"После этой даты лимит вернётся к базовому, если не докупить заново.",
+        f"➕ <b>Добавить устройства</b>\n\n"
+        "<blockquote>"
+        f"{_subscription_name(subscription)}\n"
+        f"Сейчас: {device_count_text(int(current_limit))}\n"
+        f"Можно до: {device_count_text(DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT)}\n"
+        f"Действует до {_format_date(subscription['subscription_until'])}"
+        "</blockquote>\n\n"
+        "Сколько устройств добавить?",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Моя подписка",
     )
@@ -678,10 +691,13 @@ async def _show_device_addon_payment_methods(callback: CallbackQuery, state: FSM
     ])
     await edit_text_with_photo(
         callback,
-        f"➕ <b>+{device_count_text(device_count)} к {_subscription_name(subscription)}</b>\n\n"
-        f"Действует до: <b>{_format_date(subscription['subscription_until'])}</b>\n"
-        f"Сумма: <b>{package['price']:g} ₽</b>\n\n"
-        "Выберите способ оплаты.",
+        f"➕ <b>Добавить {device_count_text(device_count)}</b>\n\n"
+        "<blockquote>"
+        f"{_subscription_name(subscription)}\n"
+        f"До {_format_date(subscription['subscription_until'])}\n"
+        f"Цена: <b>{package['price']:g} ₽</b>"
+        "</blockquote>\n\n"
+        "Как оплатить?",
         kb,
         "Выбери способ оплаты",
     )
@@ -704,7 +720,7 @@ async def _show_subscription_instruction(callback: CallbackQuery, subscription_i
 
     await edit_text_with_photo(
         callback,
-        "📲 <b>Подключение</b>\n\nВыберите ваше устройство.",
+        "📲 <b>Подключение</b>\n\n<blockquote>Какое у вас устройство?</blockquote>",
         kb,
         "Как подключиться",
     )
@@ -1027,14 +1043,18 @@ async def process_plan_choice(callback: CallbackQuery, state: FSMContext):
     if plan_kind == "bypass":
         title = (
             "🛡 <b>С антиглушилкой</b>\n\n"
-            f"{BYPASS_BASE_TRAFFIC_GB} ГБ · до {BYPASS_HWID_DEVICE_LIMIT} устройств\n"
-            "Выберите срок подписки."
+            "<blockquote>"
+            f"{BYPASS_BASE_TRAFFIC_GB} ГБ · до {BYPASS_HWID_DEVICE_LIMIT} устройств"
+            "</blockquote>\n\n"
+            "На какой срок?"
         )
     else:
         title = (
             "⚡ <b>Обычная подписка</b>\n\n"
-            f"До {REGULAR_HWID_DEVICE_LIMIT} устройств\n"
-            "Выберите срок подписки."
+            "<blockquote>"
+            f"Без лимита трафика · до {REGULAR_HWID_DEVICE_LIMIT} устройств"
+            "</blockquote>\n\n"
+            "На какой срок?"
         )
     await _show_tariff_selection(callback, state, title)
 
@@ -1490,8 +1510,8 @@ async def _show_checked_payment_success(callback: CallbackQuery, invoice_id: str
     await edit_text_with_photo(
         callback,
         f"✅ <b>{_html(summary.get('title'))}</b>\n\n"
-        f"{_html(summary.get('message'))}\n\n"
-        "Покупка уже активирована и отображается в ваших подписках.",
+        f"<blockquote>{_html(summary.get('message'))}</blockquote>\n\n"
+        "Всё уже работает.",
         InlineKeyboardMarkup(inline_keyboard=keyboard),
         "Оплати",
     )
@@ -1548,10 +1568,11 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     text = (
         f"💳 <b>{purchase_text}</b>\n\n"
-        f"Подписка: <b>{_tariff_display_name(tariff)}</b>\n"
-        f"Срок: <b>{tariff['days']} дней</b>\n"
-        f"Сумма: <b>{pricing['price']:g} ₽</b>\n\n"
-        "Выберите способ оплаты."
+        "<blockquote>"
+        f"{_tariff_display_name(tariff)}\n"
+        f"{tariff['days']} дней · <b>{pricing['price']:g} ₽</b>"
+        "</blockquote>\n\n"
+        "Как оплатить?"
     )
 
     await edit_text_with_photo(callback, text, kb, "Выбери способ оплаты")

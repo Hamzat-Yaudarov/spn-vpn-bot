@@ -175,7 +175,7 @@ async def process_how_to_connect(callback: CallbackQuery, state: FSMContext):
     ])
 
     text = (
-        "📲 <b>Как подключить</b>\n\nВыберите ваше устройство."
+        "📲 <b>Как подключить</b>\n\n<blockquote>Какое у вас устройство?</blockquote>"
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
@@ -195,11 +195,13 @@ async def process_instruction_buy(callback: CallbackQuery, state: FSMContext):
 
     text = (
         "🛒 <b>Как купить подписку</b>\n\n"
+        "<blockquote>"
         "1. Нажмите <b>Купить подписку</b>\n"
         "2. Выберите тип и срок\n"
         "3. Оплатите счёт\n"
-        "4. Бот сразу выдаст ключ и инструкцию\n\n"
-        f"По всем вопросам: {SUPPORT_URL}"
+        "4. Откройте готовый ключ"
+        "</blockquote>\n\n"
+        f"Нужна помощь? {SUPPORT_URL}"
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")
@@ -219,7 +221,7 @@ async def process_instruction_connect(callback: CallbackQuery, state: FSMContext
     ])
 
     text = (
-        "📲 <b>Как подключить</b>\n\nВыберите ваше устройство."
+        "📲 <b>Как подключить</b>\n\n<blockquote>Какое у вас устройство?</blockquote>"
     )
 
     await edit_text_with_photo(callback, text, kb, "Как подключиться")

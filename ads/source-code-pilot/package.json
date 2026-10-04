@@ -1,0 +1,25 @@
+{
+  "name": "source-code-pilot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts SourceCode output/source-code-pilot.mp4 --codec=h264 --crf=17 --concurrency=2",
+    "preview": "remotion render src/index.ts SourceCode output/preview-10s.mp4 --frames=0-299 --codec=h264 --crf=20 --scale=0.5 --concurrency=2",
+    "cover": "remotion still src/index.ts Cover output/cover.png",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "@remotion/cli": "^4.0.532",
+    "@remotion/renderer": "^4.0.532",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "remotion": "^4.0.532",
+    "typescript": "^5.9.3"
+  }
+}
