@@ -15,20 +15,18 @@ def earning_screen(stats, link):
     remaining = max(0, float(MIN_WITHDRAWAL) - balance)
     progress = f'До вывода осталось {remaining:.2f} ₽.' if remaining else 'Можно оформить вывод.'
     text = (
-        '<b>💰 Зарабатывать с Way SPN</b>\n\n'
-        '<blockquote>'
-        '<b>35%</b> с первой покупки друга\n'
-        '<b>15%</b> с его следующих покупок'
-        '</blockquote>\n\n'
-        '<b>Ваш баланс</b>\n'
-        '<blockquote>'
-        f'Друзей с покупками: {stats["active_referrals"]}\n'
-        f'Заработано: {stats["total_earned"]:.2f} ₽\n'
-        f'Доступно: <b>{balance:.2f} ₽</b>\n'
-        f'{progress}'
-        '</blockquote>\n\n'
-        f'Вывод от <b>{MIN_WITHDRAWAL_TEXT}</b>. Баланс также можно потратить на подписку.\n\n'
-        f'<b>Ваша ссылка</b>\n<code>{escape(link)}</code>'
+        '<b>💰 Зарабатывать</b>\n\n'
+        'Приглашайте друзей в Way SPN: <b>35% от первой покупки подписки</b> и <b>15% от повторных</b> — вам.\n\n'
+        '1. Отправьте другу свою ссылку.\n'
+        '2. Друг запускает бота по ней и покупает подписку.\n'
+        '3. Вознаграждение поступает на ваш баланс.\n\n'
+        'Пример: с оплаты 300 ₽ вы получите <b>105 ₽</b>, с повторной оплаты 300 ₽ — <b>45 ₽</b>.\n\n'
+        f'Друзей с покупками: <b>{stats["active_referrals"]}</b>\n'
+        f'Всего заработано: <b>{stats["total_earned"]:.2f} ₽</b>\n'
+        f'Доступно: <b>{balance:.2f} ₽</b>\n{progress}\n\n'
+        f'Вывод через СБП / USDT от <b>{MIN_WITHDRAWAL_TEXT}</b>. '
+        'Или оплатите свою подписку, если хватает на тариф.\n\n'
+        f'Ваша ссылка (просто кликните на ссылку, не зажимая):\n<code>{escape(link)}</code>'
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [semantic_button(text='📨 Пригласить друга', url=share_link(link), style='success')],
@@ -71,8 +69,8 @@ async def rules(callback, state):
 async def spend(callback, state):
     await state.clear()
     await callback.answer()
-    await callback.message.answer('<b>Потратить баланс</b>\n\n'
-        '<blockquote>Выберите подписку. Если денег хватает, появится кнопка «Бонусный баланс».</blockquote>',
+    await callback.message.answer('Выберите покупку или продление подписки. Если баланса хватает на тариф, '
+        'в способах оплаты появится оплата с реферального баланса. Минимум 1 500 ₽ относится только к выводу денег.',
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [semantic_button(text='Выбрать подписку', callback_data='buy_subscription', style='success')],
             [semantic_button(text='← Назад', callback_data='referral', style='primary')]]))
@@ -86,7 +84,7 @@ async def withdraw_start(callback, state):
         await callback.answer(f'Вывод от {MIN_WITHDRAWAL_TEXT}. Доступно {stats["current_balance"]:.2f} ₽.', show_alert=True)
         return
     await callback.answer()
-    await callback.message.answer('<b>Вывод денег</b>\n\n<blockquote>Куда отправить деньги?</blockquote>',
+    await callback.message.answer('Выберите способ вывода. Перевод выполняет администратор после проверки заявки.',
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [semantic_button(text='🏦 СБП', callback_data='referral_withdraw_sbp', style='success')],
             [semantic_button(text='💎 USDT', callback_data='referral_withdraw_usdt', style='success')],

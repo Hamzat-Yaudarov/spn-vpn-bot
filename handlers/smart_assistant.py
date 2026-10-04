@@ -101,8 +101,7 @@ def _detect_intent(text: str) -> str:
 def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
     if intent == "buy":
         return (
-            "🛒 <b>Купить подписку</b>\n\n"
-            "<blockquote>Выберите тип, срок и способ оплаты.</blockquote>",
+            "Нажмите кнопку ниже. Бот покажет виды подписки, сроки и способы оплаты.",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("🛒 Купить подписку", "buy_subscription", style="success")],
                 [_button("📲 Как подключить", "how_to_connect")],
@@ -111,8 +110,7 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
 
     if intent == "my_key":
         return (
-            "🔑 <b>Ваш ключ</b>\n\n"
-            "<blockquote>Откройте «Мои подписки» и выберите подписку.</blockquote>",
+            "Ключ находится в разделе «Мои подписки». Нажмите кнопку ниже.",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("🔑 Мои подписки", "my_subscriptions")],
                 [_button("🛒 Купить подписку", "buy_subscription", style="success")],
@@ -121,8 +119,7 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
 
     if intent == "payment_check":
         return (
-            "✅ <b>Проверка оплаты</b>\n\n"
-            "<blockquote>Нажмите «Проверить оплату».</blockquote>",
+            "Если вы уже оплатили, нажмите «Проверить оплату». Бот проверит платёж и активирует подписку.",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("✅ Проверить оплату", "check_payment", style="success")],
                 [_button("🔑 Мои подписки", "my_subscriptions")],
@@ -131,8 +128,7 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
 
     if intent == "connect":
         return (
-            "📲 <b>Подключение</b>\n\n"
-            "<blockquote>Откройте инструкцию и выберите устройство.</blockquote>",
+            "Откройте инструкцию и выберите Android или iPhone.",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("📲 Как подключить", "how_to_connect", style="success")],
                 [_button("🔑 Мои подписки", "my_subscriptions")],
@@ -141,8 +137,7 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
 
     if intent == "promo":
         return (
-            "🎟 <b>Промокод</b>\n\n"
-            "<blockquote>Нажмите «Ввести промокод».</blockquote>",
+            "Промокод находится в разделе «Мои подписки».",
             InlineKeyboardMarkup(inline_keyboard=[
                 [_button("🔑 Мои подписки", "my_subscriptions", style="success")],
                 [_button("🎟 Ввести промокод", "enter_promo")],
@@ -152,24 +147,18 @@ def _response_for_intent(intent: str) -> tuple[str, InlineKeyboardMarkup]:
     if intent == "refund":
         rows = [[_button("🆘 Написать в поддержку", url=SUPPORT_URL, style="success")]] if SUPPORT_URL else []
         rows.append([_button("🏠 Главное меню", "back_to_menu")])
-        return (
-            "↩️ <b>Возврат</b>\n\n"
-            "<blockquote>Напишите в поддержку. Вам помогут.</blockquote>",
-            InlineKeyboardMarkup(inline_keyboard=rows),
-        )
+        return "По вопросам возврата напишите в поддержку.", InlineKeyboardMarkup(inline_keyboard=rows)
 
     if intent == "support":
         rows = [[_button("🆘 Написать в поддержку", url=SUPPORT_URL, style="success")]] if SUPPORT_URL else []
         rows.append([_button("🏠 Главное меню", "back_to_menu")])
         return (
-            "🆘 <b>Помощь</b>\n\n"
-            "<blockquote>Напишите в поддержку. Мы поможем.</blockquote>",
+            "Если что-то не получается, напишите в поддержку.",
             InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
     return (
-        "<b>Чем помочь?</b>\n\n"
-        "<blockquote>Выберите кнопку ниже.</blockquote>",
+        "Я могу помочь с покупкой, оплатой, ключом или подключением. Выберите действие.",
         _default_keyboard(),
     )
 

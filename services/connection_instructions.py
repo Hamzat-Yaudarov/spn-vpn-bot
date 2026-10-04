@@ -38,34 +38,34 @@ def build_connection_instruction(
 
     if subscription_url:
         safe_subscription_url = escape(subscription_url, quote=False)
-        key = f"\n\n<b>Ваш ключ</b>\n<code>{safe_subscription_url}</code>"
-        key_step = "2. Скопируйте ключ ниже\n"
+        key_step = f"2. Скопируйте ключ:\n<code>{safe_subscription_url}</code>\n"
         next_step = 3
     else:
-        key = ""
-        key_step = "2. В «Моих подписках» скопируйте ключ\n"
-        next_step = 3
+        key_step = (
+            "2. Откройте <b>Мои подписки</b>\n"
+            "3. Выберите подписку и скопируйте ключ\n"
+        )
+        next_step = 4
 
     if platform == ANDROID_PLATFORM:
         app_steps = (
-            f"{next_step}. Откройте {app_name}\n"
-            f"{next_step + 1}. Нажмите <b>+</b> → <b>Вставить из буфера</b>\n"
-            f"{next_step + 2}. Включите VPN"
+            f"{next_step}. Откройте <b>{app_name}</b>\n"
+            f"{next_step + 1}. Нажмите <b>+</b> в правом верхнем углу\n"
+            f"{next_step + 2}. Выберите <b>Вставить из буфера</b>\n"
+            f"{next_step + 3}. Подтвердите добавление и включите VPN"
         )
     else:
         app_steps = (
-            f"{next_step}. Откройте {app_name}\n"
-            f"{next_step + 1}. Нажмите <b>+</b> и вставьте ключ\n"
-            f"{next_step + 2}. Разрешите VPN и включите его"
+            f"{next_step}. Откройте <b>{app_name}</b>\n"
+            f"{next_step + 1}. Нажмите <b>+</b> и добавьте подписку из буфера\n"
+            f"{next_step + 2}. Разрешите создание VPN-конфигурации\n"
+            f"{next_step + 3}. Включите VPN"
         )
 
     return (
         f"📲 <b>Подключение на {platform_name}</b>\n\n"
-        "<blockquote>"
-        f"1. Установите {app_name}\n"
+        f"1. Установите <b>{app_name}</b> кнопкой ниже\n"
         f"{key_step}"
-        f"{app_steps}"
-        "</blockquote>"
-        f"{key}\n\n"
-        f"Нужна помощь? {safe_support_url}"
+        f"{app_steps}\n\n"
+        f"Если что-то не получается: {safe_support_url}"
     )

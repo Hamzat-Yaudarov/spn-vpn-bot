@@ -22,10 +22,9 @@ def mobile_auth_keyboard(challenge_id: str, device_name: str | None = None) -> t
     device_label = html.escape((device_name or "Android-устройство").strip()[:80])
     text = (
         "<b>Вход в Way VPN</b>\n\n"
-        "<blockquote>"
-        f"Устройство: <b>{device_label}</b>\n"
-        "Нажмите кнопку, если вы открыли приложение."
-        "</blockquote>"
+        f"Устройство: <code>{device_label}</code>\n\n"
+        "Подтверждайте вход только если вы сами открыли приложение. "
+        "Кнопка одноразовая и действует несколько минут."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [semantic_button(
@@ -148,8 +147,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             [semantic_button(text="📄 Открыть условия", url=TELEGRAPH_AGREEMENT_URL, style="primary")]
         ])
         await message.answer(
-            "<b>Добро пожаловать в Way SPN</b>\n\n"
-            "<blockquote>Примите условия, чтобы открыть бот.</blockquote>",
+            "Чтобы пользоваться ботом, примите пользовательское соглашение.",
             reply_markup=kb
         )
         await state.set_state(UserStates.waiting_for_agreement)
@@ -181,16 +179,15 @@ def news_channel_url() -> str:
 
 async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False):
     """Отправить обязательный welcome-экран подписки на канал."""
-    prefix = "Пока не вижу подписку на канал.\n\n" if retry else ""
+    prefix = "Подписка пока не найдена.\n\n" if retry else ""
     text = (
-        f"{prefix}📢 <b>Новости Way SPN</b>\n\n"
-        "<blockquote>1. Откройте канал\n"
-        "2. Подпишитесь\n"
-        "3. Вернитесь и нажмите «Готово»</blockquote>"
+        f"{prefix}📢 <b>Подпишитесь на наш новостной канал</b>\n\n"
+        "Так вы не пропустите новости и важные изменения Way SPN.\n\n"
+        "После подписки нажмите <b>«Я подписался»</b>."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [semantic_button(text="📢 Открыть канал", url=news_channel_url(), style="primary")],
-        [semantic_button(text="✅ Готово", callback_data="check_news_channel", style="success")],
+        [semantic_button(text="✅ Я подписался", callback_data="check_news_channel", style="success")],
     ])
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 
@@ -199,10 +196,11 @@ def build_main_menu(*, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup
     """Единый короткий главный экран для /start и callback-возврата."""
     support_url = SUPPORT_URL or "https://t.me/wayspn_support"
     text = (
-        "✅ <b>Всё готово</b>\n\n"
-        "<blockquote>Чтобы начать, нажмите «Купить подписку».</blockquote>"
+        "✅ <b>Всё готово!</b>\n\n"
+        "Чтобы начать, нажмите <b>«Купить подписку»</b>.\n"
+        "После оплаты бот выдаст ключ и покажет, как подключиться."
         if welcome else
-        "🏠 <b>Way SPN</b>\n\n<blockquote>Что хотите сделать?</blockquote>"
+        "🏠 <b>Way SPN</b>\n\nВыберите нужное действие."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
@@ -232,7 +230,7 @@ async def build_more_menu(tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
             style="primary",
         )])
     keyboard.append([custom_emoji_button("Назад", emoji_key="back", fallback_emoji="←", callback_data="back_to_menu", style="primary")])
-    return "⋯ <b>Ещё</b>\n\n<blockquote>Выберите раздел.</blockquote>", InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return "⋯ <b>Ещё</b>\n\nВыберите нужный раздел.", InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 async def show_main_menu(message: Message, user_id: int | None = None, *, welcome: bool = False):
