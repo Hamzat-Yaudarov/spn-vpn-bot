@@ -204,8 +204,8 @@ def build_main_menu(user_id: int | None = None, *, welcome: bool = False) -> tup
     )
     rows = [
         [custom_emoji_button("Личный кабинет", emoji_key="device", fallback_emoji="📱", web_app=WebAppInfo(url=MINIAPP_URL), style="primary")],
-        [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success"),
-         custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
+        [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
+        [custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
         [InlineKeyboardButton(text="💰 Заработать", callback_data="referral", style="success")],
         [custom_emoji_button("Как подключиться", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
         [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary"),

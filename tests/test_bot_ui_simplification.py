@@ -38,7 +38,7 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Купить ГБ", " ".join(labels))
         self.assertIsNotNone(keyboard.inline_keyboard[0][0].web_app)
         self.assertEqual(keyboard.inline_keyboard[1][0].callback_data, "buy_subscription")
-        self.assertEqual(keyboard.inline_keyboard[1][1].callback_data, "my_subscriptions")
+        self.assertEqual(keyboard.inline_keyboard[2][0].callback_data, "my_subscriptions")
         self.assertEqual(keyboard.inline_keyboard[-1][1].url, start.news_channel_url())
 
     def test_welcome_menu_tells_new_user_what_to_press(self):
