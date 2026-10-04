@@ -28,7 +28,8 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Way SPN", text)
         self.assertEqual([[b.text for b in row] for row in keyboard.inline_keyboard], [
             ["📱 Личный кабинет"],
-            ["🛒 Купить подписку", "🔑 Мои подписки"],
+            ["🛒 Купить подписку"],
+            ["🔑 Мои подписки"],
             ["💰 Заработать"],
             ["📲 Как подключиться"],
             ["🆘 Помощь", "📢 Новости"],
