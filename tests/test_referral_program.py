@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import EditMessageText
 try:
     from fastapi.testclient import TestClient
 except RuntimeError:  # httpx is a test-only dependency, not needed by the bot.
@@ -19,6 +21,7 @@ from handlers import referral
 from handlers.withdrawals import install_withdrawal_handlers
 from services import referral_store as store
 from services import custom_emoji
+from services.image_handler import edit_message_text
 from services.referral_program import RULES, SHARE_TEXT, parse_amount, validate_details, share_link, referral_link
 from test_payment_recovery_postgres import Bridge
 
@@ -132,26 +135,72 @@ class ValidationTests(unittest.TestCase):
 
 
 class FlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_navigation_updates_one_screen_including_return_and_withdrawal_form(self):
+        message = SimpleNamespace(photo=None, answer=AsyncMock(), edit_text=AsyncMock(), delete=AsyncMock())
+        callback = SimpleNamespace(message=message, from_user=SimpleNamespace(id=123), answer=AsyncMock(), bot=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username='test'))))
+        state = AsyncMock()
+        stats = {'current_balance':2000, 'total_earned':2000, 'active_referrals':3}
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)), patch.object(store, 'history', new=AsyncMock(return_value=[])):
+            await referral.process_referral(callback, state)
+            await referral.rules(callback, state)
+            await referral.process_referral(callback, state)
+            await referral.spend(callback, state)
+            await referral.withdraw_start(callback, state)
+            callback.data = 'referral_withdraw_sbp'
+            router = Router()
+            install_withdrawal_handlers(router, 'referral')
+            start = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'start')
+            await start(callback, state)
+            callback.data = 'referral_history:0'
+            await referral.show_history(callback, state)
+        self.assertEqual(message.edit_text.await_count, 7)
+        message.answer.assert_not_awaited()
+        message.delete.assert_not_awaited()
+
+    async def test_photo_menu_is_replaced_but_start_command_still_sends_a_screen(self):
+        message = SimpleNamespace(photo=[object()], answer=AsyncMock(), delete=AsyncMock(), edit_text=AsyncMock())
+        bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username='test')))
+        stats = {'current_balance':2000, 'total_earned':2000, 'active_referrals':3}
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)):
+            await referral.send_earning_screen(message, 123, bot, edit=True)
+            message.delete.assert_awaited_once()
+            message.answer.assert_awaited_once()
+            message.edit_text.assert_not_awaited()
+            user_message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock(), delete=AsyncMock())
+            await referral.send_earning_screen(user_message, 123, bot)
+        user_message.answer.assert_awaited_once()
+        user_message.edit_text.assert_not_awaited()
+        user_message.delete.assert_not_awaited()
+
+    async def test_repeat_click_does_not_create_a_new_message_and_other_errors_surface(self):
+        method = EditMessageText(chat_id=123, message_id=1, text='screen')
+        message = SimpleNamespace(photo=None, answer=AsyncMock(), edit_text=AsyncMock(side_effect=TelegramBadRequest(method=method, message='Bad Request: message is not modified')))
+        await edit_message_text(message, 'screen', referral.back_keyboard())
+        message.answer.assert_not_awaited()
+        message.edit_text.side_effect = TelegramBadRequest(method=method, message='Bad Request: message to edit not found')
+        with self.assertRaises(TelegramBadRequest):
+            await edit_message_text(message, 'screen', referral.back_keyboard())
+
     async def test_history_pagination_does_not_use_people_premium_icon(self):
         rows = [dict(kind='earning', amount=Decimal('10'), detail='regular_1m', created_at=datetime(2026,10,4)) for _ in range(11)]
         for program in ('referral', 'partner'):
-            callback = SimpleNamespace(data=f'{program}_history:10', answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()), from_user=SimpleNamespace(id=123))
+            callback = SimpleNamespace(data=f'{program}_history:10', answer=AsyncMock(), message=SimpleNamespace(photo=None, edit_text=AsyncMock()), from_user=SimpleNamespace(id=123))
             with patch.object(custom_emoji, 'WAY_SPN_CUSTOM_EMOJI_IDS', {'invite':'111','back':'555'}), patch.object(store, 'history', new=AsyncMock(return_value=rows)):
                 await referral.show_history(callback, AsyncMock())
-            keyboard = callback.message.answer.call_args.kwargs['reply_markup']
+            keyboard = callback.message.edit_text.call_args.kwargs['reply_markup']
             pagination = [button.model_dump(exclude_none=True) for button in keyboard.inline_keyboard[0]]
             self.assertEqual([button['text'] for button in pagination], ['Новее', 'Ранее'])
             self.assertEqual([button['callback_data'] for button in pagination], [f'{program}_history:0',f'{program}_history:20'])
             self.assertTrue(all('icon_custom_emoji_id' not in button for button in pagination))
 
     async def test_spending_and_withdrawal_screens_use_valid_quotes(self):
-        callback = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()), from_user=SimpleNamespace(id=123))
+        callback = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(photo=None, edit_text=AsyncMock()), from_user=SimpleNamespace(id=123))
         state = AsyncMock()
         await referral.rules(callback, state)
         await referral.spend(callback, state)
         with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})):
             await referral.withdraw_start(callback, state)
-        for call in callback.message.answer.call_args_list:
+        for call in callback.message.edit_text.call_args_list:
             self.assertIn('<blockquote>', call.args[0])
             assert_telegram_copy(self, call.args[0], 900)
 
@@ -162,14 +211,14 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             start = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'start')
             amount = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'amount')
             for method in ('sbp', 'usdt'):
-                callback = SimpleNamespace(data=f'{prefix}_withdraw_{method}', from_user=SimpleNamespace(id=123), answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()))
+                callback = SimpleNamespace(data=f'{prefix}_withdraw_{method}', from_user=SimpleNamespace(id=123), answer=AsyncMock(), message=SimpleNamespace(photo=None, edit_text=AsyncMock()))
                 message = SimpleNamespace(text='1500', from_user=SimpleNamespace(id=123), answer=AsyncMock())
                 state = AsyncMock()
                 state.get_data.return_value = {'withdrawal_method':method}
                 with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})), patch.object(db, 'get_partner_stats', new=AsyncMock(return_value={'current_balance':2000})):
                     await start(callback, state)
                     await amount(message, state)
-                text = callback.message.answer.call_args.args[0]
+                text = callback.message.edit_text.call_args.args[0]
                 self.assertIn('1 500 ₽', text)
                 self.assertIn('после проверки заявки', text)
                 assert_telegram_copy(self, text, 500)

@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InputMediaPhoto, FSInputFile
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 
 
 # Папка с изображениями
@@ -48,6 +49,25 @@ def get_image_path(message_key: str) -> Path | None:
         return None
     
     return image_path
+
+
+async def edit_message_text(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+):
+    """Update a text screen, replacing a photo screen when entering it."""
+    if message.photo:
+        # Telegram cannot turn a photo message into a plain text message.
+        await message.delete()
+        return await message.answer(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    try:
+        return await message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    except TelegramBadRequest as exc:
+        # A repeated click can request the screen that is already displayed.
+        if 'message is not modified' not in exc.message.casefold():
+            raise
+        return message
 
 
 async def edit_text_with_photo(

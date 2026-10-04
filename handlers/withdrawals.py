@@ -9,6 +9,7 @@ import database as db
 from services import referral_store as store
 from services.referral_program import MIN_WITHDRAWAL, MIN_WITHDRAWAL_TEXT, parse_amount, validate_details
 from services.custom_emoji import semantic_button
+from services.image_handler import edit_message_text
 from states import UserStates
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def install_withdrawal_handlers(router, program):
         await state.update_data(withdrawal_request_key=str(uuid4()), withdrawal_method=method)
         await state.set_state(states[f'{method}_amount'])
         await callback.answer()
-        await callback.message.answer(
+        await edit_message_text(callback.message,
             f'<b>Вывод {"на карту (СБП)" if method == "sbp" else "в USDT"}</b>\n\n'
             f'<blockquote>Доступно: <b>{current["current_balance"]:.2f} ₽</b>\n'
             f'Минимум: <b>{MIN_WITHDRAWAL_TEXT}</b></blockquote>\n\n'
