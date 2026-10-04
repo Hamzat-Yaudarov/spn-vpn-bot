@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def install_withdrawal_handlers(router, program):
     prefix = 'referral' if program == 'referral' else 'partnership'
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        semantic_button(text='Отмена', callback_data=prefix, style='primary')]])
+        semantic_button(text='← Назад', callback_data=prefix, style='primary')]])
     states = {name: getattr(UserStates, f'{prefix}_waiting_{name}') for name in
               ('sbp_amount', 'sbp_bank', 'sbp_phone', 'usdt_amount', 'usdt_address')}
 
@@ -27,7 +27,7 @@ def install_withdrawal_handlers(router, program):
     async def start(callback, state):
         current = await stats(callback.from_user.id)
         if not current or current['current_balance'] < MIN_WITHDRAWAL:
-            await callback.answer(f'Вывод от {MIN_WITHDRAWAL_TEXT}. Баланс пока меньше этой суммы.', show_alert=True)
+            await callback.answer(f'Вывод доступен от {MIN_WITHDRAWAL_TEXT}.', show_alert=True)
             return
         method = 'sbp' if callback.data.endswith('_sbp') else 'usdt'
         await state.clear()
@@ -35,9 +35,11 @@ def install_withdrawal_handlers(router, program):
         await state.set_state(states[f'{method}_amount'])
         await callback.answer()
         await callback.message.answer(
-            f'<b>Вывод {"через СБП" if method == "sbp" else "в USDT"}</b>\n'
-            f'Доступно: {current["current_balance"]:.2f} ₽. Минимум: {MIN_WITHDRAWAL_TEXT}.\n'
-            'Введите сумму в рублях. Заявку проверит администратор; перевод не мгновенный.', reply_markup=keyboard)
+            f'<b>Вывод {"на карту (СБП)" if method == "sbp" else "в USDT"}</b>\n\n'
+            f'<blockquote>Доступно: <b>{current["current_balance"]:.2f} ₽</b>\n'
+            f'Минимум: <b>{MIN_WITHDRAWAL_TEXT}</b></blockquote>\n\n'
+            'Напишите сумму в рублях. Например: <code>1500</code>\n\n'
+            'Выплату отправим после проверки заявки.', reply_markup=keyboard)
 
     async def amount(message, state):
         try:
@@ -52,13 +54,14 @@ def install_withdrawal_handlers(router, program):
         method = data.get('withdrawal_method')
         if method not in ('sbp', 'usdt'):
             await state.clear()
-            await message.answer('Оформление устарело. Начните вывод заново.')
+            await message.answer('Откройте «Вывести деньги» ещё раз.')
             return
         await state.update_data(withdrawal_amount=str(value))
         await state.set_state(states['sbp_bank' if method == 'sbp' else 'usdt_address'])
-        await message.answer('Введите название банка.' if method == 'sbp' else
-            'Введите адрес USDT: TRC-20 (T…) или ERC-20 (0x…). Сумма заявки указана в рублях; '
-            'сеть, курс и итоговую сумму перевода подтвердит администратор.', reply_markup=keyboard)
+        await message.answer('<b>В какой банк отправить деньги?</b>\n\nНапишите название банка.' if method == 'sbp' else
+            '<b>Куда отправить USDT?</b>\n\nОтправьте адрес кошелька.\n'
+            '<blockquote>TRC-20 — адрес начинается с T\nERC-20 — с 0x</blockquote>\n\n'
+            'Заявка — в рублях. Перед переводом согласуем с вами сеть, курс и сумму в USDT.', reply_markup=keyboard)
 
     async def bank(message, state):
         value = (message.text or '').strip()
@@ -67,17 +70,19 @@ def install_withdrawal_handlers(router, program):
             return
         await state.update_data(bank_name=value)
         await state.set_state(states['sbp_phone'])
-        await message.answer('Введите телефон для СБП с кодом страны, например +79991234567.', reply_markup=keyboard)
+        await message.answer('<b>Напишите телефон для СБП</b>\n\n'
+            'С кодом страны. Например: <code>+79991234567</code>', reply_markup=keyboard)
 
     async def finish(message, state):
         user_id = message.from_user.id
         if not await db.acquire_user_lock(user_id):
-            await message.answer('Предыдущая операция ещё выполняется. Повторите через несколько секунд.')
+            await message.answer('Подождите несколько секунд и попробуйте ещё раз.')
             return
         try:
             data = await state.get_data()
             if not data.get('withdrawal_request_key') or not data.get('withdrawal_amount'):
-                await message.answer('Заявка уже отправлена или оформление устарело. Проверьте «Историю» в разделе заработка.')
+                await message.answer('Проверьте «Историю» в разделе «Зарабатывать».\n'
+                    'Если заявки нет, нажмите «Вывести деньги» ещё раз.')
                 return
             method = data['withdrawal_method']
             bank_name, phone, address = validate_details(method, data.get('bank_name', ''),
@@ -86,16 +91,18 @@ def install_withdrawal_handlers(router, program):
                 data['withdrawal_request_key'], bank=bank_name, phone=phone, address=address)
             await state.clear()
             number = f'{"R" if program == "referral" else "P"}-{row["id"]}'
-            await message.answer(f'<b>Заявка №{number} принята</b>\nСумма: {row["amount"]:.2f} ₽.\n'
-                'Средства зарезервированы. Статус появится в истории; администратор получит уведомление. '
-                'Не создавайте повторную заявку на эту сумму.', reply_markup=keyboard)
+            await message.answer('<b>✅ Заявка принята</b>\n\n'
+                f'<blockquote>Сумма: <b>{row["amount"]:.2f} ₽</b>\nНомер: {number}</blockquote>\n\n'
+                'Эта сумма отложена на выплату.\nО результате напишем здесь.\n\n'
+                'Статус — в разделе «Зарабатывать» → «История».', reply_markup=keyboard)
             logger.info('Withdrawal saved: program=%s id=%s user=%s', program, row['id'], user_id)
         except ValueError as exc:
             await message.answer(escape(str(exc)), reply_markup=keyboard)
         except Exception:
             logger.exception('Withdrawal flow failed for user %s', user_id)
-            await message.answer('Не удалось завершить действие. Проверьте историю заявок, затем повторите. '
-                'Если заявка уже есть в истории, повторять её не нужно.', reply_markup=keyboard)
+            await message.answer('Не получилось завершить действие.\n'
+                'Посмотрите «Историю»: если заявка есть, она сохранена.\n'
+                'Если её нет — попробуйте ещё раз.', reply_markup=keyboard)
         finally:
             await db.release_user_lock(user_id)
 

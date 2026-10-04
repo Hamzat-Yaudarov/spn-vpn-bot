@@ -1,6 +1,7 @@
 import os
 import unittest
 from decimal import Decimal
+from html.parser import HTMLParser
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -16,8 +17,38 @@ import database as db
 from handlers import referral
 from handlers.withdrawals import install_withdrawal_handlers
 from services import referral_store as store
-from services.referral_program import parse_amount, validate_details, share_link, referral_link
+from services.referral_program import RULES, SHARE_TEXT, parse_amount, validate_details, share_link, referral_link
 from test_payment_recovery_postgres import Bridge
+
+
+def assert_telegram_copy(test, text, max_chars=4096):
+    """Validate the small HTML subset used here without sending real messages."""
+    class Parser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.stack, self.plain = [], []
+
+        def handle_starttag(self, tag, attrs):
+            test.assertIn(tag, ('b', 'code', 'blockquote'))
+            test.assertFalse(attrs)
+            if tag == 'blockquote':
+                test.assertNotIn('blockquote', self.stack)
+            if tag == 'code':
+                test.assertEqual(self.stack, [])
+            self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            test.assertTrue(self.stack)
+            test.assertEqual(self.stack.pop(), tag)
+
+        def handle_data(self, data):
+            self.plain.append(data)
+
+    parser = Parser()
+    parser.feed(text)
+    parser.close()
+    test.assertEqual(parser.stack, [])
+    test.assertLessEqual(len(''.join(parser.plain).encode('utf-16-le')) // 2, max_chars)
 
 
 class ValidationTests(unittest.TestCase):
@@ -40,7 +71,9 @@ class ValidationTests(unittest.TestCase):
         link = referral_link('@WaySPN_robot', 123)
         payload = parse_qs(urlparse(share_link(link)).query)
         self.assertEqual(payload['url'], [link])
-        self.assertIn('вознаграждение', payload['text'][0])
+        self.assertEqual(payload['text'], [SHARE_TEXT])
+        self.assertIn('я получу бонус', payload['text'][0])
+        self.assertNotIn('<blockquote>', payload['text'][0])
 
     def test_screen_actions_and_honest_progress(self):
         text, keyboard = referral.earning_screen({'current_balance':1400, 'total_earned':2000, 'active_referrals':3}, 'https://t.me/test?start=ref_123')
@@ -48,6 +81,28 @@ class ValidationTests(unittest.TestCase):
         self.assertIn('1 500 ₽', text)
         self.assertNotIn('5000', text)
         self.assertEqual(keyboard.inline_keyboard[1][0].copy_text.text, 'https://t.me/test?start=ref_123')
+        self.assertEqual(text.count('<blockquote>'), 2)
+        self.assertIn('35%', text)
+        self.assertIn('15%', text)
+        self.assertIn('впервые', text)
+        assert_telegram_copy(self, text, 800)
+
+    def test_ready_balance_and_escaped_personal_link(self):
+        link = 'https://t.me/test?start=ref_123&test=<hello>'
+        text, keyboard = referral.earning_screen({'current_balance':1500, 'total_earned':2000, 'active_referrals':3}, link)
+        self.assertIn('Уже можно вывести деньги.', text)
+        self.assertNotIn('До вывода осталось', text)
+        self.assertIn('&amp;test=&lt;hello&gt;', text)
+        self.assertEqual(keyboard.inline_keyboard[1][0].copy_text.text, link)
+        callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row if button.callback_data]
+        self.assertIn('referral_spend', callbacks)
+        self.assertIn('referral_withdraw', callbacks)
+        assert_telegram_copy(self, text, 800)
+
+    def test_rules_keep_rates_example_and_payout_conditions(self):
+        for value in ('35%', '15%', '105 ₽', '45 ₽', '1 500 ₽', 'скидкой', 'после проверки заявки', 'впервые'):
+            self.assertIn(value, RULES)
+        assert_telegram_copy(self, RULES, 800)
 
     @unittest.skipUnless(TestClient, 'Optional httpx test client is not installed')
     def test_admin_routes_require_authentication(self):
@@ -59,6 +114,41 @@ class ValidationTests(unittest.TestCase):
 
 
 class FlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_spending_and_withdrawal_screens_use_valid_quotes(self):
+        callback = SimpleNamespace(answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()), from_user=SimpleNamespace(id=123))
+        state = AsyncMock()
+        await referral.rules(callback, state)
+        await referral.spend(callback, state)
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})):
+            await referral.withdraw_start(callback, state)
+        for call in callback.message.answer.call_args_list:
+            self.assertIn('<blockquote>', call.args[0])
+            assert_telegram_copy(self, call.args[0], 900)
+
+    async def test_both_withdrawal_forms_keep_minimum_and_manual_review(self):
+        for program, prefix in (('referral', 'referral'), ('partner', 'partnership')):
+            router = Router()
+            install_withdrawal_handlers(router, program)
+            start = next(h.callback for h in router.callback_query.handlers if h.callback.__name__ == 'start')
+            amount = next(h.callback for h in router.message.handlers if h.callback.__name__ == 'amount')
+            for method in ('sbp', 'usdt'):
+                callback = SimpleNamespace(data=f'{prefix}_withdraw_{method}', from_user=SimpleNamespace(id=123), answer=AsyncMock(), message=SimpleNamespace(answer=AsyncMock()))
+                message = SimpleNamespace(text='1500', from_user=SimpleNamespace(id=123), answer=AsyncMock())
+                state = AsyncMock()
+                state.get_data.return_value = {'withdrawal_method':method}
+                with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value={'current_balance':2000})), patch.object(db, 'get_partner_stats', new=AsyncMock(return_value={'current_balance':2000})):
+                    await start(callback, state)
+                    await amount(message, state)
+                text = callback.message.answer.call_args.args[0]
+                self.assertIn('1 500 ₽', text)
+                self.assertIn('после проверки заявки', text)
+                assert_telegram_copy(self, text, 500)
+                next_text = message.answer.call_args.args[0]
+                assert_telegram_copy(self, next_text, 500)
+                if method == 'usdt':
+                    for term in ('TRC-20', 'ERC-20', 'рублях', 'курс', 'сумму в USDT'):
+                        self.assertIn(term, next_text)
+
     async def test_duplicate_final_message_does_not_submit_twice(self):
         router = Router()
         install_withdrawal_handlers(router, 'referral')
@@ -72,6 +162,11 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             await finish(message, state)
             await finish(message, state)
         create.assert_awaited_once()
+        accepted = message.answer.call_args_list[0].args[0]
+        self.assertIn('Заявка принята', accepted)
+        self.assertIn('R-1', accepted)
+        self.assertIn('отложена на выплату', accepted)
+        assert_telegram_copy(self, accepted, 500)
 
 
 @unittest.skipUnless(os.environ.get('PGLITE_MODULE'), 'Requires isolated PGlite database')
@@ -105,7 +200,11 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reject_releases_funds_only_once_and_completion_never_transfers(self):
         row = await self.request()
-        await store.resolve_request('referral', row['id'], 'rejected', 999, 'Неверный банк')
+        await store.resolve_request('referral', row['id'], 'rejected', 999, 'Банк <test> & номер')
+        notice = await self.sql.fetchval("SELECT body FROM referral_outbox WHERE event_key=$1", f'resolved:referral:{row["id"]}')
+        self.assertIn('Банк &lt;test&gt; &amp; номер', notice)
+        self.assertIn('деньги снова на балансе', notice)
+        assert_telegram_copy(self, notice)
         await store.resolve_request('referral', row['id'], 'rejected', 999, 'Повтор')
         self.assertEqual((await db.get_referral_stats(123))['current_balance'], 2000)
         with self.assertRaises(ValueError):
@@ -165,6 +264,10 @@ class LedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['referral_share'], Decimal('105'))
         self.assertTrue(await self.sql.fetchval('SELECT first_payment FROM users WHERE tg_id=456'))
         self.assertEqual(await self.sql.fetchval('SELECT COUNT(*) FROM referral_outbox'), 1)
+        notice = await self.sql.fetchval('SELECT body FROM referral_outbox')
+        self.assertIn('+105.00 ₽', notice)
+        self.assertIn('35% с первой', notice)
+        assert_telegram_copy(self, notice, 300)
         with patch.object(store, 'enqueue', new=AsyncMock(side_effect=RuntimeError('injected'))):
             with self.assertRaises(RuntimeError):
                 await db.add_referral_earning(123,456,'regular_1m',300)

@@ -162,7 +162,9 @@ async def resolve_request(program, withdrawal_id, status, actor, note=''):
                 DO UPDATE SET resolved_at=now(),resolved_by=$4,decision_note=$5''', program, withdrawal_id, f'legacy:{program}:{withdrawal_id}', actor, note)
             number = f'{"R" if program == "referral" else "P"}-{withdrawal_id}'
             await enqueue(conn, f'resolved:{program}:{withdrawal_id}', row[owner],
-                f'<b>Заявка №{number} · {row["amount"]:.2f} ₽</b>\n{STATUSES[status]}.' + (f'\n{escape(note)}' if note else ''))
+                f'<b>{STATUSES[status]}</b>\n\n'
+                f'<blockquote>Сумма: <b>{row["amount"]:.2f} ₽</b>\nЗаявка: {number}</blockquote>'
+                + (f'\n\n{escape(note)}' if note else ''))
             return {**dict(row), 'status': status}
 
 
@@ -177,8 +179,10 @@ async def credit_referral(referrer, referred_user, tariff, amount, first=False):
                 VALUES($1,$2,$3,$4,$5,$6) RETURNING id''', referrer, referred_user, tariff, Decimal(str(amount)), share, first)
             await conn.execute('UPDATE users SET first_payment=TRUE WHERE tg_id=$1', referred_user)
             await enqueue(conn, f'earning:{earning_id}', referrer,
-                f'<b>Вам начислено {share:.2f} ₽ 🎉</b>\nЗа {"первую" if first else "повторную"} покупку подписки приглашённым другом.\n'
-                'Баланс и история — в разделе «💰 Зарабатывать». Вывод от 1 500 ₽; оплатить свою подписку можно, как только хватает на тариф.')
+                '<b>🎉 Друг купил подписку!</b>\n\n'
+                f'<blockquote>Вам на баланс: <b>+{share:.2f} ₽</b>\n'
+                f'{"35% с первой" if first else "15% с повторной"} покупки друга</blockquote>\n\n'
+                'Баланс и вывод — в разделе «💰 Зарабатывать».')
     return True
 
 
