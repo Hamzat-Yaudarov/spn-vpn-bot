@@ -114,7 +114,7 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(month_label, "30 дней — 3̶0̶0̶₽ 240₽")
         self.assertNotIn("→", month_label)
 
-    async def test_bonus_payment_button_only_appears_when_balance_is_enough(self):
+    async def test_referral_payment_button_is_always_available_for_new_and_renewal(self):
         callback = _callback("tariff_regular_1m")
         state = AsyncMock()
         state.get_data.return_value = {
@@ -123,15 +123,44 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
             "target_subscription_id": None,
         }
 
-        for balance, expected in ((199, False), (200, True)):
+        for mode in ('new', 'renew'):
+            state.get_data.return_value['purchase_mode'] = mode
             with (
                 patch("handlers.subscription.current_price", new=AsyncMock(return_value={"price": 200})),
-                patch("handlers.subscription.db.get_referral_stats", new=AsyncMock(return_value={"current_balance": balance})),
+                patch("handlers.subscription.db.get_referral_stats", new=AsyncMock()) as stats,
                 patch("handlers.subscription.edit_text_with_photo", new_callable=AsyncMock) as edit,
             ):
                 await subscription.process_tariff_choice(callback, state)
                 labels = _button_texts(edit.await_args.args[2])
-                self.assertEqual("💰 Бонусный баланс" in labels, expected)
+                self.assertIn("💰 Реферальный баланс", labels)
+                buttons = [b for row in edit.await_args.args[2].inline_keyboard for b in row]
+                self.assertEqual(sum(b.callback_data == 'pay_referral_balance' for b in buttons), 1)
+                stats.assert_not_awaited()
+
+    async def test_insufficient_referral_balance_shows_alert_without_starting_purchase(self):
+        for balance in (0, 199):
+            callback = _callback('pay_referral_balance')
+            state = AsyncMock()
+            state.get_data.return_value = {'tariff_code':'regular_1m', 'purchase_mode':'new'}
+            with (
+                patch('handlers.subscription.current_price', new=AsyncMock(return_value={'price':200})),
+                patch('handlers.subscription.db.acquire_user_lock', new=AsyncMock(return_value=True)),
+                patch('handlers.subscription.db.release_user_lock', new=AsyncMock()) as release,
+                patch('handlers.subscription.db.get_referral_stats', new=AsyncMock(return_value={'current_balance':balance})),
+                patch('handlers.subscription._get_or_create_target_subscription_for_direct_flow', new=AsyncMock()) as purchase,
+                patch('handlers.subscription.db.spend_referral_balance_for_subscription', new=AsyncMock()) as spend,
+            ):
+                await subscription.process_pay_referral_balance(callback, state)
+            callback.answer.assert_awaited_once()
+            alert = callback.answer.await_args
+            self.assertTrue(alert.kwargs['show_alert'])
+            self.assertIn(f'Ваш баланс: {balance:.2f} ₽', alert.args[0])
+            self.assertIn(f'Не хватает: {200-balance:.2f} ₽', alert.args[0])
+            self.assertLessEqual(len(alert.args[0]), 200)
+            purchase.assert_not_awaited()
+            spend.assert_not_awaited()
+            state.clear.assert_not_awaited()
+            release.assert_awaited_once_with(123)
 
 
 class SubscriptionSimplificationTests(unittest.IsolatedAsyncioTestCase):

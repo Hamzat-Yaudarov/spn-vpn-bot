@@ -13,6 +13,7 @@ IMAGE_MAPPING = {
     "Главное меню": "Main_menu.JPG",
     "Как подключиться": "Connection.JPG",
     "Реферальная программа": "Referral_program.jpg",
+    "Зарабатывать": "Earning_v1.png",
     "Моя подписка": "My_subscription.jpg",
     "Мои подписки": "My_subscription.jpg",
     "My-not_subscription": "My-not_subscription.jpg",
@@ -68,6 +69,33 @@ async def edit_message_text(
         if 'message is not modified' not in exc.message.casefold():
             raise
         return message
+
+
+async def edit_message_with_photo(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+    message_key: str,
+):
+    """Show a photo screen in place of the current bot message."""
+    image_path = get_image_path(message_key)
+    if image_path is None:
+        return await edit_message_text(message, text, reply_markup)
+    if message.photo:
+        try:
+            return await message.edit_media(
+                media=InputMediaPhoto(media=FSInputFile(image_path), caption=text, parse_mode=ParseMode.HTML),
+                reply_markup=reply_markup,
+            )
+        except TelegramBadRequest as exc:
+            if 'message is not modified' not in exc.message.casefold():
+                raise
+            return message
+    await message.delete()
+    return await message.answer_photo(
+        photo=FSInputFile(image_path), caption=text,
+        reply_markup=reply_markup, parse_mode=ParseMode.HTML,
+    )
 
 
 async def edit_text_with_photo(

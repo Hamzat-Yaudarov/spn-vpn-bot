@@ -140,7 +140,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         callback = SimpleNamespace(message=message, from_user=SimpleNamespace(id=123), answer=AsyncMock(), bot=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username='test'))))
         state = AsyncMock()
         stats = {'current_balance':2000, 'total_earned':2000, 'active_referrals':3}
-        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)), patch.object(store, 'history', new=AsyncMock(return_value=[])):
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)), patch.object(store, 'history', new=AsyncMock(return_value=[])), patch('services.image_handler.get_image_path', return_value=None):
             await referral.process_referral(callback, state)
             await referral.rules(callback, state)
             await referral.process_referral(callback, state)
@@ -157,20 +157,36 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         message.answer.assert_not_awaited()
         message.delete.assert_not_awaited()
 
-    async def test_photo_menu_is_replaced_but_start_command_still_sends_a_screen(self):
-        message = SimpleNamespace(photo=[object()], answer=AsyncMock(), delete=AsyncMock(), edit_text=AsyncMock())
+    async def test_earning_banner_edits_photo_menu_and_start_command_sends_photo(self):
+        message = SimpleNamespace(photo=[object()], answer=AsyncMock(), delete=AsyncMock(), edit_text=AsyncMock(), edit_media=AsyncMock())
         bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username='test')))
         stats = {'current_balance':2000, 'total_earned':2000, 'active_referrals':3}
         with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)):
             await referral.send_earning_screen(message, 123, bot, edit=True)
-            message.delete.assert_awaited_once()
-            message.answer.assert_awaited_once()
+            message.edit_media.assert_awaited_once()
+            media = message.edit_media.await_args.kwargs['media']
+            self.assertTrue(media.media.path.name == 'Earning_v1.png')
+            self.assertTrue(media.media.path.is_file())
+            assert_telegram_copy(self, media.caption, 1024)
+            message.delete.assert_not_awaited()
+            message.answer.assert_not_awaited()
             message.edit_text.assert_not_awaited()
-            user_message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock(), delete=AsyncMock())
+            user_message = SimpleNamespace(answer=AsyncMock(), answer_photo=AsyncMock(), edit_text=AsyncMock(), delete=AsyncMock())
             await referral.send_earning_screen(user_message, 123, bot)
-        user_message.answer.assert_awaited_once()
+        user_message.answer_photo.assert_awaited_once()
+        user_message.answer.assert_not_awaited()
         user_message.edit_text.assert_not_awaited()
         user_message.delete.assert_not_awaited()
+
+    async def test_returning_to_banner_replaces_text_screen(self):
+        message = SimpleNamespace(photo=None, answer_photo=AsyncMock(), answer=AsyncMock(), delete=AsyncMock(), edit_text=AsyncMock())
+        bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username='test')))
+        stats = {'current_balance':2000, 'total_earned':2000, 'active_referrals':3}
+        with patch.object(db, 'get_referral_stats', new=AsyncMock(return_value=stats)):
+            await referral.send_earning_screen(message, 123, bot, edit=True)
+        message.delete.assert_awaited_once()
+        message.answer_photo.assert_awaited_once()
+        message.answer.assert_not_awaited()
 
     async def test_repeat_click_does_not_create_a_new_message_and_other_errors_surface(self):
         method = EditMessageText(chat_id=123, message_id=1, text='screen')

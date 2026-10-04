@@ -6,7 +6,7 @@ from services.custom_emoji import semantic_button
 from services import referral_store as store
 from services.referral_program import MIN_WITHDRAWAL, MIN_WITHDRAWAL_TEXT, RULES, STATUSES, referral_link, share_link
 from handlers.withdrawals import install_withdrawal_handlers
-from services.image_handler import edit_message_text
+from services.image_handler import edit_message_text, edit_message_with_photo, send_text_with_photo
 
 router = Router()
 
@@ -49,9 +49,9 @@ async def send_earning_screen(message, user_id, bot, *, edit=False):
     link = referral_link((await bot.get_me()).username, user_id)
     text, keyboard = earning_screen(stats, link)
     if edit:
-        await edit_message_text(message, text, keyboard)
+        await edit_message_with_photo(message, text, keyboard, 'Зарабатывать')
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await send_text_with_photo(message, text, keyboard, 'Зарабатывать')
 
 
 @router.callback_query(F.data == 'referral')

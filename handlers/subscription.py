@@ -1523,9 +1523,6 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     tariff = TARIFFS[tariff_code]
     pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"])
-    stats = await db.get_referral_stats(tg_id)
-    referral_balance = stats['current_balance']
-
     if purchase_mode == "renew" and target_slot_number:
         purchase_text = f"Продление подписки №{target_slot_number}"
     elif target_slot_number:
@@ -1536,9 +1533,8 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     keyboard = [
         [semantic_button(text="💳 Банковская карта", callback_data="pay_yookassa", style="success")],
         [semantic_button(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
+        [semantic_button(text="💰 Реферальный баланс", callback_data="pay_referral_balance", style="success")],
     ]
-    if referral_balance >= pricing["price"]:
-        keyboard.append([semantic_button(text="💰 Бонусный баланс", callback_data="pay_referral_balance", style="success")])
     keyboard.append([semantic_button(
         text="← Назад",
         callback_data=(f"subscription_view_{target_subscription_id}" if purchase_mode == "renew" and target_subscription_id else "buy_subscription"),
@@ -1739,7 +1735,13 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
 
         if referral_balance < amount:
             missing = amount - referral_balance
-            await callback.answer(f"Не хватает {missing:.2f} ₽ на балансе рефералов", show_alert=True)
+            await callback.answer(
+                f"Недостаточно денег на балансе.\n\n"
+                f"Ваш баланс: {referral_balance:.2f} ₽\n"
+                f"Стоимость подписки: {amount:.2f} ₽\n"
+                f"Не хватает: {missing:.2f} ₽",
+                show_alert=True,
+            )
             return
 
         subscription, purchase_mode = await _get_or_create_target_subscription_for_direct_flow(tg_id, data)
