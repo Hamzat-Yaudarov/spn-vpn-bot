@@ -1,11 +1,17 @@
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
 import database as db
 from config import (
@@ -31,6 +37,7 @@ logger = logging.getLogger(__name__)
 ADMIN_STATIC_DIR = Path(__file__).parent / "static" / "admin"
 TRACKING_CODE_RE = re.compile(r"^[a-z0-9_-]{3,64}$")
 PROMO_CODE_RE = re.compile(r"^[A-Z0-9]{2,32}$")
+REFUND_REVIEW_TTL_SECONDS = 300
 
 
 class AdjustDaysBody(BaseModel):
@@ -41,6 +48,67 @@ class WithdrawalDecisionBody(BaseModel):
     status: str
     note: str = Field(default='', max_length=500)
     confirm_paid: bool = False
+
+
+class RefundReviewBody(BaseModel):
+    """An accounting record of a transfer already made outside this application."""
+    invoice_id: str = Field(min_length=1, max_length=160)
+    amount: Decimal = Field(gt=0, le=Decimal('1000000000'), max_digits=14, decimal_places=2)
+    reference: str = Field(min_length=3, max_length=160)
+    note: str = Field(min_length=3, max_length=500)
+
+    @field_validator('invoice_id', 'reference', 'note')
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value or any(ord(ch) < 32 for ch in value):
+            raise ValueError('Укажите непустое значение без управляющих символов.')
+        return value
+
+    @field_validator('reference', 'note')
+    @classmethod
+    def meaningful_reference_and_reason(cls, value: str) -> str:
+        if len(value) < 3:
+            raise ValueError('Укажите ссылку на перевод и причину (от 3 символов).')
+        return value
+
+
+class RefundConfirmBody(RefundReviewBody):
+    review_token: str = Field(min_length=10, max_length=8192)
+    confirm_transferred: StrictBool = False
+
+
+def _refund_review_payload(body: RefundReviewBody, actor: int) -> dict:
+    return {'actor': actor, 'invoice_id': body.invoice_id,
+            'amount': format(body.amount, '.2f'), 'reference': body.reference, 'note': body.note}
+
+
+def _refund_review_token(body: RefundReviewBody, actor: int) -> str:
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail='Секрет проверки Telegram не настроен.')
+    payload = {**_refund_review_payload(body, actor), 'issued_at': int(time.time())}
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                                separators=(',', ':')).encode()).decode().rstrip('=')
+    signature = hmac.new(BOT_TOKEN.encode(), ('manual-refund-review-v1:' + encoded).encode(), hashlib.sha256).hexdigest()
+    return encoded + '.' + signature
+
+
+def _check_refund_review(body: RefundConfirmBody, actor: int) -> None:
+    """Bind the final confirmation to the exact first-step review, for five minutes."""
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=503, detail='Секрет проверки Telegram не настроен.')
+    try:
+        encoded, supplied_signature = body.review_token.rsplit('.', 1)
+        signature = hmac.new(BOT_TOKEN.encode(), ('manual-refund-review-v1:' + encoded).encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, supplied_signature):
+            raise ValueError('signature')
+        payload = json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
+        issued_at = payload.pop('issued_at')
+        age = time.time() - issued_at
+        if not 0 <= age <= REFUND_REVIEW_TTL_SECONDS or payload != _refund_review_payload(body, actor):
+            raise ValueError('review expired or changed')
+    except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+        raise HTTPException(status_code=409, detail='Проверка устарела или данные изменились. Повторите первый шаг.') from exc
 
 
 class PromoBody(BaseModel):
@@ -104,6 +172,52 @@ async def decide_withdrawal(program: str, withdrawal_id: int, body: WithdrawalDe
     return {'id': result['id'], 'status': result['status']}
 
 
+@router.get('/admin/api/referrals/funnel')
+async def admin_referral_funnel(admin_id: int = Depends(require_admin)):
+    from services.referral_accounting import funnel_stats
+    return _accounting_plain(await funnel_stats())
+
+
+@router.get('/admin/api/referrals/review')
+async def admin_referral_review(limit: int = 30, offset: int = 0, admin_id: int = Depends(require_admin)):
+    from services.referral_accounting import review_report
+    return _accounting_plain(await review_report(limit=max(1, min(limit, 100)), offset=max(0, min(offset, 100000))))
+
+
+@router.post('/admin/api/referrals/refunds/prepare')
+async def prepare_referral_refund(body: RefundReviewBody, admin_id: int = Depends(require_admin)):
+    from services.referral_accounting import refund_preview
+    try:
+        preview = await refund_preview(body.invoice_id)
+        recorded = next((item for item in preview.get('confirmed_refunds', [])
+                         if item['reference'] == body.reference), None)
+        if recorded and body.amount != Decimal(str(recorded['amount'])):
+            raise ValueError('Этот номер перевода уже записан с другой суммой.')
+        if not recorded and body.amount > Decimal(str(preview['remaining_rub'])):
+            raise ValueError('Сумма превышает остаток фактически оплаченного счёта.')
+        preview = {**preview, 'already_recorded': bool(recorded), 'recorded_refund': recorded}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {'preview': _accounting_plain(preview), 'review_token': _refund_review_token(body, admin_id),
+            'expires_in': REFUND_REVIEW_TTL_SECONDS}
+
+
+@router.post('/admin/api/referrals/refunds/confirm')
+async def confirm_referral_refund(body: RefundConfirmBody, admin_id: int = Depends(require_admin)):
+    from services.referral_accounting import confirm_refund
+    if not body.confirm_transferred:
+        raise HTTPException(status_code=400, detail='Подтвердите, что возврат уже реально выполнен. Заявка на возврат не является переводом.')
+    _check_refund_review(body, admin_id)
+    try:
+        result = await confirm_refund(admin_id, body.invoice_id, body.amount, body.reference, body.note)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info('Manual refund recorded: actor=%s invoice=%s amount=%s', admin_id, body.invoice_id, body.amount)
+    return _accounting_plain(result)
+
+
 def _utc_naive(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
@@ -115,6 +229,17 @@ def _plain(value):
         return [_plain(item) for item in value]
     if hasattr(value, "items"):
         return {key: _plain(item) for key, item in value.items()}
+    return value
+
+
+def _accounting_plain(value):
+    # Preserve ruble cents exactly in this API; browsers may format the strings.
+    if isinstance(value, Decimal):
+        return format(value, '.2f')
+    if isinstance(value, (list, tuple)):
+        return [_accounting_plain(item) for item in value]
+    if hasattr(value, 'items'):
+        return {key: _accounting_plain(item) for key, item in value.items()}
     return value
 
 

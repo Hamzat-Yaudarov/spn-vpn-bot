@@ -11,6 +11,7 @@ from handlers.start import (
     news_channel_chat,
     send_news_channel_offer,
     show_main_menu,
+    show_pending_referral_entry,
 )
 from services.image_handler import edit_text_with_photo
 from services.mobile_auth import approve_challenge, pending_challenge_for_user
@@ -54,7 +55,7 @@ async def process_accept_terms(callback: CallbackQuery, state: FSMContext):
             pending_challenge.get("device_name"),
         )
         await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
-    else:
+    elif not await show_pending_referral_entry(callback.message, tg_id, callback.bot):
         await show_main_menu(callback.message, callback.from_user.id)
 
 
@@ -72,7 +73,8 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
 
     if not await db.needs_news_channel_onboarding(tg_id):
         await state.clear()
-        await show_main_menu(callback.message, tg_id)
+        if not await show_pending_referral_entry(callback.message, tg_id, callback.bot):
+            await show_main_menu(callback.message, tg_id)
         return
 
     try:
@@ -107,7 +109,8 @@ async def process_check_news_channel(callback: CallbackQuery, state: FSMContext)
         return
 
     await state.clear()
-    await show_main_menu(callback.message, tg_id, welcome=True)
+    if not await show_pending_referral_entry(callback.message, tg_id, callback.bot):
+        await show_main_menu(callback.message, tg_id, welcome=True)
 
     pending_challenge = await pending_challenge_for_user(tg_id)
     if pending_challenge:

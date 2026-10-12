@@ -1,5 +1,7 @@
 import logging
 import html
+from uuid import uuid4
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -39,7 +41,8 @@ from services.connection_instructions import (
     connection_app_url,
 )
 from services.payment_summary import build_payment_success_summary
-from services.payment_reconciliation import reconcile_user_pending_payments
+from services.payment_reconciliation import reconcile_payment, reconcile_user_pending_payments
+from services import referral_accounting
 from services.custom_emoji import semantic_button
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
@@ -1545,6 +1548,8 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
 
     tariff = TARIFFS[tariff_code]
     pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"])
+    wallet_request_key = uuid4().hex
+    await state.update_data(wallet_request_key=wallet_request_key, wallet_amount=str(pricing['price']))
     if purchase_mode == "renew" and target_slot_number:
         purchase_text = f"Продление подписки №{target_slot_number}"
     elif target_slot_number:
@@ -1555,7 +1560,7 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     keyboard = [
         [semantic_button(text="💳 Банковская карта", callback_data="pay_yookassa", style="success")],
         [semantic_button(text="💎 CryptoBot", callback_data="pay_cryptobot", style="success")],
-        [semantic_button(text="💰 Реферальный баланс", callback_data="pay_referral_balance", style="success")],
+        [semantic_button(text="💰 Реферальный баланс", callback_data=f"pay_referral_balance:{wallet_request_key}", style="success")],
     ]
     keyboard.append([semantic_button(
         text="← Назад",
@@ -1732,179 +1737,73 @@ async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data == "pay_referral_balance")
+@router.callback_query((F.data == "pay_referral_balance") | F.data.startswith("pay_referral_balance:"))
 async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContext):
-    """Оплатить подписку с баланса рефералов."""
+    """Resume one durable, owned wallet order; never issue before reserving money."""
     tg_id = callback.from_user.id
     data = await state.get_data()
-    tariff_code = data.get("tariff_code")
-
-    if not tariff_code:
-        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
-        await state.clear()
-        return
-
-    tariff = TARIFFS[tariff_code]
-    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
-
-    if not await db.acquire_user_lock(tg_id):
-        await callback.answer("Подождите несколько секунд ⏳", show_alert=True)
-        return
-
+    request_key = callback.data.partition(':')[2] or data.get('wallet_request_key')
     try:
-        stats = await db.get_referral_stats(tg_id)
-        referral_balance = stats["current_balance"]
-
-        if referral_balance < amount:
-            missing = amount - referral_balance
-            await callback.answer(
-                f"Недостаточно денег на балансе.\n\n"
-                f"Ваш баланс: {referral_balance:.2f} ₽\n"
-                f"Стоимость подписки: {amount:.2f} ₽\n"
-                f"Не хватает: {missing:.2f} ₽",
-                show_alert=True,
-            )
-            return
-
-        subscription, purchase_mode = await _get_or_create_target_subscription_for_direct_flow(tg_id, data)
-        if not subscription:
-            await callback.answer("Не удалось определить целевую подписку", show_alert=True)
-            return
-
-        connector = aiohttp.TCPConnector()
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            plan_kind = subscription.get("plan_kind") or tariff.get("kind", "regular")
-            squad_uuid = REGULAR_SQUAD_UUID if plan_kind == "regular" else BYPASS_SQUAD_UUID
-            now = datetime.utcnow()
-            traffic_state = build_traffic_period_state(subscription, plan_kind, now)
-            active_device_addons = await db.get_active_device_addon_count(subscription['id'])
-            device_limit = effective_device_limit(plan_kind, active_device_addons)
-            traffic_limit_bytes = traffic_state.limit_bytes
-            remna_username = subscription.get("remnawave_username") or _build_new_remnawave_username(
-                tg_id,
-                plan_kind,
-                subscription.get('type_index') or subscription['id'],
-            )
-            uuid, username = await remnawave_get_or_create_user(
-                session,
-                tg_id,
-                tariff["days"],
-                extend_if_exists=purchase_mode == "renew" and bool(subscription.get("remnawave_uuid")),
-                remna_username=remna_username,
-                traffic_limit_bytes=traffic_limit_bytes,
-                traffic_limit_strategy="NO_RESET",
-                active_internal_squads=[squad_uuid],
-                hwid_device_limit=device_limit,
-                telegram_id=tg_id,
-            )
-
-            if not uuid:
-                await callback.answer("Не удалось получить доступ. Попробуйте позже.", show_alert=True)
+        order = await referral_accounting.get_balance_purchase(tg_id, request_key) if request_key else None
+        if not order:
+            tariff_code = data.get('tariff_code')
+            if tariff_code not in TARIFFS or (
+                ':' in callback.data and request_key != data.get('wallet_request_key')
+            ):
+                await callback.answer('Этот экран устарел. Выберите подписку и тариф заново.', show_alert=True)
                 return
-
-            sub_url = await remnawave_get_subscription_url(session, uuid)
-            if not sub_url:
-                logging.warning(f"Failed to get subscription URL for {uuid}")
-
-        existing_subscription = subscription.get("subscription_until")
-        if existing_subscription and existing_subscription > now:
-            new_until = existing_subscription + timedelta(days=tariff["days"])
-        else:
-            new_until = now + timedelta(days=tariff["days"])
-
-        connector = aiohttp.TCPConnector()
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            should_reset_traffic_now = (
-                traffic_state.enabled
-                and not traffic_state.was_active
-                and bool(uuid)
-                and (purchase_mode == "renew" or bool(subscription.get("remnawave_uuid")))
+            tariff = TARIFFS[tariff_code]
+            quoted = data.get('wallet_amount')
+            if quoted is None:  # Compatibility for a checkout opened before this update.
+                quoted = (await current_price(tariff['price'], product_type='subscription', code=tariff_code, plan_kind=tariff['kind']))['price']
+            amount = referral_accounting.money(quoted)
+            stats = await db.get_referral_stats(tg_id)
+            available = Decimal(str(stats['current_balance']))
+            if available < amount:
+                await callback.answer(
+                    f'Недостаточно денег на балансе.\n\nВаш баланс: {available:.2f} ₽\n'
+                    f'Стоимость подписки: {amount:.2f} ₽\nНе хватает: {amount - available:.2f} ₽',
+                    show_alert=True,
+                )
+                return
+            if not request_key:
+                # An old generic button has no durable idempotency identity.
+                # Refresh its checkout instead of issuing two orders on racing clicks.
+                await callback.answer('Выберите тариф заново — этот экран устарел.', show_alert=True)
+                return
+            mode = data.get('purchase_mode', 'new')
+            slot = data.get('target_slot_number')
+            if mode == 'new' and slot is None:
+                slot = data.get('type_index')
+            order = await referral_accounting.reserve_balance_purchase(
+                tg_id, request_key, tariff_code, amount, purchase_mode=mode,
+                subscription_id=data.get('target_subscription_id'), target_slot_number=slot,
             )
-            if should_reset_traffic_now:
-                reset_ok = await remnawave_reset_user_traffic(session, uuid)
-                if reset_ok:
-                    logging.info(
-                        "Traffic reset immediately after reactivating expired bypass subscription %s",
-                        subscription["id"],
-                    )
-                else:
-                    logging.warning(
-                        "Immediate traffic reset failed for reactivated subscription %s; queued retry",
-                        subscription["id"],
-                    )
-                    traffic_state.reset_at = now
-                    traffic_state.last_known_used_bytes = int(subscription.get("last_known_used_traffic_bytes") or 0)
-
-            if not await remnawave_set_subscription_expiry(session, uuid, new_until):
-                logging.warning(f"Failed to sync Remnawave expiry for referral balance subscription {subscription['id']}")
-
-        await db.update_subscription_record(
-            subscription['id'],
-            uuid,
-            username,
-            new_until,
-            squad_uuid,
-        )
-        await db.db_execute(
-            """
-            UPDATE subscriptions
-            SET plan_kind = $1,
-                generation = 'v2',
-                is_visible = TRUE,
-                is_renewable = TRUE,
-                traffic_enabled = $2,
-                base_traffic_bytes = $3,
-                carried_traffic_bytes = $4,
-                current_paid_traffic_bytes = $5,
-                current_period_limit_bytes = $6,
-                traffic_reset_at = $7,
-                hwid_device_limit = $8,
-                last_known_used_traffic_bytes = $9,
-                last_traffic_sync_at = now(),
-                purchase_days = $10
-            WHERE id = $11
-            """,
-            (
-                plan_kind,
-                traffic_state.enabled,
-                traffic_state.base_bytes,
-                traffic_state.carried_bytes,
-                traffic_state.paid_bytes,
-                traffic_limit_bytes,
-                traffic_state.reset_at,
-                device_limit,
-                traffic_state.last_known_used_bytes,
-                tariff["days"],
-                subscription['id'],
-            )
-        )
-        await db.spend_referral_balance_for_subscription(tg_id, amount, tariff_code)
-
-        remaining_balance = referral_balance - amount
+        if order['status'] == 'cancelled':
+            await callback.answer('Эта оплата отменена. Выберите тариф заново.', show_alert=True)
+            return
+        await callback.answer('Проверяю оплату…')
+        result = await reconcile_payment(callback.bot, order['invoice_id'], expected_tg_id=tg_id)
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            *([] if result.status == 'paid' else [[semantic_button(
+                text='↻ Проверить снова', callback_data=f'pay_referral_balance:{request_key}', style='primary')]]),
             [semantic_button(text="🔐 Мои подписки", callback_data="my_subscriptions", style="primary")],
-            [semantic_button(text="🏠 Главное меню", callback_data="back_to_menu", style="primary")],
+            [semantic_button(text='← Заработать', callback_data='earn', style='primary')],
         ])
-
-        text = (
-            f"✅ <b>{_subscription_name(subscription)} оплачена с бонусного баланса!</b>\n\n"
-            f"Подписка: {_tariff_display_name(tariff)}\n"
-            f"Срок: {tariff['days']} дней\n"
-            f"Списано: {amount} ₽\n"
-            f"Остаток баланса: {remaining_balance:.2f} ₽\n\n"
-            f"<b>Ваш ключ:</b>\n{sub_url or 'Ошибка получения ссылки'}"
-        )
-
+        text = ('✅ <b>Подписка оплачена с реферального баланса.</b>\n\nОткройте «Мои подписки», чтобы подключиться.'
+                if result.status == 'paid' else
+                '⏳ <b>Оплата сохранена.</b>\n\nСумма зарезервирована. Активация повторится автоматически — платить ещё раз не нужно.')
         await edit_text_with_photo(callback, text, kb, "Оплати")
         await state.clear()
-
-    except Exception as e:
-        logging.error(f"Referral balance payment error: {e}", exc_info=True)
-        await callback.answer("Ошибка при оплате с баланса рефералов", show_alert=True)
-    finally:
-        await db.release_user_lock(tg_id)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+    except Exception as exc:
+        logger.error('Wallet order pending for user %s: %s', tg_id, type(exc).__name__)
+        await edit_text_with_photo(callback, 'Не удалось завершить проверку. Если оплата сохранена, бот повторит активацию автоматически.',
+            InlineKeyboardMarkup(inline_keyboard=[
+                *([[semantic_button(text='↻ Проверить снова', callback_data=f'pay_referral_balance:{request_key}', style='primary')]] if request_key else []),
+                [semantic_button(text='← Заработать', callback_data='earn', style='primary')],
+            ]), 'Оплати')
 
 
 @router.callback_query(F.data == "check_payment")

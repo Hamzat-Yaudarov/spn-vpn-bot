@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111f">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Продлить подписку — Way SPN</title>
+    <link rel="stylesheet" href="/site/assets/renew.css?v=20261005">
+    <script src="/site/assets/renew.js?v=20261005" defer></script>
+  </head>
+  <body>
+    <main class="renew-shell">
+      <header class="brand"><span class="brand-mark">S</span><b>Way SPN</b></header>
+      <section class="renew-card" aria-labelledby="page-title">
+        <p class="eyebrow">Ваша подписка</p>
+        <h1 id="page-title">Продлить подписку</h1>
+        <p id="loading" class="muted" role="status">Проверяем подписку…</p>
+        <div id="content" hidden>
+          <div class="subscription-card">
+            <b id="subscription-name"></b>
+            <span id="subscription-until" class="muted"></span>
+          </div>
+          <form id="renew-form">
+            <fieldset>
+              <legend>Выберите срок</legend>
+              <div id="tariffs" class="tariff-grid"></div>
+            </fieldset>
+            <div class="total"><span>К оплате</span><b id="total"></b></div>
+            <button id="pay-button" class="primary" type="submit">Перейти к оплате</button>
+            <p class="note">Продлится именно эта подписка. Настройки в приложении останутся прежними.</p>
+          </form>
+        </div>
+        <div id="payment-status" class="status" role="status" hidden></div>
+        <div id="error" class="error" role="alert" hidden></div>
+        <button id="retry-button" class="secondary" type="button" hidden>Проверить ещё раз</button>
+        <p id="success" class="success" role="status" hidden></p>
+        <p id="success-note" class="note" hidden>Можно вернуться в приложение и обновить подписку.</p>
+        <noscript><p class="error">Включите JavaScript в браузере, чтобы продлить подписку.</p></noscript>
+      </section>
+      <footer>
+        <a id="support-link" hidden>Поддержка</a>
+        <a id="agreement-link" target="_blank" rel="noopener noreferrer" hidden>Условия использования</a>
+      </footer>
+    </main>
+  </body>
+</html>

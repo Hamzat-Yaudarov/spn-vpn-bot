@@ -15,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from config import (
     ADMIN_ID,
+    ADMIN_PANEL_URL,
     BYPASS_HWID_DEVICE_LIMIT,
     BYPASS_SQUAD_UUID,
     DEFAULT_SQUAD_UUID,
@@ -109,6 +110,7 @@ async def admin_help(message: Message):
         "• <code>/emoji_ids</code> — показать ID премиум-эмодзи из сообщения.\n"
         "• <code>/enable_collab ТГ_ИД %</code> — включить партнёрство: 15, 20, 25 или 30%.\n"
         "• <code>/stats</code> — статистика бота.\n\n"
+        "• <code>/referral_stats</code> — реферальная воронка и переход к ручной сверке.\n\n"
         "Подсказка: ID подписки удобнее брать из веб-админки."
     )
 
@@ -1507,6 +1509,39 @@ async def admin_stats(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка при получении статистики: {str(e)[:100]}")
         logger.error(f"Error getting stats for admin {admin_id}: {e}")
+
+
+@router.message(Command("referral_stats"))
+async def admin_referral_stats(message: Message):
+    """Read-only referral outcomes; refund confirmations remain two-step in the panel."""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Эта команда доступна только администратору")
+        return
+    from services.referral_accounting import funnel_stats
+    try:
+        data = await funnel_stats()
+        await message.answer(
+            "📊 <b>Реферальная воронка</b>\n\n"
+            f"Открытия кабинета: <b>{int(data.get('views', 0))}</b>\n"
+            f"Уникальных открывших: <b>{int(data.get('unique_viewers', 0))}</b>\n"
+            f"Регистрации по приглашению: <b>{int(data.get('attributed_registrations', 0))}</b>\n"
+            f"Первые оплаты подписки: <b>{int(data.get('first_payments', 0))}</b>\n"
+            f"Повторные оплаты подписки: <b>{int(data.get('repeat_payments', 0))}</b>\n\n"
+            f"Начислено по связанным счетам: <b>{data.get('credited_earnings', 0):.2f} ₽</b>\n"
+            f"Списано за возвраты: <b>{data.get('reversed_earnings', 0):.2f} ₽</b>\n"
+            f"Оплачено с баланса: <b>{data.get('wallet_spend', 0):.2f} ₽</b>\n"
+            f"Выплачено деньгами: <b>{data.get('cash_payouts', 0):.2f} ₽</b>\n"
+            f"Старых непривязанных начислений: <b>{int(data.get('unlinked_legacy_earnings', 0))}</b>\n\n"
+            "Открытия и связанные оплаты — с запуска нового учёта; регистрации, расходы и выплаты — за всё время. "
+            "Это разные счётчики, не готовая конверсия одной группы.\n\n"
+            "Сверка и учёт уже выполненных возвратов: раздел «Рефералы» в админ-панели. Кнопки не переводят деньги.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Админ-панель", web_app=WebAppInfo(url=ADMIN_PANEL_URL))
+            ]]),
+        )
+    except Exception:
+        logger.exception('Admin %s failed to read referral funnel', message.from_user.id)
+        await message.answer("❌ Не удалось получить реферальную статистику. Проверьте журнал и миграцию учёта.")
 
 
 @router.message(Command("send", "sms"))

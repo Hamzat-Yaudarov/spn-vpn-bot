@@ -75,12 +75,16 @@ class Bridge:
     async def execute(self, sql, *params):
         await self.query(sql, *params)
 
-    def transaction(self):
+    def transaction(self, *, isolation=None):
         bridge = self
+        levels = {None: '', 'read_committed': ' ISOLATION LEVEL READ COMMITTED',
+                  'repeatable_read': ' ISOLATION LEVEL REPEATABLE READ',
+                  'serializable': ' ISOLATION LEVEL SERIALIZABLE'}
+        begin = 'BEGIN' + levels[isolation]
 
         class Transaction:
             async def __aenter__(self):
-                await bridge.execute("BEGIN")
+                await bridge.execute(begin)
 
             async def __aexit__(self, exc_type, *args):
                 await bridge.execute("ROLLBACK" if exc_type else "COMMIT")
@@ -146,7 +150,7 @@ class PostgreSQLRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.issue())
         self.assertEqual(await self.sql.fetchval("SELECT subscription_until FROM subscriptions WHERE is_visible"), reserved["expires_at"])
         self.assertEqual(await self.sql.fetchval("SELECT status FROM payments"), "paid")
-        self.assertEqual(await self.sql.fetchval("SELECT current_period_limit_bytes FROM subscriptions WHERE is_visible"), 200 * GB_BYTES)
+        self.assertEqual(await self.sql.fetchval("SELECT current_period_limit_bytes FROM subscriptions WHERE is_visible"), 300 * GB_BYTES)
         self.assertEqual(await self.sql.fetchval("SELECT remnawave_uuid::text FROM users WHERE tg_id = 123"), LOCAL)
         self.assertTrue(await self.issue())
         self.bot.send_message.assert_awaited_once()
@@ -164,7 +168,7 @@ class PostgreSQLRecoveryTests(unittest.IsolatedAsyncioTestCase):
         first = await self.sql.fetchval("SELECT subscription_until FROM subscriptions")
         self.assertEqual((first - old["subscription_until"]).days, 30)
         self.assertEqual(await self.sql.fetchval("SELECT current_paid_traffic_bytes FROM subscriptions"), 10 * GB_BYTES)
-        self.assertEqual(await self.sql.fetchval("SELECT current_period_limit_bytes FROM subscriptions"), 210 * GB_BYTES)
+        self.assertEqual(await self.sql.fetchval("SELECT current_period_limit_bytes FROM subscriptions"), 310 * GB_BYTES)
         self.assertTrue(await self.issue())
         self.assertEqual(await self.sql.fetchval("SELECT subscription_until FROM subscriptions"), first)
         self.reset.assert_not_awaited()
@@ -178,6 +182,12 @@ class PostgreSQLRecoveryTests(unittest.IsolatedAsyncioTestCase):
             INSERT INTO payments (tg_id, tariff_code, amount, provider, invoice_id, subscription_id)
             VALUES (123, 'bypass_1m', 300, 'yookassa', 'other', $1)
         """, sid)
-        self.assertFalse(await self.issue())
-        self.remote.assert_not_awaited()
-        self.assertEqual(await self.sql.fetchval("SELECT count(*) FROM payment_subscription_activations"), 0)
+        # The confirmed invoice must use a different free index, not steal an
+        # existing placeholder committed to another invoice or lose payment.
+        self.assertTrue(await self.issue())
+        target = await self.sql.fetchrow("SELECT * FROM payment_subscription_activations WHERE invoice_id='invoice-1'")
+        self.assertNotEqual(target['subscription_id'], sid)
+        self.assertEqual(await self.sql.fetchval('SELECT type_index FROM subscriptions WHERE id=$1', target['subscription_id']), 2)
+        self.assertEqual(await self.sql.fetchval("SELECT subscription_id FROM payments WHERE invoice_id='other'"), sid)
+        self.assertIsNone(await self.sql.fetchval('SELECT remnawave_uuid FROM subscriptions WHERE id=$1', sid))
+        self.assertEqual(await self.sql.fetchval('SELECT count(*) FROM subscriptions'), 2)

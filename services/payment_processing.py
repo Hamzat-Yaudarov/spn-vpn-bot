@@ -214,46 +214,21 @@ async def process_paid_payment(
                 logger.exception("Legacy subscription mirror update failed for user %s", tg_id)
             await _cancel_reactivation_safely(bot, tg_id)
 
+            # Ordinary commissions are already committed with activation.complete.
+            # Internal wallet money is not a fresh external purchase, including
+            # for the legacy partner program.
             try:
-                referrer = await db.get_referrer(tg_id)
-                if referrer and referrer[0]:
-                    referrer_id = referrer[0]
-                    is_first_purchase = await db.check_first_referral_purchase(tg_id, referrer_id)
-                    percentage = 35 if is_first_purchase else 15
-
-                    await db.add_referral_earning(
-                        referrer_id,
-                        tg_id,
-                        tariff_code,
-                        amount,
-                        is_first_purchase=is_first_purchase,
+                partner_result = None
+                if payment_record.get('provider') != 'referral_balance':
+                    partner_result = await db.db_execute(
+                        """
+                        SELECT DISTINCT partner_id FROM partner_referrals
+                        WHERE referred_user_id = $1
+                        LIMIT 1
+                        """,
+                        (tg_id,),
+                        fetch_one=True,
                     )
-
-                    referral_share = amount * percentage / 100
-                    purchase_type = "первую покупку" if is_first_purchase else "повторную покупку"
-                    logger.info(
-                        "Referral earning recorded: %s earned %s₽ from %s (%s: %s₽ × %s%%)",
-                        referrer_id,
-                        referral_share,
-                        tg_id,
-                        purchase_type,
-                        amount,
-                        percentage,
-                    )
-                    await db.mark_first_payment(tg_id)
-            except Exception as e:
-                logger.error("Error processing referral for user %s: %s", tg_id, e)
-
-            try:
-                partner_result = await db.db_execute(
-                    """
-                    SELECT DISTINCT partner_id FROM partner_referrals
-                    WHERE referred_user_id = $1
-                    LIMIT 1
-                    """,
-                    (tg_id,),
-                    fetch_one=True,
-                )
 
                 if partner_result:
                     partner_id = partner_result["partner_id"]
@@ -289,8 +264,13 @@ async def process_paid_payment(
                 if plan_kind == "bypass"
                 else ""
             )
+            wallet_text = (
+                f"Оплачено с реферального баланса: <b>{amount:g} ₽</b>\n"
+                if payment_record.get('provider') == 'referral_balance' else ''
+            )
             text = (
                 f"✅ <b>{_subscription_display_name(subscription)} {action_text}!</b>\n\n"
+                f"{wallet_text}"
                 f"Тариф: <b>{tariff.get('title', tariff_code)}</b>\n"
                 f"Срок действия: <b>до {new_until.strftime('%d.%m.%Y')}</b>\n"
                 f"Устройства: <b>до {device_count_text(device_limit)}</b>"

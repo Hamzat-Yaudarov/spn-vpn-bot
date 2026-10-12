@@ -1,14 +1,13 @@
-"""Shared referral copy and validation; no network or database side effects."""
+"""Shared referral copy, current price illustrations and input validation."""
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 import re
 
 MIN_WITHDRAWAL = Decimal('1500')
 MIN_WITHDRAWAL_TEXT = '1 500 ₽'
-SHARE_TEXT = (
-    'Попробуй Way SPN — VPN с подключением через Telegram.\n'
-    'Если купишь подписку по моей ссылке, я получу бонус.'
-)
+SHARE_TEXT = 'Лучший VPN:'
+# Compatibility copy for integrations importing RULES; bot screens use build_rules
+# with prices from the same active discounts as the subscription checkout.
 RULES = (
     '1. Отправьте другу свою ссылку.\n'
     '2. Друг впервые открывает бота по ней и покупает подписку.\n'
@@ -25,6 +24,73 @@ RULES = (
     'Выплату отправим после проверки заявки.'
 )
 STATUSES = {'pending': 'Проверяем заявку', 'completed': 'Выплачено', 'rejected': 'Отклонено — деньги снова на балансе'}
+ENTRY_INTENTS = frozenset({'earn', 'earn_spend', 'earn_withdraw'})
+
+
+def pricing_examples(discounts=None) -> list[dict]:
+    """Monthly illustrations, never an alternate pricing/commission policy."""
+    from config import TARIFFS
+    from services.discounts import calculate_discounted_price
+    from services.referral_accounting import calculate_share
+
+    examples = []
+    for code, tariff in TARIFFS.items():
+        if tariff.get('days') != 30:
+            continue
+        price = calculate_discounted_price(
+            tariff['price'], discounts or [], product_type='subscription',
+            code=code, plan_kind=tariff.get('kind'),
+        )
+        examples.append({
+            'tariff_code': code,
+            'title': tariff['title'],
+            'price': price['price'],
+            'original_price': price['original_price'],
+            'first_commission': float(calculate_share(price['price'], first=True)),
+            'repeat_commission': float(calculate_share(price['price'], first=False)),
+        })
+    return examples
+
+
+async def current_pricing_examples() -> list[dict]:
+    import database as db
+    return pricing_examples(await db.get_active_discounts())
+
+
+def _rub(value) -> str:
+    amount = Decimal(str(value)).quantize(Decimal('0.01'))
+    return f'{amount:f}'.rstrip('0').rstrip('.') if amount % 1 else str(int(amount))
+
+
+def build_rules(examples=()) -> str:
+    """Short Telegram-caption rules with actual currently available prices."""
+    lines = [
+        '1. Отправьте другу свою ссылку.',
+        '2. Друг впервые регистрируется в боте по ней и покупает подписку.',
+        '3. Получайте деньги с его покупок и продлений.\n',
+        '<blockquote><b>35%</b> — с первой покупки друга\n'
+        '<b>15%</b> — с его следующих покупок</blockquote>\n',
+    ]
+    if examples:
+        lines.append('<b>Примеры с текущих месячных цен</b>')
+        for example in examples:
+            lines.append(
+                f'Оплата {_rub(example["price"])} ₽ → '
+                f'<b>{_rub(example["first_commission"])} ₽</b> вам; '
+                f'следующая — <b>{_rub(example["repeat_commission"])} ₽</b>.'
+            )
+        lines.append('')
+    lines.extend([
+        'Процент — от фактически оплаченной суммы, в том числе со скидкой.\n',
+        'Покупки за реферальный баланс не участвуют.\n',
+        '• Оплатить свою подписку — достаточно её стоимости.',
+        f'• Вывести через СБП или USDT — от <b>{MIN_WITHDRAWAL_TEXT}</b>.',
+        'Выплату отправим после проверки заявки.\n',
+        'Учитывается только первая регистрация по ссылке. '
+        'Уже зарегистрированного пользователя перепривязать нельзя. '
+        'Без покупки и за самоприглашение начислений нет.',
+    ])
+    return '\n'.join(lines)
 
 
 def referral_link(username: str, user_id: int) -> str:

@@ -48,6 +48,7 @@ from services.discounts import calculate_discounted_price
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 from admin_web import router as admin_router
 from customer_web import router as customer_router
+from subscription_renewal import router as renewal_router
 from mobile_api import public_router as mobile_public_router, router as mobile_router
 
 
@@ -67,6 +68,7 @@ if SITE_STATIC_DIR.exists():
 
 app.include_router(admin_router)
 app.include_router(customer_router)
+app.include_router(renewal_router)
 app.include_router(mobile_router)
 app.include_router(mobile_public_router)
 
@@ -75,7 +77,7 @@ app.include_router(mobile_public_router)
 async def no_cache_miniapp(request: Request, call_next):
     response = await call_next(request)
     if (
-        request.url.path in {"/", "/account", "/login", "/register", "/app", "/admin"}
+        request.url.path in {"/", "/account", "/login", "/register", "/renew", "/app", "/admin"}
         or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/"))
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -94,6 +96,7 @@ def set_bot(bot):
     """Установить экземпляр бота для отправки уведомлений"""
     global _bot
     _bot = bot
+    app.state.bot = bot
     logger.info("✅ Bot instance set for webhook processing")
     if _bot is None:
         logger.error("⚠️ Bot instance is None! Webhooks will not work!")
@@ -392,7 +395,10 @@ async def miniapp_referral(request: Request):
     user = await _miniapp_user(request)
     tg_id = int(user["id"])
     from services import referral_store
-    from services.referral_program import MIN_WITHDRAWAL, SHARE_TEXT
+    from services.referral_program import MIN_WITHDRAWAL, SHARE_TEXT, current_pricing_examples
+    if request.query_params.get('view') == '1':
+        from services.referral_accounting import record_view
+        await record_view(tg_id, 'miniapp')
     stats = await db.get_referral_stats(tg_id)
     history = await referral_store.history(tg_id, limit=20)
     bot_username = (await _bot.get_me()).username if _bot else "WaySPN_robot"
@@ -401,8 +407,16 @@ async def miniapp_referral(request: Request):
         "minimum_withdrawal": int(MIN_WITHDRAWAL),
         "share_text": SHARE_TEXT,
         "bot_earning_url": f"https://t.me/{bot_username}?start=earn",
+        "earning_actions": {
+            "home": f"https://t.me/{bot_username}?start=earn",
+            "spend": f"https://t.me/{bot_username}?start=earn_spend",
+            "withdraw": f"https://t.me/{bot_username}?start=earn_withdraw",
+        },
+        "pricing_examples": await current_pricing_examples(),
         "history": [{**row, "amount": float(row["amount"]), "created_at": row["created_at"].isoformat() + "Z"} for row in history],
         "active_referrals": stats["active_referrals"],
+        "registered_referrals": stats.get("registered_referrals", 0),
+        "refunded_amount": float(stats.get("refunded_amount", 0)),
         "total_earned": float(stats["total_earned"]),
         "total_withdrawn": float(stats["total_withdrawn"]),
         "current_balance": float(stats["current_balance"]),

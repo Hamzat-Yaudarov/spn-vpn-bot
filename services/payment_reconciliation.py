@@ -35,6 +35,34 @@ async def _provider_state(payment) -> tuple[str, object | None]:
     provider = payment.get("provider")
     invoice_id = str(payment["invoice_id"])
 
+    if provider == 'referral_balance':
+        # Only a server-created, funded reservation is authorization to issue
+        # access. A user-supplied provider name or UI success is never enough.
+        from services.referral_accounting import money
+        pool = await db.get_pool()
+        async with pool.acquire() as conn:
+            hold = await conn.fetchrow('''SELECT r.*,a.subscription_id AS activation_subscription_id,
+                s.tg_id AS activation_owner,s.type_index AS activation_slot
+                FROM referral_wallet_reservations r
+                LEFT JOIN payment_subscription_activations a ON a.invoice_id=r.invoice_id
+                LEFT JOIN subscriptions s ON s.id=a.subscription_id
+                WHERE r.invoice_id=$1 AND r.user_id=$2 AND r.status='held' ''', invoice_id, payment['tg_id'])
+        # Provisioning may have durably selected a new subscription before a
+        # crash. Only that recorded selection, not arbitrary mutable fields,
+        # may fill the original new-order target on the next attempt.
+        expected_sid = (hold.get('activation_subscription_id') or hold['subscription_id']) if hold else None
+        expected_slot = (hold.get('activation_slot') or hold['target_slot_number']) if hold else None
+        if (not hold or hold['tariff_code'] != payment['tariff_code']
+                or money(hold['amount']) != money(payment['amount'])
+                or hold['purchase_mode'] != (payment.get('payment_target') or 'new')
+                or expected_sid != payment.get('subscription_id')
+                or expected_slot != payment.get('target_slot_number')
+                or (hold.get('activation_subscription_id') and hold.get('activation_owner') != payment['tg_id'])
+                or (hold['subscription_id'] and expected_sid != hold['subscription_id'])
+                or (payment.get('payment_kind') or 'subscription') != 'subscription'):
+            return 'unfunded_wallet_order', None
+        return 'paid', hold['amount']
+
     if provider == "yookassa":
         # Local imports avoid a module cycle: provider modules also expose the
         # background loops that call this reconciliation service.

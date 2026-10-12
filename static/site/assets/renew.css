@@ -1,0 +1,39 @@
+:root { color-scheme: dark; --text: #f5f8fb; --muted: #96a9bd; --accent: #7aebbf; --line: rgba(180, 205, 227, .16); }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; min-height: 100vh; color: var(--text); background: radial-gradient(ellipse at top, #152e43, #07111f 65%); font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; }
+button, input { font: inherit; }
+button, a, label { -webkit-tap-highlight-color: transparent; }
+a { color: var(--muted); text-decoration: none; }
+a:hover { color: var(--text); }
+.renew-shell { width: min(520px, 100%); padding: 34px 18px; margin: auto; }
+.brand { display: flex; gap: 12px; align-items: center; margin-bottom: 28px; letter-spacing: .03em; font-size: 20px; }
+.brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: var(--accent); color: #06271d; font-weight: 900; }
+.renew-card { padding: 30px; border: 1px solid var(--line); border-radius: 24px; background: #0d1d30; box-shadow: 0 20px 70px #0003; }
+.eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 13px; }
+h1 { font-size: clamp(24px, 6vw, 30px); margin: 0 0 24px; line-height: 1.2; letter-spacing: -.03em; }
+.muted { color: var(--muted); font-size: 14px; }
+.subscription-card { display: flex; flex-direction: column; gap: 5px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+fieldset { margin: 24px 0 0; padding: 0; border: 0; }
+legend { padding: 0 0 12px; font-size: 15px; font-weight: 650; }
+.tariff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tariff { position: relative; display: flex; gap: 7px; flex-direction: column; padding: 17px 14px; border: 1px solid var(--line); border-radius: 15px; cursor: pointer; }
+.tariff.selected { border-color: var(--accent); background: #7aebbf0b; }
+.tariff input { position: absolute; top: 17px; right: 12px; accent-color: var(--accent); width: 16px; height: 16px; }
+.tariff span { padding-right: 18px; font-size: 14px; }
+.tariff b { font-size: 23px; }
+.tariff s { font-size: 13px; color: var(--muted); }
+.tariff:focus-within, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.total { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 26px 0 18px; }
+.total b { font-size: 25px; }
+button { width: 100%; min-height: 50px; padding: 12px 16px; border: 0; border-radius: 13px; font-weight: 750; cursor: pointer; }
+.primary { background: var(--accent); color: #06271d; }
+.secondary { margin-top: 15px; color: var(--text); background: #ffffff0a; border: 1px solid var(--line); }
+button:disabled { opacity: .6; cursor: wait; }
+.note { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+.error, .status { margin: 18px 0 0; padding: 14px; border-radius: 12px; font-size: 14px; }
+.error { background: #fa7a7a12; color: #ffd1d1; }
+.status { background: #7297ff14; color: #ceddff; }
+.success { color: var(--accent); margin: 14px 0 0; font-size: 18px; font-weight: 650; }
+footer { display: flex; justify-content: center; flex-wrap: wrap; gap: 18px; margin-top: 22px; font-size: 13px; }
+@media (max-width: 380px) { .renew-shell { padding-inline: 12px; } .renew-card { padding: 23px 18px; } .tariff { padding-inline: 11px; } }

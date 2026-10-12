@@ -160,7 +160,7 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
                 labels = _button_texts(edit.await_args.args[2])
                 self.assertIn("💰 Реферальный баланс", labels)
                 buttons = [b for row in edit.await_args.args[2].inline_keyboard for b in row]
-                self.assertEqual(sum(b.callback_data == 'pay_referral_balance' for b in buttons), 1)
+                self.assertEqual(sum((b.callback_data or '').startswith('pay_referral_balance:') for b in buttons), 1)
                 stats.assert_not_awaited()
 
     async def test_insufficient_referral_balance_shows_alert_without_starting_purchase(self):
@@ -170,8 +170,6 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
             state.get_data.return_value = {'tariff_code':'regular_1m', 'purchase_mode':'new'}
             with (
                 patch('handlers.subscription.current_price', new=AsyncMock(return_value={'price':200})),
-                patch('handlers.subscription.db.acquire_user_lock', new=AsyncMock(return_value=True)),
-                patch('handlers.subscription.db.release_user_lock', new=AsyncMock()) as release,
                 patch('handlers.subscription.db.get_referral_stats', new=AsyncMock(return_value={'current_balance':balance})),
                 patch('handlers.subscription._get_or_create_target_subscription_for_direct_flow', new=AsyncMock()) as purchase,
                 patch('handlers.subscription.db.spend_referral_balance_for_subscription', new=AsyncMock()) as spend,
@@ -186,7 +184,6 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
             purchase.assert_not_awaited()
             spend.assert_not_awaited()
             state.clear.assert_not_awaited()
-            release.assert_awaited_once_with(123)
 
 
 class SubscriptionSimplificationTests(unittest.IsolatedAsyncioTestCase):

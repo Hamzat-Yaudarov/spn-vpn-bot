@@ -72,12 +72,12 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_details(method, **details)
 
-    def test_sharing_has_personal_link_and_disclosure(self):
+    def test_sharing_has_personal_link_and_short_copy(self):
         link = referral_link('@WaySPN_robot', 123)
         payload = parse_qs(urlparse(share_link(link)).query)
         self.assertEqual(payload['url'], [link])
         self.assertEqual(payload['text'], [SHARE_TEXT])
-        self.assertIn('я получу бонус', payload['text'][0])
+        self.assertEqual(payload['text'][0], 'Лучший VPN:')
         self.assertNotIn('<blockquote>', payload['text'][0])
 
     def test_screen_actions_and_honest_progress(self):

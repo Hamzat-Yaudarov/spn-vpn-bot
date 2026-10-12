@@ -97,7 +97,7 @@ def normalize_pg_type(pg_type: str) -> str:
 
 
 async def sync_table_schema(conn, table_name: str, expected_columns: dict):
-    """Синхронизировать схему таблицы: добавить недостающие, удалить лишние столбцы"""
+    """Add missing columns; unknown columns require an explicit reviewed migration."""
     try:
         current_columns = await get_table_columns(conn, table_name)
     except Exception as e:
@@ -125,16 +125,12 @@ async def sync_table_schema(conn, table_name: str, expected_columns: dict):
             except Exception as e:
                 logging.warning(f"⚠️ Ошибка при добавлении столбца {table_name}.{col_name}: {e}")
 
-    # Удаляем лишние столбцы (которые есть в таблице но не в expected_columns)
+    # Never silently drop financial/history columns during application startup.
     system_columns = {'id', 'created_at', 'updated_at'}  # Системные столбцы не трогаем
 
     for col_name in current_columns:
         if col_name not in expected_columns and col_name not in system_columns:
-            try:
-                await conn.execute(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS {col_name} CASCADE")
-                logging.info(f"✅ Удалён лишний столбец {table_name}.{col_name}")
-            except Exception as e:
-                logging.warning(f"⚠️ Ошибка при удалении столбца {table_name}.{col_name}: {e}")
+            logging.debug("Preserving unrecognized column %s.%s", table_name, col_name)
 
 
 async def run_migrations():
@@ -164,6 +160,7 @@ async def run_migrations():
                 'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
                 'squad_uuid': {'type': 'UUID', 'nullable': True},
                 'referrer_id': {'type': 'BIGINT', 'nullable': True},
+                'referral_entry_intent': {'type': 'TEXT', 'nullable': True},
                 'tracking_code': {'type': 'TEXT', 'nullable': True},
                 'first_payment': {'type': 'BOOLEAN', 'nullable': False, 'default': 'FALSE'},
                 'referral_count': {'type': 'INT', 'nullable': False, 'default': '0'},
@@ -277,6 +274,7 @@ async def run_migrations():
             }
 
             expected_referral_earnings_columns = {
+                'payment_id': {'type': 'BIGINT', 'nullable': True},
                 'referrer_id': {'type': 'BIGINT', 'nullable': False},
                 'referred_user_id': {'type': 'BIGINT', 'nullable': False},
                 'tariff_code': {'type': 'TEXT', 'nullable': False},
@@ -1165,6 +1163,9 @@ async def run_migrations():
                 REGULAR_HWID_DEVICE_LIMIT,
             )
 
+            # Raise only the included base: keep all paid/carried GB and usage.
+            # Adding the base delta preserves historical extra not fully tracked
+            # in the counters too. Startup finishes before traffic workers run.
             await conn.execute(
                 """
                 UPDATE subscriptions
@@ -1462,28 +1463,53 @@ async def create_user(
     *,
     require_news_channel_onboarding: bool = False,
 ):
-    """Создать или обновить пользователя"""
+    """Create once with immutable first-entry attribution; return whether inserted.
+
+    The unique Telegram ID, not an earlier user_exists() read, decides which
+    concurrent first launch owns attribution. Existing users only update profile.
+    """
     tracking_code = tracking_code.strip().lower() if tracking_code else None
-    await db_execute(
-        """
-        INSERT INTO users (
-            tg_id,
-            username,
-            referrer_id,
-            tracking_code,
-            news_channel_onboarding_required
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (tg_id) DO UPDATE
-        SET username = COALESCE(EXCLUDED.username, users.username),
-            tracking_code = CASE
-                WHEN users.tracking_code IS NULL AND EXCLUDED.tracking_code IS NOT NULL
-                THEN EXCLUDED.tracking_code
-                ELSE users.tracking_code
-            END
-        """,
-        (tg_id, username, referrer_id, tracking_code, require_news_channel_onboarding)
-    )
+    if not isinstance(referrer_id, int) or not 0 < referrer_id <= 9223372036854775807 or referrer_id == tg_id:
+        referrer_id = None
+    result = await db_execute("""
+            INSERT INTO users (tg_id, username, referrer_id, tracking_code,
+                               news_channel_onboarding_required)
+            VALUES ($1, $2, CASE WHEN EXISTS(SELECT 1 FROM users WHERE tg_id=$3)
+                                THEN $3 ELSE NULL END, $4, $5)
+            ON CONFLICT (tg_id) DO UPDATE
+            SET username=COALESCE(EXCLUDED.username, users.username),
+                tracking_code=COALESCE(users.tracking_code, EXCLUDED.tracking_code)
+            RETURNING (xmax = 0) AS inserted
+        """, (tg_id, username, referrer_id, tracking_code, require_news_channel_onboarding), fetch_one=True)
+    return bool(result and result['inserted'])
+
+
+REFERRAL_ENTRY_INTENTS = frozenset({'earn', 'earn_spend', 'earn_withdraw'})
+
+
+async def set_referral_entry_intent(tg_id: int, intent: str):
+    if intent not in REFERRAL_ENTRY_INTENTS:
+        raise ValueError('Неизвестный экран заработка.')
+    await db_execute('UPDATE users SET referral_entry_intent=$2 WHERE tg_id=$1', (tg_id, intent))
+
+
+async def get_referral_entry_intent(tg_id: int):
+    if _pool is None:
+        return None
+    row = await db_execute('SELECT referral_entry_intent FROM users WHERE tg_id=$1', (tg_id,), fetch_one=True)
+    intent = row.get('referral_entry_intent') if row else None
+    return intent if intent in REFERRAL_ENTRY_INTENTS else None
+
+
+async def pop_referral_entry_intent(tg_id: int):
+    if _pool is None:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow('SELECT referral_entry_intent FROM users WHERE tg_id=$1 FOR UPDATE', tg_id)
+        await conn.execute('UPDATE users SET referral_entry_intent=NULL WHERE tg_id=$1', tg_id)
+        intent = row.get('referral_entry_intent') if row else None
+        return intent if intent in REFERRAL_ENTRY_INTENTS else None
 
 
 # ────────────────────────────────────────────────
@@ -2378,6 +2404,40 @@ async def get_payment_by_invoice(invoice_id: str):
         "SELECT * FROM payments WHERE invoice_id = $1 LIMIT 1",
         (invoice_id,),
         fetch_one=True
+    )
+
+
+async def create_renewal_checkout_payment(tg_id: int, subscription, tariff_code: str, amount, invoice_id: str):
+    """Persist retries of one renewal invoice without changing its existing state."""
+    tracking_code = await get_payment_tracking_code(tg_id)
+    await db_execute(
+        """
+        INSERT INTO payments (
+            tg_id, tariff_code, amount, provider, invoice_id, subscription_id,
+            payment_target, target_slot_number, payment_kind, tracking_code
+        )
+        VALUES ($1, $2, $3, 'yookassa', $4, $5, 'renew', $6, 'subscription', $7)
+        ON CONFLICT (invoice_id) DO NOTHING
+        """,
+        (tg_id, tariff_code, amount, str(invoice_id), subscription["id"],
+         subscription.get("type_index"), tracking_code),
+    )
+    return await get_payment_by_invoice(invoice_id)
+
+
+async def get_pending_renewal_for_subscription(subscription_id: int, tg_id: int):
+    """Only expose a pending renewal for the subscription authorized by its link."""
+    return await db_execute(
+        """
+        SELECT invoice_id FROM payments
+        WHERE subscription_id = $1 AND tg_id = $2
+          AND payment_target = 'renew' AND payment_kind = 'subscription'
+          AND provider = 'yookassa' AND status = 'pending'
+          AND refund_requested_at IS NULL
+        ORDER BY id DESC LIMIT 1
+        """,
+        (subscription_id, tg_id),
+        fetch_one=True,
     )
 
 
@@ -4205,127 +4265,44 @@ async def check_first_referral_purchase(referred_user_id: int, referrer_id: int)
 
 
 async def add_referral_without_duplicates(referrer_id: int, referred_user_id: int) -> bool:
+    """Compatibility precheck only; attribution is written solely by create_user.
+
+    Even an existing user with no inviter must never adopt one on a later start.
+    The atomic insert remains authoritative if two first starts race.
     """
-    Добавить реферала с проверками:
-    1. Рефератор не может быть рефералом себе
-    2. Пользователь не может иметь двух рефераторов
-
-    Returns:
-        True если добавлено, False если ошибка или дубликат
-    """
-    # Проверка 1: рефератор не может быть рефералом себе
-    if referrer_id == referred_user_id:
-        logging.warning(f"Referrer {referrer_id} tried to refer themselves")
+    if (not isinstance(referrer_id, int) or not 0 < referrer_id <= 9223372036854775807
+            or referrer_id == referred_user_id):
         return False
-
-    # Проверка 2: пользователь не должен уже иметь рефератора
-    existing_referrer = await db_execute(
-        "SELECT referrer_id FROM users WHERE tg_id = $1 AND referrer_id IS NOT NULL",
-        (referred_user_id,),
-        fetch_one=True
-    )
-
-    if existing_referrer is not None:
-        logging.warning(
-            f"User {referred_user_id} already has a referrer {existing_referrer['referrer_id']}, "
-            f"cannot assign referrer {referrer_id}"
-        )
-        return False
-
-    try:
-        user = await get_user(referred_user_id)
-
-        if user is None:
-            # Для нового пользователя привязка будет записана при create_user(..., referrer_id)
-            return True
-
-        existing_referrer = user.get('referrer_id')
-        if existing_referrer is not None:
-            logging.warning(
-                f"User {referred_user_id} already has a referrer {existing_referrer}, "
-                f"cannot assign referrer {referrer_id}"
-            )
-            return existing_referrer == referrer_id
-
-        await db_execute(
-            """
-            UPDATE users
-            SET referrer_id = $1
-            WHERE tg_id = $2 AND referrer_id IS NULL
-            """,
-            (referrer_id, referred_user_id)
-        )
-
-        return True
-    except Exception as e:
-        logging.error(f"Error checking referral: {e}")
-        return False
+    return bool(await user_exists(referrer_id) and not await user_exists(referred_user_id))
 
 
 async def get_referral_stats(referrer_id: int) -> dict:
-    """
-    Получить полную статистику рефератора
-
-    Returns:
-        Словарь с:
-        - active_referrals: количество активных рефералов
-        - earnings_by_tariff: заработки по каждому тарифу
-        - total_earned: всего заработано
-        - total_withdrawn: всего выведено
-        - current_balance: текущий баланс
-    """
-    # Активные рефералы (те у кого есть хотя бы одна покупка)
-    active_referrals = await db_execute(
-        """
-        SELECT COUNT(DISTINCT referred_user_id) as count
-        FROM referral_earnings
-        WHERE referrer_id = $1
-        """,
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    # Заработок по тарифам
-    earnings = await db_execute(
-        """
-        SELECT
-            tariff_code,
-            COUNT(*) as purchase_count,
-            SUM(referral_share) as total_share
-        FROM referral_earnings
-        WHERE referrer_id = $1
-        GROUP BY tariff_code
-        ORDER BY tariff_code
-        """,
-        (referrer_id,),
-        fetch_all=True
-    )
-
-    # Общий заработок
-    total_earned = await db_execute(
-        "SELECT SUM(referral_share) as total FROM referral_earnings WHERE referrer_id = $1",
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    # Всего выведено/зарезервировано на вывод
-    total_withdrawn = await db_execute(
-        "SELECT SUM(amount) as total FROM referral_withdrawals WHERE referrer_id = $1 AND status IN ('pending', 'completed')",
-        (referrer_id,),
-        fetch_one=True
-    )
-
-    earned = float(total_earned['total'] or 0)
-    withdrawn = float(total_withdrawn['total'] or 0)
-    balance = earned - withdrawn
-
-    return {
-        'active_referrals': active_referrals['count'] if active_referrals else 0,
-        'earnings_by_tariff': earnings or [],
-        'total_earned': earned,
-        'total_withdrawn': withdrawn,
-        'current_balance': balance
-    }
+    """Private aggregate counts and the same ledger used to authorize spending."""
+    from services.referral_accounting import balance_summary
+    pool = await get_pool()
+    async with pool.acquire() as conn, conn.transaction(isolation='repeatable_read'):
+        counts = await conn.fetchrow('''SELECT
+            (SELECT COUNT(*) FROM users WHERE referrer_id=$1 AND tg_id<>$1) AS registered,
+            (SELECT COUNT(*) FROM (
+                SELECT referred_user_id FROM referral_earnings WHERE referrer_id=$1
+                UNION
+                SELECT p.tg_id FROM payments p JOIN users u ON u.tg_id=p.tg_id
+                WHERE u.referrer_id=$1 AND p.tg_id<>$1 AND p.status='paid'
+                  AND p.provider IN ('cryptobot','yookassa') AND p.amount>0
+                  AND COALESCE(p.payment_kind,'subscription')='subscription'
+            ) buyers) AS purchased''', referrer_id)
+        earnings = await conn.fetch('''SELECT tariff_code,COUNT(*) AS purchase_count,
+            SUM(referral_share) AS total_share FROM referral_earnings
+            WHERE referrer_id=$1 GROUP BY tariff_code ORDER BY tariff_code''', referrer_id)
+        ledger = await balance_summary(conn, referrer_id)
+        return {'registered_referrals': int(counts['registered']),
+                'active_referrals': int(counts['purchased']),
+                'earnings_by_tariff': [dict(row) for row in earnings],
+                'total_earned': float(ledger['earned']),
+                'total_withdrawn': float(ledger['withdrawn']),
+                'refunded_amount': float(ledger['reversed']),
+                'held_wallet_amount': float(ledger['held']),
+                'current_balance': float(ledger['available'])}
 
 
 async def create_referral_withdrawal_request(

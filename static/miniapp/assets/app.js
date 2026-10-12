@@ -179,6 +179,7 @@ function resetPurchaseState() {
 }
 
 function switchView(view, options = {}) {
+  const enteringReferral = view === "ref" && state.currentView !== "ref";
   if (options.reset) {
     if (state.currentView === "subs" || view === "subs") resetKeysState();
     if (state.currentView === "buy" || view === "buy") resetPurchaseState();
@@ -189,6 +190,8 @@ function switchView(view, options = {}) {
   document.body.className = `view-${view}-active`;
   state.currentView = view;
   render();
+  // Startup also fetches referral data; only a real tab entry counts as a view.
+  if (enteringReferral) refreshReferral({ recordView: true });
 }
 
 async function load() {
@@ -623,9 +626,16 @@ async function payPrepared(provider) {
 }
 
 
-function openEarningBot() {
-  const url = state.referral?.bot_earning_url;
+function openEarningBot(action = "home") {
+  const r = state.referral;
+  let url = r?.earning_actions?.[action] || r?.bot_earning_url;
   if (!url) { showToast("Не удалось загрузить ссылку. Обновите кабинет."); return; }
+  // Keep action-specific entry working with an older server response too.
+  if (!r?.earning_actions?.[action] && ["spend", "withdraw"].includes(action)) {
+    const fallback = new URL(url);
+    fallback.searchParams.set("start", action === "spend" ? "earn_spend" : "earn_withdraw");
+    url = fallback.toString();
+  }
   if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank", "noopener");
 }
 function shareReferral() {
@@ -634,8 +644,14 @@ function shareReferral() {
   const url = 'https://t.me/share/url?' + new URLSearchParams({url: r.link, text: r.share_text || ''});
   if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank", "noopener");
 }
-async function refreshReferral() {
-  try { state.referral = await api("/miniapp/api/referral"); renderReferral(); }
+function copyReferral() {
+  if (state.referral?.link) copyText(encodeURIComponent(state.referral.link));
+}
+async function refreshReferral({ recordView = false } = {}) {
+  try {
+    state.referral = await api("/miniapp/api/referral" + (recordView ? "?view=1" : ""));
+    if (state.currentView === "ref") renderReferral();
+  }
   catch (error) { showToast(error.message); }
 }
 function renderReferral() {
@@ -645,20 +661,28 @@ function renderReferral() {
   const statuses = {pending: "На рассмотрении", completed: "Выплачено", rejected: "Отклонено — резерв возвращён"};
   const history = (r?.history || []).map(row => {
     let title = 'Начисление за покупку друга', amount = '+' + rub(row.amount);
-    if (row.kind === 'withdrawal') {
-      title = row.detail.startsWith('subscription_') ? 'Оплата своей подписки' : 'Заявка R-' + row.id + ' · ' + (statuses[row.status] || row.status);
+    if (row.kind === 'reversal') {
+      title = 'Корректировка после возврата';
+      amount = '−' + rub(row.amount);
+    } else if (row.kind === 'withdrawal') {
+      title = String(row.detail || '').startsWith('subscription_') ? 'Оплата своей подписки' : 'Заявка R-' + row.id + ' · ' + (statuses[row.status] || row.status);
       amount = rub(row.amount);
     }
     return '<div class="ref-history-row"><span>' + escapeHtml(title) + '<small>' + date(row.created_at) + '</small></span><b>' + escapeHtml(amount) + '</b></div>';
   }).join('');
+  const examples = (r?.pricing_examples || []).map(example =>
+    '<p class="muted">Оплата ' + rub(example.price) + ' → ' + rub(example.first_commission) + ' вам; следующая — ' + rub(example.repeat_commission) + '.</p>'
+  ).join('');
+  const registered = r?.registered_referrals == null ? '—' : Number(r.registered_referrals);
+  const refundNote = Number(r?.refunded_amount || 0) > 0
+    ? '<p class="muted">Учтено возвратов: −' + rub(r.refunded_amount) + '. Доступный баланс уже скорректирован.</p>' : '';
   el("view-ref").innerHTML = '<div class="grid">' +
-    '<div class="section-note bonus-note"><p class="step">Приглашайте друзей</p><p class="title">💰 Зарабатывать</p><p class="muted">35% от первой покупки подписки друга и 15% от повторных — вам.</p></div>' +
-    '<div class="card"><p class="title">Три простых шага</p><ol><li>Отправьте другу свою ссылку.</li><li>Друг впервые запускает бота по ней и покупает подписку.</li><li>Получайте начисления на баланс.</li></ol><p class="muted">С оплаты 300 ₽ — 105 ₽ вам. С повторной оплаты 300 ₽ — 45 ₽. Считаем от фактически оплаченной суммы, с учётом скидок.</p></div>' +
-    '<div class="stats-grid"><div class="stat-card blue"><span>Друзей с покупками</span><b>' + (r?.active_referrals || 0) + '</b></div><div class="stat-card bronze"><span>Всего заработано</span><b>' + rub(r?.total_earned || 0) + '</b></div><div class="stat-card green"><span>Доступно</span><b>' + rub(r?.current_balance || 0) + '</b></div></div>' +
-    '<div class="card link-card"><p class="title">Ваша ссылка</p><div class="keybox">' + escapeHtml(r?.link || '') + '</div><div class="grid"><button class="button green" onclick="shareReferral()">📨 Пригласить друга</button><button class="button blue" onclick="copyText(encodeURIComponent(state.referral.link))">Скопировать ссылку</button></div></div>' +
-    '<div class="card"><p class="title">' + (remaining ? 'До вывода осталось ' + rub(remaining) : 'Можно оформить вывод') + '</p><p class="muted">Вывод через СБП / USDT от ' + rub(minimum) + '. Заявку проверяет администратор. Или оплатите свою подписку в боте, как только хватает на выбранный тариф.</p><div class="grid"><button class="button green" onclick="openEarningBot()">Вывести в боте</button><button class="button blue" onclick="openEarningBot()">Потратить баланс в боте</button></div></div>' +
-    '<div class="card"><p class="title">Последние операции</p>' + (history || '<p class="muted">Начислений и заявок пока нет.</p>') + '<button class="button ghost" onclick="refreshReferral()">Обновить</button><p class="small">Полная история доступна в боте.</p></div>' +
-    '<div class="card"><p class="title">Важно знать</p><p class="muted">Учитываются только новые пользователи, впервые запустившие бота по вашей ссылке. За приглашение без покупки начислений нет. Самоприглашения не учитываются. Делитесь лично, без спама.</p></div></div>';
+    '<div class="section-note bonus-note"><p class="title">💰 Заработать</p><p class="muted">Деньги с покупок и продлений друзей: <b>35%</b> с первой покупки, <b>15%</b> со следующих.</p><p class="title">Доступно: ' + rub(r?.current_balance || 0) + '</p></div>' +
+    '<div class="card link-card"><p class="title">Пригласите друга</p><div class="grid"><button class="button green" onclick="shareReferral()">📨 Пригласить друга</button><button class="button blue" onclick="copyReferral()">Скопировать ссылку</button></div><div class="keybox">' + escapeHtml(r?.link || '') + '</div></div>' +
+    '<div class="stats-grid"><div class="stat-card blue"><span>Зарегистрировались по ссылке</span><b>' + registered + '</b></div><div class="stat-card green"><span>Друзей с покупками</span><b>' + Number(r?.active_referrals || 0) + '</b></div><div class="stat-card bronze"><span>Всего заработано</span><b>' + rub(r?.total_earned || 0) + '</b></div></div>' + refundNote +
+    '<div class="card"><p class="title">' + (remaining ? 'До вывода осталось ' + rub(remaining) : 'Можно оформить вывод') + '</p><p class="muted">Вывод через СБП / USDT от ' + rub(minimum) + ' после проверки заявки. На свою подписку можно потратить сразу, когда хватает на тариф.</p><div class="grid"><button class="button green" onclick="openEarningBot(\'withdraw\')">Вывести в боте</button><button class="button blue" onclick="openEarningBot(\'spend\')">Потратить баланс в боте</button><button class="button ghost" onclick="document.getElementById(\'referral-history\').scrollIntoView({behavior:\'smooth\'})">История</button></div></div>' +
+    '<div class="card"><p class="title">Как это работает</p><ol><li>Отправьте другу свою ссылку.</li><li>Друг впервые регистрируется в боте по ней и покупает подписку — в боте или его MiniApp.</li><li>Получайте деньги с покупок и продлений.</li></ol>' + (examples ? '<p class="small">Примеры с текущих месячных цен</p>' + examples : '') + '<p class="muted">Считаем от фактически оплаченной суммы, в том числе со скидкой. Покупки за реферальный баланс не участвуют. Без покупки начислений нет. Уже зарегистрированного пользователя перепривязать нельзя. Самоприглашения не учитываются. Делитесь лично, без спама.</p></div>' +
+    '<div class="card" id="referral-history"><p class="title">Последние операции</p>' + (history || '<p class="muted">Начислений и заявок пока нет.</p>') + '<button class="button ghost" onclick="refreshReferral()">Обновить</button><p class="small">Полная история доступна в боте.</p><button class="button blue" onclick="openEarningBot(\'home\')">Открыть заработок в боте</button></div></div>';
 }
 
 function renderHelp() {

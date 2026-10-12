@@ -1,0 +1,28 @@
+#!/usr/bin/expect -f
+# A password is read with echo disabled, never stored in a file or arguments.
+# Reuse the same private known-hosts file for every connection in this pilot.
+set timeout 180
+set known [lindex $argv 0]
+set mode [lindex $argv 1]
+set rest [lrange $argv 2 end]
+stty -echo
+send_user "SSH password: "
+gets stdin password
+stty echo
+send_user "\n"
+set opts [list -o ControlMaster=no -o ControlPath=none -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 -o UserKnownHostsFile=$known -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8]
+if {$mode eq "scp"} {
+    spawn scp {*}$opts {*}$rest
+} elseif {$mode eq "ssh"} {
+    set host [lindex $rest 0]
+    set command [lindex $rest 1]
+    spawn ssh -tt {*}$opts root@$host $command
+} else {
+    unset password
+    error "Expected ssh or scp"
+}
+expect {
+    -re {(?i)password:} {send -- "$password\r"; exp_continue}
+    eof {set status [wait]; set result [lindex $status 3]; send_user "EXIT $result\n"; unset password; exit $result}
+    timeout {catch {close}; catch {wait}; unset password; send_user "TIMEOUT\n"; exit 124}
+}

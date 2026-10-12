@@ -25,6 +25,7 @@ async def create_yookassa_payment(
     tg_id: int,
     *,
     return_url: str | None = None,
+    idempotence_key: str | None = None,
 ) -> dict | None:
     """
     Создать платёж через Yookassa API с retry логикой
@@ -38,6 +39,9 @@ async def create_yookassa_payment(
     Returns:
         Словарь с информацией о платеже или None
     """
+    # Keep the key across retries: a timeout must not create a second invoice.
+    request_key = idempotence_key or str(uuid.uuid4())
+
     async def _create_payment():
         url = f"{YOOKASSA_API_URL}/payments"
         if return_url is None:
@@ -52,7 +56,7 @@ async def create_yookassa_payment(
         credentials = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
         headers = {
             "Authorization": f"Basic {credentials}",
-            "Idempotence-Key": str(uuid.uuid4()),
+            "Idempotence-Key": request_key,
             "Content-Type": "application/json"
         }
 

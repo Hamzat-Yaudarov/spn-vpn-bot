@@ -1,0 +1,47 @@
+{
+  "files": [
+    {
+      "path": "database.py",
+      "base_sha256": "4a7b0fd447a64777ef02797a40155909f9e6351e60d5a5ed39bd4f391ecfe347",
+      "new_sha256": "680e24b143cb2342233eb468577c8f70a0370a1d78de7fb04624e57ed101c358"
+    },
+    {
+      "path": "webhooks.py",
+      "base_sha256": "504642bb575cc51ed2c7de52162a62ad238e06f487c4e07e0ac5987041926908",
+      "new_sha256": "88ab5da44abc5005a6d0342c3ea282fc6e25fa9a634264aafa8e88dd42290822"
+    },
+    {
+      "path": "services/yookassa.py",
+      "base_sha256": "c4f34303390e31d1553fefdbb84bc0ed69e108980740b04bcf198f06a4fa2d1d",
+      "new_sha256": "1a46dc4773395ad9e18d4297c23d23ef95b7d5dfe957baf9a484f1c00aeae2fa"
+    },
+    {
+      "path": "subscription_renewal.py",
+      "base_sha256": null,
+      "new_sha256": "6dc998f5bd799fa919b5c863188cc2c5ea2159d60be4c8ef21db1fa1de3e0e91"
+    },
+    {
+      "path": "static/site/renew.html",
+      "base_sha256": null,
+      "new_sha256": "6cf190dbcf64ac07ca936526c1f49353ff1936dbd2da2b3262dde57aeaea214f"
+    },
+    {
+      "path": "static/site/assets/renew.js",
+      "base_sha256": null,
+      "new_sha256": "fa68c643f42f26757d1f1878230ced25d2bb558372d4c375096d220a7f9c13a3"
+    },
+    {
+      "path": "static/site/assets/renew.css",
+      "base_sha256": null,
+      "new_sha256": "33120d31a47e50fde371f049fb812688e8f6beccefc930ee820ebbc09fc63152"
+    }
+  ],
+  "dependencies": {
+    "config.py": "5f40b8ebfe1ad39facc8a7b15cc27eb5504ea864890068bcfc7d00c56deee8e8",
+    "services/remnawave.py": "1c1f168c015fec57a86fe8a9e69d928dca4660f03e650244698811d31e97fb5f",
+    "services/remnawave_identity.py": "47cfe4e3abe2af4eb5ec03b2ddd566aae891aa22d7e81966e014d0e78112f1f2",
+    "services/payment_reconciliation.py": "b77975ebf0d335581c21c990e8a96f6e5adb318a75e4d7e8df98a4cfee0b34af",
+    "services/payment_activation.py": "e3a5bc6f3516238d2912b20c4dcdb5bcd18c0bd11a12c1672a828f0aa6244887",
+    "services/subscription_sync.py": "9e8d8747e74b2becd9d52dc3f9f988cf9ea000cfdacb3016b27a763109e462ee"
+  }
+}

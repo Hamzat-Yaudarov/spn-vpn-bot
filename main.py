@@ -152,7 +152,9 @@ async def main():
     webhooks.set_bot(bot)
 
     # Список активных задач
-    tasks = [asyncio.create_task(referral_store.run_delivery_loop(bot))]
+    from services.referral_balance_payments import run_recovery_loop
+    tasks = [asyncio.create_task(referral_store.run_delivery_loop(bot)),
+             asyncio.create_task(run_recovery_loop(bot))]
 
     # YooKassa проверяется всегда: webhook даёт мгновенную активацию,
     # а фоновая задача подхватывает платёж, если webhook не дошёл.

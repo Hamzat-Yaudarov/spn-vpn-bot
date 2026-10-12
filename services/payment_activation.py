@@ -183,4 +183,8 @@ async def complete(tg_id, invoice_id, subscription, uuid, username, squad, traff
             device_limit, traffic.last_known_used_bytes, days, notification_time, notification_type, sid, tg_id)
         if not saved:
             raise ActivationError("Подписка удалена или скрыта во время активации")
+        # The commission (or wallet debit) and durable notification must not be
+        # left behind by a crash after the payment is marked paid.
+        from services.referral_accounting import settle_subscription
+        await settle_subscription(conn, payment)
         await conn.execute("UPDATE payments SET status = 'paid', updated_at = now() WHERE invoice_id = $1", invoice_id)

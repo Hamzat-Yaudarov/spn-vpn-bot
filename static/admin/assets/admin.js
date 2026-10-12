@@ -1,5 +1,5 @@
 const state = { section: "dashboard", usersOffset: 0, usersSearch: "", usersTotal: 0, pageSize: 50 };
-const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки", withdrawals: "Выплаты" };
+const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки", withdrawals: "Выплаты", referrals: "Рефералы" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
 const money = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
@@ -34,7 +34,7 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) showAccess(data.detail);
-    throw new Error(data.detail || "Ошибка запроса");
+    throw new Error(Array.isArray(data.detail) ? data.detail.map(item => item.msg).join('; ') : (data.detail || "Ошибка запроса"));
   }
   return data;
 }
@@ -58,6 +58,7 @@ function switchSection(section) {
   if (section === "links") loadLinks();
   if (section === "discounts") loadDiscounts();
   if (section === "withdrawals") loadWithdrawals();
+  if (section === "referrals") loadReferrals();
 }
 
 async function loadDashboard() {
@@ -146,7 +147,10 @@ async function loadWithdrawals() {
     $("withdrawalsTable").innerHTML = d.items.length ? '<table><thead><tr><th>Заявка</th><th>Пользователь</th><th>Сумма и реквизиты</th><th>Статус</th><th>Уведомление</th><th>Решение</th></tr></thead><tbody>' + d.items.map(w => {
       const number = (w.program === 'referral' ? 'R-' : 'P-') + w.id;
       const details = w.withdrawal_type === 'sbp' ? esc(w.bank_name) + '<br>' + esc(w.phone_number) : 'USDT (' + (String(w.usdt_address).startsWith('T') ? 'TRC-20' : 'ERC-20') + ')<br><span class="mono">' + esc(w.usdt_address) + '</span>';
-      const actions = w.status === 'pending' ? '<button class="button small" data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="completed" data-amount="' + esc(w.amount) + '">Перевод выполнен</button> <button class="button small danger" data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="rejected" data-amount="' + esc(w.amount) + '">Отклонить</button>' : esc(w.decision_note || '—');
+      const blocked = w.program === 'referral' && w.status === 'pending' && (w.payout_blocked === true || Number(w.current_available_balance) < 0);
+      const balanceInfo = w.program === 'referral' && w.status === 'pending' && w.current_available_balance != null ? '<p class="muted">Доступный баланс сейчас: ' + money(w.current_available_balance) + '</p>' : '';
+      const warning = blocked ? '<p class="badge off">Выплата заблокирована: отрицательный баланс</p><p class="muted">Не переводите деньги. Отклоните заявку или дождитесь новых начислений.</p>' : '';
+      const actions = w.status === 'pending' ? warning + balanceInfo + '<button class="button small" ' + (blocked ? 'disabled ' : '') + 'data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="completed" data-amount="' + esc(w.amount) + '">Перевод выполнен</button> <button class="button small danger" data-payout="' + esc(w.program) + ':' + w.id + '" data-decision="rejected" data-amount="' + esc(w.amount) + '">Отклонить</button>' : esc(w.decision_note || '—');
       return '<tr><td><b>' + number + '</b><br>' + date(w.created_at, true) + '</td><td>' + esc(w.username || 'Без username') + '<br>' + esc(w.user_id) + '</td><td><b>' + money(w.amount) + '</b><br>' + details + '</td><td>' + esc(payoutStatus[w.status] || w.status) + '</td><td>' + (w.notified_at ? 'Доставлено' : 'В очереди · попыток ' + (w.notification_attempts || 0)) + (w.notification_error ? '<br>' + esc(w.notification_error) : '') + '</td><td>' + actions + '</td></tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">Заявок с таким статусом нет</div>';
     $("withdrawalsPagination").innerHTML = '<button class="button small" data-payout-page="prev" ' + (withdrawalOffset ? '' : 'disabled') + '>Назад</button><span>' + (withdrawalOffset + 1) + '</span><button class="button small" data-payout-page="next" ' + (d.has_more ? '' : 'disabled') + '>Дальше</button>';
@@ -178,6 +182,75 @@ $("withdrawalsTable").addEventListener("click", async e => {
     toast(status === 'completed' ? 'Выплата отмечена' : 'Заявка отклонена, резерв освобождён');
     await loadWithdrawals();
   } catch (error) { toast(error.message, true); button.disabled = false; }
+});
+
+let referralReviewOffset = 0;
+async function loadReferrals() {
+  try {
+    const [d, report] = await Promise.all([api('/referrals/funnel'), api('/referrals/review?limit=30&offset=' + referralReviewOffset)]);
+    const cards = [
+      ['Открытий кабинета (с запуска учёта)', Number(d.views || 0), 'blue'],
+      ['Уникальных открывших', Number(d.unique_viewers || 0), 'blue'],
+      ['Регистраций по приглашению', Number(d.attributed_registrations || 0), 'green'],
+      ['Первых оплат подписки', Number(d.first_payments || 0), 'green'],
+      ['Повторных оплат подписки', Number(d.repeat_payments || 0), 'green'],
+      ['Внешние оплаты подписок', money(d.external_paid_amount), 'gold'],
+      ['Начислено по связанным счетам', money(d.credited_earnings), 'gold'],
+      ['Списано за возвраты', money(d.reversed_earnings), 'gold'],
+      ['Потрачено на свою подписку', money(d.wallet_spend), 'blue'],
+      ['Выплачено деньгами', money(d.cash_payouts), 'blue'],
+      ['Резерв заявок на вывод', money(d.pending_cash_payouts), 'blue'],
+      ['Старых непривязанных начислений', Number(d.unlinked_legacy_earnings || 0), 'gold'],
+    ];
+    $('referralStatsGrid').innerHTML = cards.map(([label, value, cls]) => `<div class="stat-card ${cls}"><span>${esc(label)}</span><b>${value}</b></div>`).join('');
+    const rows = report.items || [];
+    $('referralReviewTable').innerHTML = rows.length ? '<table><thead><tr><th>Проблема</th><th>Счёт / платёж</th><th>Пользователь</th><th>Сумма</th><th>Сверка</th></tr></thead><tbody>' + rows.map(r => `<tr><td>${esc(r.kind || 'Ручная сверка')}</td><td class="mono">${esc(r.invoice_id || 'Нет связи со счётом')}<br>${esc(r.payment_id || r.source_id || '—')}</td><td>${esc(r.buyer_id || r.referrer_id || '—')}</td><td>${money(r.amount)}</td><td>${esc(r.detail || r.reason || 'Проверить вручную; автоматического пересчёта нет.')}</td></tr>`).join('') + '</tbody></table>' : '<div class="empty">Записей для ручной сверки не найдено</div>';
+    $('referralReviewPagination').innerHTML = '<button class="button small" data-review-page="prev" ' + (referralReviewOffset ? '' : 'disabled') + '>Назад</button><span>' + (referralReviewOffset + 1) + '</span><button class="button small" data-review-page="next" ' + (report.has_more ? '' : 'disabled') + '>Дальше</button>';
+  } catch (error) { toast(error.message, true); }
+}
+$('refreshReferrals').addEventListener('click', loadReferrals);
+$('referralReviewPagination').addEventListener('click', event => {
+  const direction = event.target.dataset.reviewPage;
+  if (!direction || event.target.disabled) return;
+  referralReviewOffset = Math.max(0, referralReviewOffset + (direction === 'next' ? 30 : -30));
+  loadReferrals();
+});
+
+let preparedRefund = null;
+let refundSubmitting = false;
+function cancelRefundReview() { preparedRefund = null; $('refundActualTransfer').checked = false; $('confirmRefund').disabled = true; $('refundDialog').close(); }
+$('closeRefundDialog').addEventListener('click', cancelRefundReview);
+$('cancelRefund').addEventListener('click', cancelRefundReview);
+$('refundDialog').addEventListener('cancel', () => { preparedRefund = null; });
+$('refundActualTransfer').addEventListener('change', () => { $('confirmRefund').disabled = refundSubmitting || !preparedRefund || !$('refundActualTransfer').checked; });
+$('refundForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  for (const key of ['invoice_id', 'reference', 'note']) data[key] = data[key].trim();
+  data.amount = data.amount.trim().replace(',', '.');
+  if (!/^\d+(?:\.\d{1,2})?$/.test(data.amount) || Number(data.amount) <= 0) { toast('Введите положительную сумму в рублях, не более двух знаков после запятой.', true); return; }
+  const button = event.target.querySelector('button[type="submit"]');
+  button.disabled = true; preparedRefund = null;
+  try {
+    const review = await api('/referrals/refunds/prepare', {method:'POST', body:JSON.stringify(data)});
+    const p = review.preview;
+    preparedRefund = {...data, review_token:review.review_token};
+    $('refundReviewDetails').innerHTML = `<div class="details-grid"><div class="detail-tile"><span>Invoice ID</span><b class="mono">${esc(data.invoice_id)}</b></div><div class="detail-tile"><span>Фактически оплачено</span><b>${money(p.actual_paid_rub)}</b></div><div class="detail-tile"><span>Уже возвращено</span><b>${money(p.refunded_rub)}</b></div><div class="detail-tile"><span>Остаток для возврата</span><b>${money(p.remaining_rub)}</b></div><div class="detail-tile"><span>${p.already_recorded ? 'Уже записанный перевод' : 'Сейчас учитываем'}</span><b>${money(data.amount)}</b></div><div class="detail-tile"><span>Платёж / пользователь</span><b>${esc(p.payment_id)} / ${esc(p.buyer_id)}</b></div></div><p>Подтверждение перевода: <span class="mono">${esc(data.reference)}</span></p><p>Причина: ${esc(p.recorded_refund?.note || data.note)}</p>${p.already_recorded ? '<p class="muted">Этот перевод уже учтён. Повторная проверка не создаст второй возврат, не изменит исходную причину и не спишет начисление ещё раз.</p>' : ''}${p.manual_review_required ? '<p class="muted">ВНИМАНИЕ: старый счёт без связанного начисления. Возврат можно учесть, но старые начисления не будут пересчитаны автоматически: требуется отдельная ручная сверка.</p>' : ''}`;
+    $('refundActualTransfer').checked = false; $('confirmRefund').disabled = true;
+    $('refundDialog').showModal();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
+$('confirmRefund').addEventListener('click', async () => {
+  if (refundSubmitting || !preparedRefund || !$('refundActualTransfer').checked || $('confirmRefund').disabled) return;
+  refundSubmitting = true; $('confirmRefund').disabled = true;
+  try {
+    const result = await api('/referrals/refunds/confirm', {method:'POST', body:JSON.stringify({...preparedRefund, confirm_transferred:true})});
+    cancelRefundReview(); $('refundForm').reset();
+    $('refundResult').textContent = result.legacy_review_required ? 'Возврат учтён. Старые непривязанные начисления требуют отдельной ручной сверки.' : 'Выполненный возврат учтён; пересчёт применяется только к связанным начислениям. Деньги этим действием не отправлялись.';
+    toast('Выполненный возврат учтён'); await loadReferrals();
+  } catch (error) { toast(error.message, true); }
+  finally { refundSubmitting = false; $('confirmRefund').disabled = !preparedRefund || !$('refundActualTransfer').checked; }
 });
 
 boot();

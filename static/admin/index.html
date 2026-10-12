@@ -27,6 +27,7 @@
           <button class="nav-item" data-section="links">Ссылки</button>
           <button class="nav-item" data-section="discounts">Скидки</button>
           <button class="nav-item" data-section="withdrawals">Выплаты</button>
+          <button class="nav-item" data-section="referrals">Рефералы</button>
         </nav>
         <button id="closeButton" class="nav-item logout">Закрыть</button>
       </aside>
@@ -80,15 +81,31 @@
           <div class="panel table-panel"><div id="discountsTable" class="table-wrap"></div></div>
         </section>
         <section id="section-withdrawals" class="section">
-          <div class="section-head"><div><h2>Заявки на вывод</h2><p class="muted">Переводы выполняются вручную. «Выплачено» — только после реального перевода. При отклонении резерв возвращается на баланс.</p></div></div>
+          <div class="section-head"><div><h2>Заявки на вывод</h2><p class="muted">Переводы выполняются вручную. Перед реальным переводом обновите список и проверьте предупреждения. Показанный баланс — снимок, не гарантия: он может измениться; окончательное решение повторно проверяется под блокировкой. «Выплачено» — только после реального перевода. При отклонении резерв возвращается на баланс.</p></div></div>
           <div class="actions"><select id="withdrawalStatus"><option value="pending">На рассмотрении</option><option value="completed">Выплаченные</option><option value="rejected">Отклонённые</option><option value="all">Все</option></select><button class="button" id="refreshWithdrawals">Обновить</button></div>
           <div class="panel table-panel"><div id="withdrawalsTable" class="table-wrap"></div><div id="withdrawalsPagination" class="pagination"></div></div>
+        </section>
+        <section id="section-referrals" class="section">
+          <div class="section-head"><div><h2>Реферальная воронка</h2><p class="muted">Открытия кабинета → регистрации по приглашению → первые и повторные оплаченные подписки. Открытия и связанные оплаты — с запуска нового учёта; регистрации, расходы и выплаты — за всё время. Это разные счётчики, не готовая конверсия одной группы. Открытие не равно приглашению.</p></div><button id="refreshReferrals" class="button">Обновить</button></div>
+          <div id="referralStatsGrid" class="stats-grid"></div>
+          <div class="section-head"><div><h2>Ручная сверка</h2><p class="muted">Старые начисления без связи со счётом и проблемы учёта. Автоматического пересчёта или доначисления нет.</p></div></div>
+          <div class="panel table-panel"><div id="referralReviewTable" class="table-wrap"></div><div id="referralReviewPagination" class="pagination"></div></div>
+          <div class="section-head"><div><h2>Учесть выполненный возврат</h2><p class="muted">Только после реального возврата денег клиенту. Заявка клиента не является переводом. Здесь нет кнопки отправки денег и вызовов платёжного провайдера. Сумма и лимит — в рублях.</p></div></div>
+          <form id="refundForm" class="panel form-grid">
+            <label class="span-2">Invoice ID<input name="invoice_id" maxlength="160" autocomplete="off" required /></label>
+            <label>Возвращено, ₽<input name="amount" inputmode="decimal" placeholder="160.00" autocomplete="off" required /></label>
+            <label>Номер / ссылка на перевод<input name="reference" minlength="3" maxlength="160" autocomplete="off" required /></label>
+            <label class="span-2">Причина возврата<input name="note" minlength="3" maxlength="500" required /></label>
+            <button class="button" type="submit">Шаг 1 — проверить счёт</button>
+          </form>
+          <p id="refundResult" class="muted" role="status" aria-live="polite"></p>
         </section>
       </main>
     </div>
 
     <dialog id="userDialog" class="dialog"><div class="dialog-head"><div><p class="eyebrow">Пользователь</p><h2 id="dialogTitle"></h2></div><button id="closeDialog" class="icon-button">×</button></div><div id="userDetails"></div></dialog>
+    <dialog id="refundDialog" class="dialog" aria-labelledby="refundDialogTitle"><div class="dialog-head"><div><p class="eyebrow">Шаг 2 — подтверждение</p><h2 id="refundDialogTitle">Записать выполненный возврат</h2></div><button id="closeRefundDialog" class="icon-button" aria-label="Отменить подтверждение возврата">×</button></div><div class="details-body"><div id="refundReviewDetails" style="overflow-wrap:anywhere"></div><p class="muted">Эта операция НЕ переводит деньги. Она фиксирует уже выполненный возврат и корректирует связанные начисления. Данные повторно проверяются при записи.</p><label style="flex-direction:row;align-items:flex-start"><input id="refundActualTransfer" type="checkbox" style="width:20px;height:20px;flex-shrink:0;padding:0;margin:0" /> Я проверил счёт, сумму и подтверждение перевода. Деньги уже реально возвращены клиенту.</label><div class="actions"><button id="confirmRefund" class="button danger" disabled>Учесть выполненный возврат</button><button id="cancelRefund" class="button">Отмена</button></div></div></dialog>
     <div id="toast" class="toast"></div>
-    <script src="/admin/assets/admin.js?v=20261003-referral"></script>
+    <script src="/admin/assets/admin.js?v=20261011-referral-growth"></script>
   </body>
 </html>

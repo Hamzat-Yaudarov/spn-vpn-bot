@@ -7,6 +7,7 @@ import logging
 import database as db
 from config import ADMIN_ID
 from services.referral_program import parse_amount, validate_details, STATUSES
+from services import referral_accounting as accounting
 
 logger = logging.getLogger(__name__)
 TABLES = {
@@ -62,9 +63,12 @@ def admin_notice(program, row, user_id):
 
 
 async def initialize():
+    if isinstance(ADMIN_ID, bool) or not isinstance(ADMIN_ID, int) or ADMIN_ID <= 0:
+        raise ValueError('Для реферальных выплат требуется положительный целочисленный ADMIN_ID.')
     pool = await db.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA)
+        await accounting.initialize(conn)
         # Recover old pending requests too; subscriptions are never payout requests.
         async with conn.transaction():
             for program, (table, owner, _, _) in TABLES.items():
@@ -94,10 +98,14 @@ async def create_request(program, user_id, amount, method, request_key, *, bank=
                 'SELECT agreement_accepted FROM partnerships WHERE tg_id=$1', user_id
             ):
                 raise ValueError('Сначала примите партнёрское соглашение.')
-            earned = await conn.fetchval(f'SELECT COALESCE(SUM({share}),0) FROM {earnings} WHERE {owner}=$1', user_id)
-            reserved = await conn.fetchval(f"SELECT COALESCE(SUM(amount),0) FROM {table} WHERE {owner}=$1 AND status IN ('pending','completed')", user_id)
-            if amount > earned - reserved:
-                raise ValueError(f'Недостаточно средств: доступно {earned - reserved:.2f} ₽. Возможно, уже есть заявка на рассмотрении.')
+            if program == 'referral':
+                available = await accounting.balance(conn, user_id)
+            else:
+                earned = await conn.fetchval(f'SELECT COALESCE(SUM({share}),0) FROM {earnings} WHERE {owner}=$1', user_id)
+                reserved = await conn.fetchval(f"SELECT COALESCE(SUM(amount),0) FROM {table} WHERE {owner}=$1 AND status IN ('pending','completed')", user_id)
+                available = earned - reserved
+            if amount > available:
+                raise ValueError(f'Недостаточно средств: доступно {available:.2f} ₽. Возможно, уже есть заявка на рассмотрении.')
             row = await conn.fetchrow(f'''INSERT INTO {table}({owner},amount,withdrawal_type,bank_name,phone_number,usdt_address)
                 VALUES($1,$2,$3,$4,$5,$6) RETURNING *''', user_id, amount, method, bank or None, phone or None, address or None)
             await conn.execute('INSERT INTO referral_withdrawal_meta(program,withdrawal_id,request_key) VALUES($1,$2,$3)', program, row['id'], request_key)
@@ -109,6 +117,19 @@ async def history(user_id, program='referral', *, offset=0, limit=10):
     table, owner, earnings, share = table_info(program)
     pool = await db.get_pool()
     async with pool.acquire() as conn:
+        if program == 'referral':
+            return [dict(row) for row in await conn.fetch('''SELECT * FROM (
+                SELECT 'earning' AS kind,e.id,e.referral_share AS amount,'credited' AS status,
+                    e.tariff_code AS detail,e.created_at
+                FROM referral_earnings e WHERE e.referrer_id=$1
+                UNION ALL
+                SELECT 'reversal',r.id,r.amount,'confirmed',p.tariff_code,r.created_at
+                FROM referral_earning_reversals r JOIN payments p ON p.id=r.payment_id WHERE r.referrer_id=$1
+                UNION ALL
+                SELECT 'withdrawal',w.id,w.amount,w.status,w.withdrawal_type,w.created_at
+                FROM referral_withdrawals w
+                WHERE w.referrer_id=$1
+            ) h ORDER BY created_at DESC,id DESC,kind LIMIT $2 OFFSET $3''', user_id, limit, offset)]
         return [dict(row) for row in await conn.fetch(f'''
             SELECT * FROM (
                 SELECT 'earning' AS kind,id,{share} AS amount,'credited' AS status,tariff_code AS detail,created_at
@@ -124,17 +145,33 @@ async def list_requests(status='pending', offset=0, limit=30):
         raise ValueError('Неизвестный статус.')
     pool = await db.get_pool()
     async with pool.acquire() as conn:
-        return [dict(r) for r in await conn.fetch('''SELECT w.*,u.username,m.decision_note,m.resolved_at,
-            o.delivered_at AS notified_at,o.attempts AS notification_attempts,o.last_error AS notification_error
-            FROM (
+        return [dict(r) for r in await conn.fetch('''WITH selected AS (
+            SELECT * FROM (
                 SELECT 'referral' AS program,id,referrer_id AS user_id,amount,withdrawal_type,bank_name,phone_number,usdt_address,status,created_at FROM referral_withdrawals
                 UNION ALL
                 SELECT 'partner',id,partner_id,amount,withdrawal_type,bank_name,phone_number,usdt_address,status,created_at FROM partner_withdrawals
-            ) w LEFT JOIN users u ON u.tg_id=w.user_id
+            ) requests WHERE withdrawal_type IN ('sbp','usdt') AND ($1='all' OR status=$1)
+            ORDER BY created_at DESC,program,id DESC LIMIT $2 OFFSET $3
+            ), owners AS (
+                SELECT DISTINCT user_id FROM selected WHERE program='referral' AND status='pending'
+            ), ledger AS (
+                SELECT owners.user_id,
+                    COALESCE((SELECT SUM(referral_share) FROM referral_earnings WHERE referrer_id=owners.user_id),0)
+                    - COALESCE((SELECT SUM(amount) FROM referral_earning_reversals WHERE referrer_id=owners.user_id),0)
+                    - COALESCE((SELECT SUM(amount) FROM referral_withdrawals
+                        WHERE referrer_id=owners.user_id AND status IN ('pending','completed')),0)
+                    - COALESCE((SELECT SUM(amount) FROM referral_wallet_reservations
+                        WHERE user_id=owners.user_id AND status='held'),0) AS available
+                FROM owners
+            ) SELECT w.*,u.username,m.decision_note,m.resolved_at,
+            o.delivered_at AS notified_at,o.attempts AS notification_attempts,o.last_error AS notification_error,
+            ledger.available AS current_available_balance,
+            (w.program='referral' AND w.status='pending' AND COALESCE(ledger.available<0,FALSE)) AS payout_blocked
+            FROM selected w LEFT JOIN users u ON u.tg_id=w.user_id
+            LEFT JOIN ledger ON ledger.user_id=w.user_id AND w.program='referral' AND w.status='pending'
             LEFT JOIN referral_withdrawal_meta m ON m.program=w.program AND m.withdrawal_id=w.id
             LEFT JOIN referral_outbox o ON o.event_key='withdraw:'||w.program||':'||w.id::text
-            WHERE w.withdrawal_type IN ('sbp','usdt') AND ($1='all' OR w.status=$1)
-            ORDER BY w.created_at DESC,w.program,w.id DESC LIMIT $2 OFFSET $3''', status, limit, offset)]
+            ORDER BY w.created_at DESC,w.program,w.id DESC''', status, limit, offset)]
 
 
 async def resolve_request(program, withdrawal_id, status, actor, note=''):
@@ -149,6 +186,11 @@ async def resolve_request(program, withdrawal_id, status, actor, note=''):
     pool = await db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # All balance mutations lock the user before any withdrawal row.
+            candidate = await conn.fetchrow(f"SELECT * FROM {table} WHERE id=$1 AND withdrawal_type IN ('sbp','usdt')", withdrawal_id)
+            if not candidate:
+                raise ValueError('Заявка не найдена.')
+            await conn.fetchrow('SELECT tg_id FROM users WHERE tg_id=$1 FOR UPDATE', candidate[owner])
             row = await conn.fetchrow(f"SELECT * FROM {table} WHERE id=$1 AND withdrawal_type IN ('sbp','usdt') FOR UPDATE", withdrawal_id)
             if not row:
                 raise ValueError('Заявка не найдена.')
@@ -156,6 +198,8 @@ async def resolve_request(program, withdrawal_id, status, actor, note=''):
                 return dict(row)
             if row['status'] != 'pending':
                 raise ValueError('Заявка уже обработана. Обновите список.')
+            if status == 'completed' and program == 'referral' and await accounting.balance(conn, row[owner]) < 0:
+                raise ValueError('Выплата заблокирована: после возврата оплаты средств недостаточно. Не переводите деньги; отклоните заявку или дождитесь новых начислений.')
             await conn.execute(f'UPDATE {table} SET status=$1 WHERE id=$2', status, withdrawal_id)
             await conn.execute('''INSERT INTO referral_withdrawal_meta(program,withdrawal_id,request_key,resolved_at,resolved_by,decision_note)
                 VALUES($1,$2,$3,now(),$4,$5) ON CONFLICT(program,withdrawal_id)
@@ -170,10 +214,11 @@ async def resolve_request(program, withdrawal_id, status, actor, note=''):
 
 async def credit_referral(referrer, referred_user, tariff, amount, first=False):
     """Earning and its notification commit together. Existing payment activation owns deduplication."""
-    share = (Decimal(str(amount)) * Decimal(35 if first else 15) / 100).quantize(Decimal('0.01'))
+    share = accounting.calculate_share(amount, first=first)
     pool = await db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await accounting._lock_users(conn, referred_user, referrer)
             earning_id = await conn.fetchval('''INSERT INTO referral_earnings
                 (referrer_id,referred_user_id,tariff_code,amount,referral_share,is_first_purchase)
                 VALUES($1,$2,$3,$4,$5,$6) RETURNING id''', referrer, referred_user, tariff, Decimal(str(amount)), share, first)

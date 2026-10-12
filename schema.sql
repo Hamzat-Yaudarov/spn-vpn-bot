@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     subscription_until TIMESTAMP,
     squad_uuid UUID,
     referrer_id BIGINT,
+    referral_entry_intent TEXT,
     tracking_code TEXT,
     first_payment BOOLEAN DEFAULT FALSE,
     referral_count INT DEFAULT 0,
@@ -170,6 +171,7 @@ CREATE TABLE IF NOT EXISTS referral_earnings (
     amount NUMERIC NOT NULL,
     referral_share NUMERIC NOT NULL,
     is_first_purchase BOOLEAN DEFAULT FALSE,
+    payment_id BIGINT,
     created_at TIMESTAMP DEFAULT now(),
     FOREIGN KEY (referrer_id) REFERENCES users(tg_id) ON DELETE CASCADE
 );
@@ -350,6 +352,105 @@ CREATE TABLE IF NOT EXISTS tracking_link_clicks (
     is_new_user BOOLEAN DEFAULT FALSE,
     clicked_at TIMESTAMP DEFAULT now()
 );
+
+-- Invoice-linked referral accounting. Fresh bootstrap only: cutover data is
+-- written once by services.referral_accounting.initialize, never by this file.
+CREATE UNIQUE INDEX IF NOT EXISTS referral_earnings_payment_id
+    ON referral_earnings(payment_id) WHERE payment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS referral_qualified_paid_history ON payments(tg_id,id)
+    WHERE status='paid' AND amount>0 AND COALESCE(payment_kind,'subscription')='subscription'
+      AND provider IN ('cryptobot','yookassa');
+
+CREATE TABLE IF NOT EXISTS referral_accounting_migrations (
+    migration_key TEXT PRIMARY KEY,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS referral_payment_settlements (
+    payment_id BIGINT PRIMARY KEY REFERENCES payments(id),
+    invoice_id TEXT NOT NULL UNIQUE,
+    payer_id BIGINT NOT NULL,
+    referrer_id BIGINT,
+    amount NUMERIC NOT NULL,
+    qualified BOOLEAN NOT NULL DEFAULT FALSE,
+    is_first_purchase BOOLEAN NOT NULL DEFAULT FALSE,
+    outcome TEXT NOT NULL,
+    earning_id BIGINT REFERENCES referral_earnings(id),
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS referral_confirmed_refunds (
+    id BIGSERIAL PRIMARY KEY,
+    payment_id BIGINT NOT NULL REFERENCES payments(id),
+    invoice_id TEXT NOT NULL,
+    amount NUMERIC NOT NULL CHECK(amount > 0),
+    reference TEXT NOT NULL UNIQUE,
+    confirmed_by BIGINT NOT NULL,
+    note TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS referral_confirmed_refunds_payment
+    ON referral_confirmed_refunds(payment_id);
+
+CREATE TABLE IF NOT EXISTS referral_earning_reversals (
+    id BIGSERIAL PRIMARY KEY,
+    refund_id BIGINT NOT NULL UNIQUE REFERENCES referral_confirmed_refunds(id),
+    earning_id BIGINT NOT NULL REFERENCES referral_earnings(id),
+    payment_id BIGINT NOT NULL REFERENCES payments(id),
+    referrer_id BIGINT NOT NULL,
+    amount NUMERIC NOT NULL CHECK(amount >= 0),
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS referral_earning_reversals_owner
+    ON referral_earning_reversals(referrer_id);
+
+CREATE TABLE IF NOT EXISTS referral_wallet_reservations (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    request_key TEXT NOT NULL UNIQUE,
+    invoice_id TEXT NOT NULL UNIQUE REFERENCES payments(invoice_id),
+    tariff_code TEXT NOT NULL,
+    amount NUMERIC NOT NULL CHECK(amount > 0),
+    purchase_mode TEXT NOT NULL,
+    subscription_id BIGINT,
+    target_slot_number INT,
+    status TEXT NOT NULL DEFAULT 'held' CHECK(status IN ('held','consumed','cancelled')),
+    withdrawal_id BIGINT UNIQUE REFERENCES referral_withdrawals(id),
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS referral_wallet_reservations_owner
+    ON referral_wallet_reservations(user_id) WHERE status='held';
+
+CREATE TABLE IF NOT EXISTS referral_cabinet_views (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    surface TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS referral_withdrawal_meta (
+    program TEXT NOT NULL,
+    withdrawal_id BIGINT NOT NULL,
+    request_key TEXT NOT NULL UNIQUE,
+    resolved_at TIMESTAMP,
+    resolved_by BIGINT,
+    decision_note TEXT,
+    PRIMARY KEY (program, withdrawal_id)
+);
+
+CREATE TABLE IF NOT EXISTS referral_outbox (
+    event_key TEXT PRIMARY KEY,
+    recipient_id BIGINT NOT NULL,
+    body TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NOT NULL DEFAULT now(),
+    lease_until TIMESTAMP,
+    delivered_at TIMESTAMP,
+    last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS referral_outbox_pending ON referral_outbox(next_attempt_at)
+    WHERE delivered_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_web_accounts_login ON web_accounts(login);

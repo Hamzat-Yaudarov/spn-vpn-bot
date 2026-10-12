@@ -170,6 +170,9 @@ class ReservationTests(unittest.IsolatedAsyncioTestCase):
         self.conn = Connection()
         self.pool = SimpleNamespace(acquire=lambda: self.conn)
         self.enterContext(patch.object(db, "get_pool", AsyncMock(return_value=self.pool)))
+        # This fixture models subscription SQL only. The real accounting and
+        # rollback coupling is covered by PostgreSQLAccountingTests separately.
+        self.settle = self.enterContext(patch('services.referral_accounting.settle_subscription', AsyncMock()))
 
     async def test_failed_remote_retry_keeps_one_slot_and_one_fixed_deadline(self):
         first = await activation.reserve(123, "invoice-1", TARIFFS["bypass_1m"])
@@ -288,7 +291,7 @@ class PaymentFlowTests(unittest.IsolatedAsyncioTestCase):
                         base_traffic_bytes=200 * GB_BYTES, current_paid_traffic_bytes=10 * GB_BYTES,
                         current_period_limit_bytes=210 * GB_BYTES)
         self.assertTrue(await processing.process_paid_payment(self.bot, 123, "invoice-1", "bypass_1m"))
-        self.assertEqual(self.remote.await_args.kwargs["traffic_limit_bytes"], 210 * GB_BYTES)
+        self.assertEqual(self.remote.await_args.kwargs["traffic_limit_bytes"], 310 * GB_BYTES)
         self.reset.assert_not_awaited()
 
 

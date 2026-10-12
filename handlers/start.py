@@ -11,6 +11,7 @@ from services.image_handler import send_text_with_photo
 from services.notification_delivery import clear_telegram_delivery_blocked
 from services.mobile_auth import claim_challenge
 from services.custom_emoji import custom_emoji_button, semantic_button
+from services.referral_program import ENTRY_INTENTS
 
 
 logger = logging.getLogger(__name__)
@@ -65,21 +66,18 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     if len(args) > 1:
         if is_mobile_auth:
             pass
-        elif start_payload == 'earn':
+        elif normalized_payload in ENTRY_INTENTS:
             pass
         elif args[1].startswith("ref_"):
             try:
-                referrer_id = int(args[1].split("_")[1])
-                # Проверяем что это не сам пользователь
-                if referrer_id != tg_id:
-                    if not user_already_exists:
-                        logging.info(f"User {tg_id} joined via referral link from {referrer_id}")
-                    else:
-                        logging.warning(f"User {tg_id} is not new, ignoring referral link from {referrer_id}")
-                        referrer_id = None
+                candidate = int(args[1].split("_", 1)[1])
+                # Newness belongs to atomic create_user, not the earlier snapshot:
+                # simultaneous starts must never overwrite an existing referrer.
+                if (0 < candidate <= 9223372036854775807 and candidate != tg_id
+                        and await db.user_exists(candidate)):
+                    referrer_id = candidate
                 else:
-                    logging.warning(f"User {tg_id} tried to use their own referral link")
-                    referrer_id = None
+                    logger.info('Ignored invalid referral link for user %s', tg_id)
             except (ValueError, IndexError):
                 referrer_id = None
         elif args[1].startswith("partner_"):
@@ -111,7 +109,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 )
 
     # Создаём пользователя если его нет
-    await db.create_user(
+    inserted = await db.create_user(
         tg_id,
         username,
         referrer_id,
@@ -128,8 +126,11 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         referrer_id or "",
     )
 
-    if referrer_id is not None and not user_already_exists:
+    if referrer_id is not None and inserted is True:
         await db.update_referral_count(referrer_id)
+
+    if normalized_payload in ENTRY_INTENTS:
+        await db.set_referral_entry_intent(tg_id, normalized_payload)
 
     mobile_challenge = None
     if is_mobile_auth:
@@ -159,12 +160,25 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             mobile_challenge.get("device_name"),
         )
         await message.answer(text, reply_markup=keyboard)
-    elif start_payload == 'earn':
-        from handlers.referral import send_earning_screen
+    elif await show_pending_referral_entry(message, tg_id, bot):
         await state.clear()
-        await send_earning_screen(message, tg_id, bot)
     else:
         await show_main_menu(message)
+
+
+async def show_pending_referral_entry(message: Message, user_id: int, bot: Bot) -> bool:
+    """Consume a saved earning destination only after its screen is delivered."""
+    try:
+        intent = await db.get_referral_entry_intent(user_id)
+    except Exception as exc:
+        logger.warning('Could not read referral entry for user %s: %s', user_id, type(exc).__name__)
+        return False
+    if intent not in ENTRY_INTENTS:
+        return False
+    from handlers.referral import send_referral_entry_screen
+    await send_referral_entry_screen(message, user_id, bot, intent)
+    await db.pop_referral_entry_intent(user_id)
+    return True
 
 
 def news_channel_chat() -> str:
