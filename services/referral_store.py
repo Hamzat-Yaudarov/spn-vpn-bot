@@ -87,13 +87,22 @@ async def create_request(program, user_id, amount, method, request_key, *, bank=
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Serialize balance checks and reservation; ledger is the source of truth.
+            await conn.execute('SELECT pg_advisory_xact_lock(hashtext($1))', f'referral-withdrawal:{request_key}')
             if not await conn.fetchrow('SELECT tg_id FROM users WHERE tg_id=$1 FOR UPDATE', user_id):
                 raise ValueError('Пользователь не найден.')
-            existing = await conn.fetchrow(f'''SELECT w.* FROM referral_withdrawal_meta m
+            existing = await conn.fetchrow(f'''SELECT w.*,m.decision_note FROM referral_withdrawal_meta m
                 JOIN {table} w ON w.id=m.withdrawal_id
                 WHERE m.request_key=$1 AND m.program=$2 AND w.{owner}=$3''', request_key, program, user_id)
             if existing:
+                if (Decimal(str(existing['amount'])) != amount or existing['withdrawal_type'] != method
+                        or (existing['bank_name'] or '') != bank or (existing['phone_number'] or '') != phone
+                        or (existing['usdt_address'] or '') != address):
+                    raise accounting.RequestConflict('Номер запроса уже использован для другой заявки.')
                 return dict(existing)
+            # The global unique key may belong to another owner/program. Never
+            # return its details, and never let a uniqueness error leak them.
+            if await conn.fetchval('SELECT EXISTS(SELECT 1 FROM referral_withdrawal_meta WHERE request_key=$1)', request_key):
+                raise accounting.RequestConflict('Номер запроса уже использован для другой заявки.')
             if program == 'partner' and not await conn.fetchval(
                 'SELECT agreement_accepted FROM partnerships WHERE tg_id=$1', user_id
             ):
@@ -105,12 +114,24 @@ async def create_request(program, user_id, amount, method, request_key, *, bank=
                 reserved = await conn.fetchval(f"SELECT COALESCE(SUM(amount),0) FROM {table} WHERE {owner}=$1 AND status IN ('pending','completed')", user_id)
                 available = earned - reserved
             if amount > available:
-                raise ValueError(f'Недостаточно средств: доступно {available:.2f} ₽. Возможно, уже есть заявка на рассмотрении.')
+                raise accounting.InsufficientBalance(available, amount)
             row = await conn.fetchrow(f'''INSERT INTO {table}({owner},amount,withdrawal_type,bank_name,phone_number,usdt_address)
                 VALUES($1,$2,$3,$4,$5,$6) RETURNING *''', user_id, amount, method, bank or None, phone or None, address or None)
             await conn.execute('INSERT INTO referral_withdrawal_meta(program,withdrawal_id,request_key) VALUES($1,$2,$3)', program, row['id'], request_key)
             await enqueue(conn, f'withdraw:{program}:{row["id"]}', ADMIN_ID, admin_notice(program, row, user_id))
             return dict(row)
+
+
+async def get_request(user_id, request_key, program='referral'):
+    """Look up one owned durable cash request; a foreign key is indistinguishable."""
+    table, owner, _, _ = table_info(program)
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(f'''SELECT w.*,m.request_key,m.decision_note FROM referral_withdrawal_meta m
+            JOIN {table} w ON w.id=m.withdrawal_id
+            WHERE m.request_key=$1 AND m.program=$2 AND w.{owner}=$3
+              AND w.withdrawal_type IN ('sbp','usdt')''', request_key, program, user_id)
+        return dict(row) if row else None
 
 
 async def history(user_id, program='referral', *, offset=0, limit=10):

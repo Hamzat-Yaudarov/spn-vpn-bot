@@ -17,6 +17,17 @@ CENT = Decimal('0.01')
 CUTOVER_KEY = 'invoice-linked-referrals-v1'
 logger = logging.getLogger(__name__)
 
+
+class RequestConflict(ValueError):
+    """A durable request identity cannot be reused for a different intent."""
+
+
+class InsufficientBalance(ValueError):
+    def __init__(self, available, amount):
+        self.available = Decimal(str(available))
+        self.amount = Decimal(str(amount))
+        super().__init__(f'Недостаточно средств: доступно {self.available:.2f} ₽.')
+
 SCHEMA = '''
 ALTER TABLE referral_earnings ADD COLUMN IF NOT EXISTS payment_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS referral_earnings_payment_id
@@ -231,7 +242,8 @@ async def settle_subscription(conn, payment):
 
 
 async def reserve_balance_purchase(user_id, request_key, tariff_code, amount,
-                                   purchase_mode='new', subscription_id=None, target_slot_number=None):
+                                   purchase_mode='new', subscription_id=None, target_slot_number=None,
+                                   *, validate_selection=False):
     """Reserve once under the same user lock used by cash withdrawal requests."""
     amount = money(amount)
     if not request_key or len(request_key) > 100:
@@ -242,6 +254,7 @@ async def reserve_balance_purchase(user_id, request_key, tariff_code, amount,
         raise ValueError('Выберите подписку для продления.')
     pool = await db.get_pool()
     async with pool.acquire() as conn, conn.transaction():
+        await conn.fetchval('SELECT pg_advisory_xact_lock(hashtext($1))', f'referral-wallet:{request_key}')
         if not await conn.fetchrow('SELECT tg_id FROM users WHERE tg_id=$1 FOR UPDATE', user_id):
             raise ValueError('Пользователь не найден.')
         existing = await conn.fetchrow('SELECT * FROM referral_wallet_reservations WHERE request_key=$1', request_key)
@@ -249,12 +262,48 @@ async def reserve_balance_purchase(user_id, request_key, tariff_code, amount,
             if (existing['user_id'] != user_id or existing['tariff_code'] != tariff_code
                     or existing['amount'] != amount or existing['purchase_mode'] != purchase_mode
                     or existing['subscription_id'] != subscription_id
-                    or existing['target_slot_number'] != target_slot_number):
-                raise ValueError('Номер запроса уже использован для другой оплаты.')
+                    or (not validate_selection and existing['target_slot_number'] != target_slot_number)):
+                raise RequestConflict('Номер запроса уже использован для другой оплаты.')
             return dict(existing)
+        if validate_selection:
+            # Native MiniApp inputs are not trusted bot checkout state. Resolve
+            # the target under the funds lock, including not-yet-activated holds.
+            from config import TARIFFS
+            tariff = TARIFFS.get(tariff_code)
+            if not tariff:
+                raise ValueError('Неизвестный тариф.')
+            kind = tariff['kind']
+            if purchase_mode == 'renew':
+                subscription = await conn.fetchrow('''SELECT * FROM subscriptions
+                    WHERE id=$1 AND tg_id=$2''', subscription_id, user_id)
+                if (not subscription or subscription['generation'] != 'v2'
+                        or not subscription['is_visible'] or not subscription['is_renewable']
+                        or subscription['plan_kind'] != kind
+                        or type(subscription['type_index']) is not int
+                        or not 1 <= subscription['type_index'] <= db.MAX_SUBSCRIPTIONS_PER_USER):
+                    raise ValueError('Подписка недоступна для продления.')
+                target_slot_number = subscription['type_index']
+            else:
+                if subscription_id is not None:
+                    raise ValueError('Для новой покупки не выбирайте существующую подписку.')
+                rows = await conn.fetch('''SELECT id,type_index FROM subscriptions
+                    WHERE tg_id=$1 AND plan_kind=$2 AND generation='v2' AND is_visible''', user_id, kind)
+                taken = {row['type_index'] for row in rows if row['type_index'] is not None}
+                visible_ids = {row['id'] for row in rows}
+                holds = await conn.fetch('''SELECT r.tariff_code,r.target_slot_number,a.subscription_id
+                    FROM referral_wallet_reservations r LEFT JOIN payment_subscription_activations a
+                    ON a.invoice_id=r.invoice_id
+                    WHERE r.user_id=$1 AND r.purchase_mode='new' AND r.status='held' ''', user_id)
+                pending = [row for row in holds if (TARIFFS.get(row['tariff_code']) or {}).get('kind') == kind
+                           and row['subscription_id'] not in visible_ids]
+                taken.update(row['target_slot_number'] for row in pending if row['target_slot_number'] is not None)
+                target_slot_number = next((index for index in range(1, db.MAX_SUBSCRIPTIONS_PER_USER + 1)
+                                           if index not in taken), None)
+                if target_slot_number is None or len(rows) + len(pending) >= db.MAX_SUBSCRIPTIONS_PER_USER:
+                    raise ValueError(f'Достигнут лимит: максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок этого типа.')
         available = await balance(conn, user_id)
         if available < amount:
-            raise ValueError(f'Недостаточно средств: доступно {available:.2f} ₽.')
+            raise InsufficientBalance(available, amount)
         if subscription_id and not await conn.fetchval('''SELECT id FROM subscriptions
             WHERE id=$1 AND tg_id=$2 AND is_visible AND is_renewable''', subscription_id, user_id):
             raise ValueError('Подписка недоступна для оплаты.')

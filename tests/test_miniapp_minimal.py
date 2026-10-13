@@ -33,6 +33,7 @@ class MinimalMiniAppContracts(unittest.TestCase):
         self.assertEqual([a.get('data-view') for a in tabs], ['subs', 'buy', 'ref', 'help'])
         self.assertEqual(tabs[0].get('aria-current'), 'page')
         self.assertNotIn('id="view-home"', self.html)
+        self.assertIn('Подписки</span>', self.html)
 
     def test_css_and_javascript_cache_versions_match(self):
         versions = re.findall(r'/app/assets/app\.(?:css|js)\?v=([^"\s]+)', self.html)
@@ -56,9 +57,11 @@ class MinimalMiniAppContracts(unittest.TestCase):
     def test_existing_integration_paths_retained(self):
         for path in ['/miniapp/api/payments/subscription', '/miniapp/api/payments/traffic', '/miniapp/api/payments/devices', '/app/open-happ?url=']:
             self.assertIn(path, self.js)
-        self.assertIn('earn_spend', self.js)
-        self.assertIn('earn_withdraw', self.js)
         self.assertIn('https://t.me/share/url?', self.js)
+
+    def test_native_wallet_and_withdrawal_api_routes(self):
+        self.assertIn('/miniapp/api/referral/purchases', self.js)
+        self.assertIn('/miniapp/api/referral/withdrawals', self.js)
 
     def test_catalog_does_not_guess_old_quota(self):
         self.assertNotRegex(self.js, r'base_gb\s*\|\|\s*200')
@@ -67,7 +70,7 @@ class MinimalMiniAppContracts(unittest.TestCase):
     def test_browser_suite_never_contacts_real_services_or_writes_repo_previews(self):
         source = (ROOT / 'tests/miniapp_minimal_smoke.mjs').read_text()
         self.assertIn("context.route('**/*'", source)
-        self.assertIn('/private/tmp/spn-miniapp-minimal', source)
+        self.assertIn('/private/tmp/spn-miniapp-native', source)
         self.assertNotIn("root + '/artifacts", source)
         self.assertNotIn('process.env.DATABASE_URL', source)
 

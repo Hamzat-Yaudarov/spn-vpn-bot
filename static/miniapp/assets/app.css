@@ -4,9 +4,9 @@
   --panel: #1a1a1e;
   --panel-strong: #202025;
   --text: #f5f5f7;
-  --muted: #a2a2aa;
+  --muted: #b3b3bc;
   --accent: #d8a947;
-  --line: #2b2b31;
+  --line: #3c3c44;
   --radius: 16px;
 }
 
@@ -205,6 +205,14 @@ body.view-payment-result-active .hero, body.view-payment-result-active .tabbar {
 .toast { position: fixed; z-index: 20; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: max-content; max-width: calc(100vw - 32px); padding: 12px 16px; border: 1px solid #45454d; border-radius: 12px; background: var(--panel-strong); color: var(--text); font-size: 14px; line-height: 1.45; text-align: center; opacity: 0; pointer-events: none; transition: opacity .15s ease; overflow-wrap: anywhere; }
 .toast.show { opacity: 1; }
 .hidden { display: none !important; }
+.field { display: grid; gap: 8px; color: var(--text); font-size: 16px; }
+.field input { width: 100%; min-height: 48px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font-size: 16px; }
+.field input::placeholder { color: var(--muted); opacity: 1; }
+.form-error { margin: 0; color: var(--text); font-size: 14px; }
+.receipt-number { margin: 0; font-size: 20px; font-weight: 600; }
+.summary-line > b { overflow-wrap: anywhere; }
+.operation-note { padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.operation-note .button { margin-top: 12px; }
 @media (max-width: 360px) {
   body { padding-left: 12px; padding-right: 12px; }
   .card, .choice-button, .subscription-card, .plan-card { padding: 15px; }

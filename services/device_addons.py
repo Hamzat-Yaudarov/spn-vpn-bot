@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import (
     BYPASS_HWID_DEVICE_LIMIT,
@@ -83,6 +83,31 @@ def available_device_addon_packages(subscription, *, now: datetime | None = None
             **pricing,
         })
     return packages
+
+
+def miniapp_device_addon_options(subscription, *, now: datetime | None = None) -> dict:
+    """The same eligibility and prices for MiniApp display and checkout.
+
+    Empty packages are not an explanation by themselves: the UI needs to
+    distinguish an expired subscription from an ineligible one or a full limit.
+    Existing bot pricing helpers and their rules remain unchanged.
+    """
+    unavailable = {"addon_status": "unavailable", "packages": []}
+    if (not subscription or subscription.get("generation") != "v2"
+            or not subscription.get("is_visible") or not subscription.get("is_renewable")):
+        return unavailable
+    until = subscription.get("subscription_until")
+    now = now or datetime.utcnow()
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    if until is not None and until.tzinfo is not None:
+        until = until.astimezone(timezone.utc).replace(tzinfo=None)
+    if not until or until <= now:
+        return {"addon_status": "expired", "packages": []}
+    if current_device_limit(subscription) >= DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT:
+        return {"addon_status": "max_limit", "packages": []}
+    packages = available_device_addon_packages({**subscription, "subscription_until": until}, now=now)
+    return {"addon_status": "available", "packages": packages} if packages else unavailable
 
 
 def effective_device_limit(plan_kind: str | None, active_addon_devices: int) -> int:

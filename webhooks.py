@@ -27,7 +27,7 @@ from services.cryptobot import (
 )
 from services.payment_processing import process_paid_payment
 from services.payment_reconciliation import reconcile_payment
-from services.device_addons import available_device_addon_packages, current_device_limit, device_count_text, effective_device_limit
+from services.device_addons import current_device_limit, device_count_text, effective_device_limit, miniapp_device_addon_options
 from services.payment_summary import build_payment_success_summary
 from services.remnawave import (
     remnawave_delete_all_hwid_devices,
@@ -50,6 +50,7 @@ from admin_web import router as admin_router
 from customer_web import router as customer_router
 from subscription_renewal import router as renewal_router
 from mobile_api import public_router as mobile_public_router, router as mobile_router
+from miniapp_referral_api import create_router as create_miniapp_referral_router
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ async def no_cache_miniapp(request: Request, call_next):
     response = await call_next(request)
     if (
         request.url.path in {"/", "/account", "/login", "/register", "/renew", "/app", "/admin"}
-        or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/"))
+        or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/", "/miniapp/api/"))
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -121,6 +122,11 @@ async def _miniapp_user(request: Request) -> dict:
     username = user.get("username") or user.get("first_name") or f"user_{user['id']}"
     await db.create_user(int(user["id"]), username)
     return user
+
+
+app.include_router(create_miniapp_referral_router(
+    lambda request: _miniapp_user(request), lambda: _bot,
+))
 
 
 def _format_dt(value):
@@ -217,7 +223,7 @@ async def _serialize_subscription(subscription) -> dict:
         "devices": {
             "limit": current_device_limit(device_subscription),
             "max_limit": DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
-            "packages": available_device_addon_packages(device_subscription),
+            **miniapp_device_addon_options(device_subscription),
         },
     }
 
@@ -583,16 +589,16 @@ async def miniapp_create_device_payment(request: Request):
         not subscription
         or subscription.get("generation") != "v2"
         or not subscription.get("is_visible")
-        or not subscription.get("is_renewable")
-        or not subscription.get("subscription_until")
-        or subscription["subscription_until"] <= datetime.utcnow()
     ):
         raise HTTPException(status_code=400, detail="Invalid subscription")
 
     active_device_addons = await db.get_active_device_addon_count(int(subscription_id))
     device_limit = effective_device_limit(subscription.get("plan_kind"), active_device_addons)
     device_subscription = {**subscription, "hwid_device_limit": device_limit}
-    package = next((item for item in available_device_addon_packages(device_subscription) if item["count"] == device_count), None)
+    options = miniapp_device_addon_options(device_subscription)
+    if options["addon_status"] in {"expired", "unavailable"}:
+        raise HTTPException(status_code=400, detail="Invalid subscription")
+    package = next((item for item in options["packages"] if item["count"] == device_count), None)
     if not package:
         raise HTTPException(status_code=400, detail="Device limit reached")
 
