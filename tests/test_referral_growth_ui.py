@@ -293,47 +293,91 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('static/miniapp/assets/app.js', 'utf8');
-const opened = [], requests = [], panel = {innerHTML:'',classList:{add(){}}};
+const opened = [], requests = [], panels = new Map();
+const element = id => {
+  if (!panels.has(id)) panels.set(id,{innerHTML:'',textContent:'',dataset:{},
+    classList:{add(){},remove(){},toggle(){}},setAttribute(){},removeAttribute(){},
+    addEventListener(){},focus(){},scrollIntoView(){}});
+  return panels.get(id);
+};
+const fixture = {link:'https://t.me/test?start=ref_123',
+  bot_earning_url:'https://t.me/test?start=earn',share_text:'Лучший VPN:', registered_referrals:7, active_referrals:3,
+  current_balance:1400,total_earned:2500,minimum_withdrawal:1500,
+  earning_actions:{home:'https://t.me/test?start=earn',spend:'https://t.me/test?start=earn_spend',withdraw:'https://t.me/test?start=earn_withdraw'},
+  pricing_examples:[{price:160,first_commission:56,repeat_commission:24}],
+  history:[{kind:'reversal',amount:28,status:'confirmed',detail:'private-invoice'}]};
 const context = {
-  state:{currentView:'home', referral:{link:'https://t.me/test?start=ref_123',
-    bot_earning_url:'https://t.me/test?start=earn',share_text:'Лучший VPN:', registered_referrals:7, active_referrals:3,
-    current_balance:1400,total_earned:2500,minimum_withdrawal:1500,
-    earning_actions:{home:'https://t.me/test?start=earn',spend:'https://t.me/test?start=earn_spend',withdraw:'https://t.me/test?start=earn_withdraw'},
-    pricing_examples:[{price:160,first_commission:56,repeat_commission:24}],
-    history:[{kind:'reversal',amount:28,status:'confirmed',detail:'private-invoice'}]}},
-  tg:{openTelegramLink(url){opened.push(url)}},window:{}, URL,URLSearchParams,
-  showToast(){}, rub(value){return `${value} ₽`},date(){return '10.10.2026'},
-  escapeHtml(value){return String(value)},el(){return panel},render(){},
-  document:{querySelectorAll(){return []},body:{}},
-  api(path){requests.push(path);return Promise.resolve(context.state.referral)},
+  window:{Telegram:{WebApp:{ready(){},expand(){},openTelegramLink(url){opened.push(url)}}},
+    location:{origin:'https://preview.test'},scrollTo(){},addEventListener(){}},
+  navigator:{userAgent:'Android',clipboard:{writeText(){return Promise.resolve()}}},
+  URL,URLSearchParams,Date,console,
+  setTimeout(){return 0},clearTimeout(){},setInterval(){return 0},clearInterval(){},
+  document:{getElementById:element,querySelectorAll(){return []},querySelector(){return element('main')},addEventListener(){},body:{}},
+  fetch(path){
+    requests.push(path);
+    const payload = path === '/miniapp/api/me' ? {id:123,first_name:'Тест'}
+      : path === '/miniapp/api/subscriptions' ? {subscriptions:[]}
+      : path === '/miniapp/api/tariffs' ? {regular:[],bypass:[],traffic_packages:[]}
+      : fixture;
+    return Promise.resolve({ok:true,json:async()=>payload});
+  },
 };
 vm.createContext(context);
-const section = (start,end) => source.slice(source.indexOf(start),source.indexOf(end));
-vm.runInContext(section('function openEarningBot(', 'function renderHelp()'),context);
+vm.runInContext(source.replace(/\nload\(\);\s*$/,''),context);
+context.fixture = fixture;
+vm.runInContext("state.referral=fixture;state.currentView='subs';state.authStatus='ready';state.dataStatus={subs:'ready',tariffs:'ready',ref:'ready'}",context);
 context.openEarningBot('spend');context.openEarningBot('withdraw');
 assert.equal(new URL(opened[0]).searchParams.get('start'),'earn_spend');
 assert.equal(new URL(opened[1]).searchParams.get('start'),'earn_withdraw');
-delete context.state.referral.earning_actions;
+vm.runInContext('delete state.referral.earning_actions',context);
 context.openEarningBot('withdraw');
 assert.equal(new URL(opened[2]).searchParams.get('start'),'earn_withdraw');
 context.shareReferral();
 const shared = new URL(opened.at(-1));
 assert.equal(shared.searchParams.get('text'),'Лучший VPN:');
-assert.equal(shared.searchParams.get('url'),context.state.referral.link);
+assert.equal(shared.searchParams.get('url'),fixture.link);
 assert.equal(shared.searchParams.getAll('url').length,1);
 context.renderReferral();
-assert.match(panel.innerHTML,/Зарегистрировались по ссылке/);
+const panel = element('view-ref');
+assert.match(panel.innerHTML,/Пришли по ссылке<\/span><b>7<\/b>/);
+assert.match(panel.innerHTML,/Друзей с покупками<\/span><b>3<\/b>/);
+assert.match(panel.innerHTML,/Всего заработано<\/span><b>2\s500 ₽<\/b>/);
 assert.match(panel.innerHTML,/160 ₽ → 56 ₽ вам; следующая — 24 ₽/);
 assert.match(panel.innerHTML,/Корректировка после возврата/);
 assert.match(panel.innerHTML,/−28 ₽/);
 assert.ok(!panel.innerHTML.includes('private-invoice'));
 assert.ok(!panel.innerHTML.includes('С оплаты 300 ₽'));
-vm.runInContext(section('function switchView(', 'async function load()'),context);
-context.switchView('ref');context.switchView('ref');context.switchView('home');context.switchView('ref');
+context.render = () => {};
+context.switchView('ref');context.switchView('ref');context.switchView('subs');context.switchView('ref');
 assert.equal(requests.filter(path => path.endsWith('?view=1')).length,2);
-assert.match(source,/api\("\/miniapp\/api\/referral"\),/);
 context.refreshReferral();
 assert.equal(requests.at(-1),'/miniapp/api/referral');
+vm.runInContext("state.referral=null;state.dataStatus.ref='ready'",context);
+context.renderReferral();
+assert.ok(!panel.innerHTML.includes('0 ₽'));
+assert.ok(!panel.innerHTML.includes('Пригласить друга'));
+assert.ok(!panel.innerHTML.includes(fixture.link));
+assert.match(panel.innerHTML,/refreshReferral/);
+vm.runInContext('state.referral={...fixture};delete state.referral.registered_referrals;delete state.referral.active_referrals;delete state.referral.total_earned',context);
+context.renderReferral();
+assert.ok((panel.innerHTML.match(/—/g)||[]).length >= 3);
+const missingStatus = {id:1,plan_kind:'regular',type_index:1,traffic:{enabled:false},devices:{limit:5}};
+const unknownCard = context.keyButton(missingStatus);
+assert.match(unknownCard,/Статус уточняется/);
+assert.ok(!/Срок закончился|Истекла|истекла/.test(unknownCard));
+assert.ok(!/Срок закончился|Истекла|истекла/.test(context.subscriptionDetailHtml(missingStatus)));
+const connections = [];
+context.window.Telegram.WebApp.openLink = url => connections.push(url);
+delete context.navigator.clipboard;
+context.openKeyInHapp(encodeURIComponent('https://preview.test/key'));
+assert.equal(connections.at(-1),'https://preview.test/app/open-happ?url=https%3A%2F%2Fpreview.test%2Fkey');
+(async () => {
+  requests.length=0;
+  await context.load();
+  assert.ok(requests.includes('/miniapp/api/referral'));
+  assert.equal(requests.filter(path => path.endsWith('?view=1')).length,0);
+  assert.ok(vm.runInContext("['subs','tariffs','ref'].every(key=>state.dataStatus[key]==='ready')",context));
+})().catch(error => {console.error(error);process.exitCode=1});
 '''
         result = subprocess.run(['node', '-e', harness], cwd=ROOT, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -419,20 +463,31 @@ const {pathToFileURL} = require('node:url');
   });
   try {
     const page = await context.newPage();
+    async function openDetails(label) {
+      const summary = page.locator('#view-ref summary').filter({hasText:label});
+      if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();
+    }
     page.on('pageerror',error => errors.push(error.message));
     await page.goto('https://preview.test/app');
-    await page.locator('#userLine').getByText('Добро пожаловать, Тест').waitFor();
+    await page.waitForFunction(() => typeof state !== 'undefined' && state.authStatus === 'ready'
+      && ['subs','tariffs','ref'].every(section => state.dataStatus[section] === 'ready'));
+    assert.equal(await page.locator('.tabbar .tab').count(),4);
+    assert.equal(await page.locator('.tabbar [data-view="home"]').count(),0);
+    assert.equal(await page.locator('.tabbar [data-view="subs"]').getAttribute('aria-current'),'page');
     assert.equal(requests.filter(url => url.endsWith('?view=1')).length,0);
     const viewRecorded = page.waitForResponse(response => response.url().endsWith('/miniapp/api/referral?view=1'));
     await page.locator('[data-view="ref"]').click();await viewRecorded;
+    await openDetails('Статистика');
+    await openDetails('Как это работает');
+    await openDetails('История');
     await page.getByText('Оплата 160 ₽ → 56 ₽ вам; следующая — 24 ₽.').waitFor();
     await page.getByText('Оплата 240 ₽ → 84 ₽ вам; следующая — 36 ₽.').waitFor();
     assert.equal(requests.filter(url => url.endsWith('?view=1')).length,1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),false);
-    await page.getByRole('button',{name:'📨 Пригласить друга'}).click();
+    await page.getByRole('button',{name:'Пригласить друга',exact:true}).click();
     await page.getByRole('button',{name:'Скопировать ссылку'}).click();
     await page.getByRole('button',{name:'Вывести в боте'}).click();
-    await page.getByRole('button',{name:'Потратить баланс в боте'}).click();
+    await page.getByRole('button',{name:'Потратить в боте',exact:true}).click();
     const actions = await page.evaluate(() => ({links:window.openedLinks,copies:window.copiedValues}));
     assert.equal(new URL(actions.links[0]).pathname,'/share/url');
     assert.equal(new URL(actions.links[0]).searchParams.get('text'),'Лучший VPN:');
@@ -441,8 +496,28 @@ const {pathToFileURL} = require('node:url');
     assert.equal(new URL(actions.links[2]).searchParams.get('start'),'earn_spend');
     assert.deepEqual(actions.copies,[referral.link]);
     assert.equal(await page.getByText('private-fixture-invoice').count(),0);
+    const reversal = page.locator('#referral-history .ref-history-row').filter({hasText:'Корректировка после возврата'});
+    await reversal.waitFor();
+    await reversal.locator('b').getByText('−28 ₽',{exact:true}).waitFor();
     await page.evaluate(() => {window.scrollTo(0,0);document.getElementById('toast').classList.remove('show')});
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('toast')).opacity === '0');
     await page.screenshot({path:path.join(out,'miniapp-390.png'),fullPage:true});
+    await page.evaluate(() => {
+      state.referral={...state.referral};
+      delete state.referral.registered_referrals;
+      delete state.referral.active_referrals;
+      delete state.referral.total_earned;
+      renderReferral();
+    });
+    await openDetails('Статистика');
+    assert.equal(await page.locator('#view-ref').getByText('—',{exact:true}).count(),3);
+    await page.evaluate(() => {state.referral=null;renderReferral()});
+    assert.equal(await page.locator('#view-ref').getByText('0 ₽',{exact:true}).count(),0);
+    assert.equal(await page.locator('#view-ref').getByText(referral.link,{exact:true}).count(),0);
+    const retried = page.waitForResponse(response => response.url().endsWith('/miniapp/api/referral'));
+    await page.locator('#view-ref').getByRole('button').click();await retried;
+    await page.locator('#view-ref').getByText('1 400 ₽',{exact:true}).waitFor();
+    assert.equal(requests.filter(url => url.endsWith('?view=1')).length,1);
     await page.goto('https://preview.test/account');
     await page.locator('#mobileMenu').click();
     await page.locator('[data-account-section="earn"]').click();

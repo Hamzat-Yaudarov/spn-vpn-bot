@@ -1,9 +1,11 @@
 // Isolated UI checks. All requests are fulfilled locally; no user data or Telegram messages.
 import { readFile, mkdir } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+const modulePath = process.env.PLAYWRIGHT_MODULE;
+const { chromium } = await import(modulePath.startsWith('file:') ? modulePath : pathToFileURL(modulePath).href);
 const root = process.cwd();
-const out = root + '/artifacts/referral-upgrade';
+const out = process.env.SPN_REFERRAL_PREVIEW_DIR || '/private/tmp/spn-referral-growth-preview';
 await mkdir(out, { recursive: true });
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 const context = await browser.newContext({viewport:{width:390,height:844}});
@@ -16,7 +18,7 @@ const fixtures = {
  '/miniapp/api/me': {id:123,first_name:'Тест'},
  '/miniapp/api/tariffs': {regular:[],bypass:[],traffic_packages:[]},
  '/miniapp/api/subscriptions': {subscriptions:[]},
- '/miniapp/api/referral': {link:'https://t.me/WaySPN_robot?start=ref_123',bot_earning_url:'https://t.me/WaySPN_robot?start=earn',share_text:'Тест приглашения',minimum_withdrawal:1500,current_balance:1400,total_earned:3000,active_referrals:12,history:[{kind:'earning',id:1,amount:105,status:'credited',detail:'regular_1m',created_at:'2026-10-03T09:00:00Z'},{kind:'withdrawal',id:1,amount:1500,status:'pending',detail:'sbp',created_at:'2026-10-02T09:00:00Z'}]},
+ '/miniapp/api/referral': {link:'https://t.me/WaySPN_robot?start=ref_123',bot_earning_url:'https://t.me/WaySPN_robot?start=earn',share_text:'Лучший VPN:',minimum_withdrawal:1500,current_balance:1400,total_earned:3000,active_referrals:12,history:[{kind:'earning',id:1,amount:105,status:'credited',detail:'regular_1m',created_at:'2026-10-03T09:00:00Z'},{kind:'withdrawal',id:1,amount:1500,status:'pending',detail:'sbp',created_at:'2026-10-02T09:00:00Z'}]},
  '/admin/api/session': {id:999}, '/admin/api/dashboard': {},
  '/admin/api/withdrawals': {items:[payout],has_more:false},
  '/site/api/catalog': {regular:[],bypass:[],traffic_packages:[]},
@@ -36,13 +38,27 @@ const page = await context.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(String(e)));
 await page.goto('https://preview.test/app');
+await page.waitForFunction(() => typeof state !== 'undefined' && state.authStatus === 'ready'
+  && ['subs','tariffs','ref'].every(section => state.dataStatus[section] === 'ready'));
+assert.equal(await page.locator('.tabbar .tab').count(),4);
+assert.equal(await page.locator('.tabbar [data-view="home"]').count(),0);
+assert.equal(await page.locator('.tabbar [data-view="subs"]').getAttribute('aria-current'),'page');
 await page.locator('[data-view="ref"]').click();
 await page.getByText('До вывода осталось 100 ₽').waitFor();
 assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-await page.getByRole('button',{name:'📨 Пригласить друга'}).click();
-assert.match(await page.evaluate(() => window.openedLinks[0]), /t\.me\/share\/url/);
+await page.getByRole('button',{name:'Пригласить друга',exact:true}).click();
+const invitation = new URL(await page.evaluate(() => window.openedLinks[0]));
+assert.equal(invitation.pathname,'/share/url');
+assert.equal(invitation.searchParams.get('text'),'Лучший VPN:');
+assert.equal(invitation.searchParams.get('url'),fixtures['/miniapp/api/referral'].link);
 await page.getByRole('button',{name:'Вывести в боте'}).click();
-assert.match(await page.evaluate(() => window.openedLinks[1]), /start=earn/);
+assert.equal(new URL(await page.evaluate(() => window.openedLinks[1])).searchParams.get('start'),'earn_withdraw');
+await page.locator('#view-ref summary').filter({hasText:'Статистика'}).click();
+await page.locator('#view-ref').getByText('—',{exact:true}).waitFor();
+await page.locator('#view-ref summary').filter({hasText:'История'}).click();
+const withdrawal = page.locator('#referral-history .ref-history-row').filter({hasText:'Заявка R-1 · На рассмотрении'});
+await withdrawal.waitFor();
+assert.match(await withdrawal.locator('b').textContent(),/^1\s500 ₽$/);
 await page.screenshot({path:out+'/miniapp.png',fullPage:true});
 await page.setViewportSize({width:1280,height:1000});
 await page.goto('https://preview.test/admin');

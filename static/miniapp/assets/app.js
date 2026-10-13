@@ -4,13 +4,6 @@ if (tg) {
   tg.expand();
 }
 
-["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
-  document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
-});
-document.addEventListener("touchmove", (event) => {
-  if (event.touches.length > 1) event.preventDefault();
-}, { passive: false });
-
 const initData = tg?.initData || "";
 const state = {
   me: null,
@@ -26,9 +19,20 @@ const state = {
   activePayment: null,
   paymentResult: null,
   paymentPollTimer: null,
-  currentView: "home",
+  currentView: "subs",
   devices: {},
   devicesLoading: false,
+  devicesError: {},
+  deviceStatus: {},
+  deviceRequestVersion: {},
+  authStatus: "loading",
+  dataStatus: { subs: "loading", tariffs: "loading", ref: "loading" },
+  authError: null,
+  paying: false,
+  creatingPayment: null,
+  disclosures: {},
+  loadVersion: 0,
+  refRequestVersion: 0,
 };
 
 function api(path, options = {}) {
@@ -41,21 +45,30 @@ function api(path, options = {}) {
     },
   }).then(async (res) => {
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || "Ошибка запроса");
+    if (!res.ok) {
+      const error = new Error(data.detail || "Ошибка запроса");
+      error.status = res.status;
+      throw error;
+    }
     return data;
   });
 }
 
 function el(id) { return document.getElementById(id); }
 function rub(value) { return `${Number(value).toLocaleString("ru-RU")} ₽`; }
-function date(value) { return value ? new Date(value).toLocaleDateString("ru-RU") : "неизвестно"; }
+function gb(value) { return Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 2 }); }
+function date(value) { return value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleDateString("ru-RU") : "—"; }
 function showToast(text) { const t = el("toast"); t.textContent = text; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2400); }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
-function subTitle(s) { return `${s.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная"} #${s.type_index}`; }
+function subTitle(s) { return `${s.plan_kind === "bypass" ? "Антиглушилка" : "Обычная"} №${s.type_index}`; }
 function activeSubs() { return state.subs.filter((s) => s.status === "active"); }
 function selectedSub() { return state.subs.find((s) => s.id === state.selectedSubId); }
 function tariffPeriod(t) { return t.days === 30 ? "1 месяц" : t.days === 90 ? "3 месяца" : `${t.days} дней`; }
-function bypassBaseGb() { return Number(state.tariffs?.bypass?.[0]?.base_gb || 200); }
+function bypassBaseGb() {
+  const value = state.tariffs?.bypass?.[0]?.base_gb;
+  return value != null && Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
+}
+function baseTrafficText() { const gb = bypassBaseGb(); return gb === null ? "Лимит указан в подписке" : `${gb} ГБ в месяц`; }
 function priceHtml(item) {
   if (Number(item.original_price) > Number(item.price)) {
     return `<span class="offer-price"><s>${rub(item.original_price)}</s><b>${rub(item.price)}</b><em>${escapeHtml(item.discount?.name || "Скидка")}</em></span>`;
@@ -86,7 +99,9 @@ function timeLeftText(value) {
 
 function trafficRemaining(s) {
   if (!s.traffic?.enabled) return null;
-  return Math.max(0, Number(s.traffic.limit_gb || 0) - Number(s.traffic.used_gb || 0));
+  if (s.traffic.limit_gb == null || s.traffic.used_gb == null) return null;
+  const limit = Number(s.traffic.limit_gb), used = Number(s.traffic.used_gb);
+  return Number.isFinite(limit) && Number.isFinite(used) ? Math.max(0, limit - used) : null;
 }
 
 function nearestActiveSub() {
@@ -132,7 +147,10 @@ function renderAvatar(user) {
   avatar.removeAttribute("aria-hidden");
   const name = user?.first_name || user?.username || "Way SPN";
   if (user?.photo_url) {
-    avatar.innerHTML = `<img src="${user.photo_url}" alt="${name}">`;
+    const img = document.createElement("img");
+    img.src = user.photo_url;
+    img.alt = name;
+    avatar.replaceChildren(img);
   } else {
     avatar.textContent = name.trim().slice(0, 1).toUpperCase() || "W";
   }
@@ -147,6 +165,31 @@ function finishHeaderLoading() {
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view, { reset: true }));
 });
+
+document.addEventListener("toggle", (event) => {
+  if (event.target.isConnected && event.target.matches?.("details[data-disclosure]")) {
+    state.disclosures[event.target.dataset.disclosure] = event.target.open;
+  }
+}, true);
+
+function disclosure(key, title, body) {
+  return `<details class="disclosure" data-disclosure="${key}"${state.disclosures[key] ? " open" : ""}><summary>${title}</summary><div class="details-body">${body}</div></details>`;
+}
+function loadingHtml(label) {
+  return `<div class="loading-state" role="status" aria-live="polite" aria-busy="true"><p>${label}</p><div class="loading-dashboard" aria-hidden="true"><span class="skeleton-block"></span><span class="skeleton-block"></span></div></div>`;
+}
+function errorHtml(title, action, message = "Проверьте интернет и попробуйте ещё раз.") {
+  return `<div class="card error-state" role="status"><h2 class="title">${title}</h2><p class="muted">${message}</p><button class="button ghost" onclick="${action}">Повторить</button></div>`;
+}
+function sectionState(section) {
+  if (state.authStatus === "error") return errorHtml("Не удалось открыть кабинет", "load()", state.authError?.status === 401 ? "Откройте MiniApp через Telegram-бота SPN." : "Проверьте интернет и попробуйте ещё раз.");
+  if (state.authStatus === "loading" || state.dataStatus[section] === "loading") return loadingHtml("Загружаем данные…");
+  if (state.dataStatus[section] === "error") return errorHtml("Не удалось загрузить данные", section === "ref" ? "refreshReferral()" : section === "subs" ? "reloadData()" : "load()");
+  return null;
+}
+function pageHeading(title, subtitle = "") {
+  return `<div class="page-heading"><h1>${title}</h1>${subtitle ? `<p class="muted">${subtitle}</p>` : ""}</div>`;
+}
 
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
@@ -163,6 +206,7 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     openKeyInHapp(target.dataset.url || "");
   }
+  if (target.dataset.action === "payment-link") openLink(decodeURIComponent(target.dataset.url || ""));
 });
 
 function resetKeysState() {
@@ -179,49 +223,90 @@ function resetPurchaseState() {
 }
 
 function switchView(view, options = {}) {
+  if (view === "home") view = "subs"; // Compatibility with old return actions.
   const enteringReferral = view === "ref" && state.currentView !== "ref";
   if (options.reset) {
     if (state.currentView === "subs" || view === "subs") resetKeysState();
     if (state.currentView === "buy" || view === "buy") resetPurchaseState();
   }
-  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  document.querySelectorAll(".tab").forEach((b) => {
+    const active = b.dataset.view === view;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   el(`view-${view}`).classList.add("active");
   document.body.className = `view-${view}-active`;
   state.currentView = view;
   render();
+  window.scrollTo(0, 0);
   // Startup also fetches referral data; only a real tab entry counts as a view.
   if (enteringReferral) refreshReferral({ recordView: true });
 }
 
 async function load() {
+  const version = ++state.loadVersion;
+  const refVersion = ++state.refRequestVersion;
+  state.authStatus = "loading";
+  state.authError = null;
+  state.dataStatus = { subs: "loading", tariffs: "loading", ref: "loading" };
+  render();
   try {
-    const [me, tariffs, subscriptions, referral] = await Promise.all([
-      api("/miniapp/api/me"),
-      api("/miniapp/api/tariffs"),
-      api("/miniapp/api/subscriptions"),
-      api("/miniapp/api/referral"),
-    ]);
+    const me = await api("/miniapp/api/me");
+    if (version !== state.loadVersion) return;
     state.me = me;
-    state.tariffs = tariffs;
-    state.subs = subscriptions.subscriptions || [];
-    state.referral = referral;
+    state.authStatus = "ready";
     finishHeaderLoading();
-    el("userLine").textContent = me.first_name ? `Добро пожаловать, ${me.first_name}` : "Управляйте подписками в пару кликов";
+    el("userLine").textContent = me.first_name || "Личный кабинет";
     renderAvatar(me);
     render();
+    await Promise.allSettled([
+      ["subs", "/miniapp/api/subscriptions", data => {
+        if (!Array.isArray(data.subscriptions)) throw new Error("Subscriptions unavailable");
+        state.subs = data.subscriptions;
+      }],
+      ["tariffs", "/miniapp/api/tariffs", data => {
+        if (!Array.isArray(data.regular) || !Array.isArray(data.bypass)) throw new Error("Catalog unavailable");
+        state.tariffs = data;
+      }],
+      ["ref", "/miniapp/api/referral", data => { state.referral = validReferral(data); }],
+    ].map(async ([section, path, apply]) => {
+      try {
+        const data = await api(path);
+        if (version !== state.loadVersion) return;
+        if (section === "ref" && refVersion !== state.refRequestVersion) return;
+        apply(data);
+        state.dataStatus[section] = "ready";
+      } catch (_) {
+        if (version !== state.loadVersion) return;
+        if (section === "ref" && refVersion !== state.refRequestVersion) return;
+        state.dataStatus[section] = "error";
+      }
+      render();
+    }));
   } catch (e) {
+    if (version !== state.loadVersion) return;
+    state.authStatus = "error";
+    state.authError = e;
     finishHeaderLoading();
     renderAvatar(null);
-    el("userLine").textContent = "Откройте кабинет внутри Telegram";
-    document.querySelector("main").innerHTML = `<section class="view active"><div class="card empty"><h2>Не удалось открыть MiniApp</h2><p class="muted">${e.message}</p></div></section>`;
+    el("userLine").textContent = "Личный кабинет";
+    render();
   }
 }
 
 async function reloadData() {
-  const subscriptions = await api("/miniapp/api/subscriptions");
-  state.subs = subscriptions.subscriptions || [];
-  render();
+  state.dataStatus.subs = "loading";
+  renderKeys();
+  try {
+    const subscriptions = await api("/miniapp/api/subscriptions");
+    if (!Array.isArray(subscriptions.subscriptions)) throw new Error("Subscriptions unavailable");
+    state.subs = subscriptions.subscriptions;
+    state.dataStatus.subs = "ready";
+  } catch (error) {
+    state.dataStatus.subs = "error";
+    return false;
+  } finally { render(); }
 }
 
 function stopPaymentPolling() {
@@ -237,7 +322,7 @@ function startPaymentPolling(payment) {
     ? "После оплаты ГБ добавятся автоматически."
     : payment.type === "devices"
       ? "После оплаты лимит устройств обновится автоматически."
-      : "После оплаты ключ появится автоматически.";
+      : "После оплаты подписка появится автоматически.";
   showToast(waitingText);
   state.paymentPollTimer = setInterval(checkActivePayment, 3000);
 }
@@ -245,15 +330,20 @@ function startPaymentPolling(payment) {
 async function checkActivePayment() {
   const payment = state.activePayment;
   if (!payment) return stopPaymentPolling();
+  if (payment.checking) return;
+  payment.checking = true;
   payment.attempts += 1;
 
   try {
     const status = await api(`/miniapp/api/payments/${encodeURIComponent(payment.invoice_id)}`);
+    if (state.activePayment !== payment) return;
     if (status.status === "paid") {
       stopPaymentPolling();
       state.activePayment = null;
       state.pendingPayment = null;
       await reloadData();
+      // A later checkout must not be replaced by an older status response.
+      if (state.activePayment || state.paying || state.pendingPayment) return;
       state.paymentResult = status.summary || {
         title: "Оплата прошла",
         message: "Покупка активирована и уже отображается в подписках.",
@@ -268,17 +358,21 @@ async function checkActivePayment() {
     }
   } catch (e) {
     if (payment.attempts > 3) console.warn("Payment status check failed", e);
-  }
+  } finally { payment.checking = false; }
 
+  if (state.activePayment !== payment) return;
   if (payment.attempts >= 120) {
     stopPaymentPolling();
-    state.activePayment = null;
-    showToast("Проверка оплаты остановлена. Обновите кабинет позже.");
+    payment.autoCheckPaused = true;
+    showToast("Счёт сохранён. Можно проверить оплату вручную.");
+    render();
   }
 }
 
 function render() {
-  renderHome();
+  document.querySelectorAll("details[data-disclosure]").forEach(node => {
+    state.disclosures[node.dataset.disclosure] = node.open;
+  });
   renderKeys();
   renderBuy();
   renderReferral();
@@ -286,60 +380,29 @@ function render() {
   renderPaymentResult();
 }
 
-function renderHome() {
-  const active = activeSubs();
-  const nearest = nearestActiveSub();
-  const hasBypass = active.some((s) => s.plan_kind === "bypass");
-  const nearestTone = statusTone(nearest);
-  const primary = active.length ? { text: "Мои ключи", action: "openKeysList", hint: "Управление" } : { text: "Выбрать тариф", action: "openNewPurchase", hint: "Оформить доступ" };
-  const secondary = active.length ? { text: "Продлить", action: "openRenewList", hint: "Выбрать ключ" } : { text: "Помощь", action: "switchView('help', { preserve: true })", hint: "Инструкции" };
-  const primaryAction = primary.action.includes("(") ? primary.action : `${primary.action}()`;
-  const secondaryAction = secondary.action.includes("(") ? secondary.action : `${secondary.action}()`;
-  el("view-home").innerHTML = `
-    <div class="home-dashboard">
-      <div class="summary-grid">
-        <div class="summary-card blue"><span>Активные ключи</span><b>${active.length}</b></div>
-        <div class="summary-card green"><span>Антиглушилка</span><b>${hasBypass ? "Подключена" : "Нет"}</b></div>
-      </div>
-
-      ${nearest ? `<button class="status-card ${nearestTone}" onclick="openSubDetail(${nearest.id})">
-        <span class="status-orb"></span>
-        <div><p class="title">${subTitle(nearest)}</p><p class="muted">до ${date(nearest.subscription_until)} · осталось ${timeLeftText(nearest.subscription_until)}</p></div>
-        <b>›</b>
-      </button>` : `<div class="card empty soft-empty"><h2>Активных ключей пока нет</h2><p class="muted">Выберите подписку — ключ появится после оплаты.</p></div>`}
-
-      <div class="quick-grid home-actions elevated-actions">
-        <button class="quick-card gold primary-action" onclick="${primaryAction}"><span>${primary.text}</span><small>${primary.hint}</small></button>
-        <button class="quick-card blue secondary-action" onclick="${secondaryAction}"><span>${secondary.text}</span><small>${secondary.hint}</small></button>
-      </div>
-      ${active.length || hasBypass ? `<div class="choice-list compact-actions">
-        ${active.length ? `<button class="choice-button" onclick="openNewPurchase()"><span>Купить ещё ключ<small>Обычный или с антиглушилкой</small></span><b>›</b></button>` : ""}
-        ${hasBypass ? `<button class="choice-button" onclick="openKeysList(); showToast('Выберите ключ с антиглушилкой и нажмите Купить ГБ')"><span>Купить ГБ<small>Для антиглушилки</small></span><b>›</b></button>` : ""}
-      </div>` : ""}
-    </div>`;
-}
-
 function renderKeys() {
   const container = el("view-subs");
+  const unavailable = sectionState("subs");
+  if (unavailable) { container.innerHTML = pageHeading("Мой VPN") + unavailable; return; }
   if (!state.subs.length) {
-    container.innerHTML = `<div class="card empty"><h2>Ключей пока нет</h2><p class="muted">Оформите первый тариф, и ключ появится здесь.</p><button class="button accent" onclick="openNewPurchase()">Выбрать тариф</button></div>`;
+    container.innerHTML = pageHeading("Мой VPN") + `<div class="card empty"><h2 class="title">Подписок пока нет</h2><p class="muted">Купите подписку, чтобы подключиться.</p><button class="button accent" onclick="openNewPurchase()">Купить подписку</button></div>`;
     return;
   }
 
   if (state.keysMode === "list") {
-    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ для управления.");
+    container.innerHTML = keysListHtml("Мой VPN", "Выберите подписку.");
     return;
   }
 
   if (state.keysMode === "renew-list") {
-    container.innerHTML = keysListHtml("Что продлить?", "Выберите ключ, который хотите продлить.", "renew");
+    container.innerHTML = keysListHtml("Что продлить?", "Выберите подписку.", "renew");
     return;
   }
 
   const sub = selectedSub();
   if (!sub) {
     state.keysMode = "list";
-    container.innerHTML = keysListHtml("Мои ключи", "Выберите ключ.");
+    container.innerHTML = keysListHtml("Мой VPN", "Выберите подписку.");
     return;
   }
 
@@ -358,49 +421,61 @@ function renderPaymentResult() {
   el("view-payment-result").innerHTML = `<div class="payment-result-shell">
     <div class="card payment-result-card">
       <div class="result-icon">✓</div>
-      <p class="step">Готово</p>
-      <p class="title">${escapeHtml(summary?.title || "Оплата прошла")}</p>
-      <p class="muted">${multilineHtml(summary?.message || "Покупка активирована и уже отображается в кабинете.")}</p>
-      <button class="button green" onclick="returnToMainMenu()">Вернуться в главное меню</button>
+        <p class="title">${escapeHtml(summary?.title || "Оплата прошла")}</p>
+        <p class="muted">${multilineHtml(summary?.message || "Покупка активирована и уже отображается в кабинете.")}</p>
+        <button class="button accent" onclick="returnToMainMenu()">Мой VPN</button>
     </div>
   </div>`;
 }
 
 function keysListHtml(title, subtitle, action = "detail") {
+  const ordered = state.subs.filter(s => s.status === "active").concat(state.subs.filter(s => s.status !== "active"));
   return `<div class="grid">
-    <div class="section-note"><p class="step">Ключи</p><p class="title">${title}</p><p class="muted">${subtitle}</p></div>
-    <div class="choice-list">${state.subs.map((s) => keyButton(s, action)).join("")}</div>
+    ${pageHeading(title, subtitle)}
+    <div class="subscription-list">${ordered.map((s) => keyButton(s, action)).join("")}</div>
   </div>`;
 }
 
 function keyButton(s, action) {
   const handler = action === "renew" ? `openRenew(${s.id})` : `openSubDetail(${s.id})`;
-  const planClass = s.plan_kind === "bypass" ? "bypass" : "regular";
-  return `<button class="choice-button key-choice ${planClass}" onclick="${handler}"><span><i></i>${subTitle(s)}<small>${s.status === "active" ? `до ${date(s.subscription_until)}` : "истекла"}</small>${badgesHtml(s)}</span><b>›</b></button>`;
+  const remaining = trafficRemaining(s);
+  const active = s.status === "active";
+  const status = active ? "Активна" : s.status === "expired" ? "Истекла" : "Статус уточняется";
+  const expiry = active ? `До ${date(s.subscription_until)}` : s.status === "expired" ? "Срок закончился" : "Срок уточняется";
+  return `<button class="subscription-card key-choice" data-sub-id="${s.id}" onclick="${handler}"><span><span class="subscription-name">${escapeHtml(subTitle(s))}</span><span class="subscription-meta">${expiry}</span>${s.traffic?.enabled ? `<span class="subscription-meta ${trafficTone(s)}">${remaining === null ? "Трафик уточняется" : `Осталось ${gb(remaining)} ГБ`}</span>` : ""}<span class="status-label ${active ? statusTone(s) : "expired"}">${status}</span></span><span class="chevron" aria-hidden="true">›</span></button>`;
 }
 
 function subscriptionDetailHtml(s) {
-  const percent = s.traffic.enabled && s.traffic.limit_gb ? Math.min(100, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100)) : 0;
+  const percent = s.traffic?.enabled && s.traffic.limit_gb ? Math.min(100, Math.max(0, Math.round((s.traffic.used_gb / s.traffic.limit_gb) * 100))) : 0;
   const remaining = trafficRemaining(s);
   const tone = statusTone(s);
   const trafficToneClass = trafficTone(s);
   const devicePackages = s.devices?.packages || [];
+  const active = s.status === "active";
+  const status = active ? "Подписка активна" : s.status === "expired" ? "Подписка истекла" : "Статус уточняется";
+  const expiry = active ? `До ${date(s.subscription_until)}` : s.status === "expired" ? "Срок закончился" : "—";
+  const encodedUrl = s.subscription_url ? escapeHtml(encodeURIComponent(s.subscription_url).replace(/'/g, "%27")) : "";
   return `<div class="grid">
-    <button class="button ghost" onclick="openKeysList()">← Назад к ключам</button>
-    <div class="card key-hero ${s.plan_kind === "bypass" ? "plan-bypass" : "plan-regular"}">
-      <div class="key-hero-top"><div><p class="step">${s.plan_kind === "bypass" ? "Антиглушилка" : "Обычный ключ"}</p><p class="title">${subTitle(s)}</p><p class="muted">${s.status === "active" ? `до ${date(s.subscription_until)} · ${timeLeftText(s.subscription_until)}` : "Срок закончился"}</p></div><span class="status-dot ${tone}"></span></div>
-      ${badgesHtml(s)}
-      <div class="metric-grid"><div><span>Статус</span><b>${s.status === "active" ? "Активна" : "Истекла"}</b></div><div><span>Устройства</span><b>${deviceLimitText(s)}</b></div></div>
-      ${s.traffic.enabled ? `<div class="traffic-panel ${trafficToneClass}">${trafficToneClass ? `<p class="traffic-alert">${trafficToneClass === "danger" ? "Трафик почти закончился" : "Трафик заканчивается"}</p>` : ""}<div class="row"><span class="small">Осталось трафика</span><b>${remaining.toFixed(1)} ГБ</b></div><div class="progress"><span style="width:${percent}%"></span></div><div class="row"><span class="small">Использовано ${s.traffic.used_gb} / ${s.traffic.limit_gb} ГБ</span><span class="small">Сброс: ${date(s.traffic.reset_at)}</span></div></div>` : ""}
+    <button class="button back-button ghost" onclick="openKeysList()">← Мой VPN</button>
+    ${pageHeading(escapeHtml(subTitle(s)))}
+    <div class="card subscription-summary">
+      <span class="status-label ${active ? tone : "expired"}">${status}</span>
+      <div class="summary-line"><span>Срок</span><b>${expiry}</b></div>
+      <div class="summary-line"><span>Устройства</span><b>${deviceLimitText(s)}</b></div>
+      ${s.traffic?.enabled ? `<div class="traffic-panel ${trafficToneClass}"><div class="summary-line"><span>Осталось</span><b>${remaining === null ? "—" : `${gb(remaining)} ГБ`}</b></div>${remaining !== null ? `<div class="progress" role="progressbar" aria-label="Использованный трафик" aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent}%"></span></div><p class="small">Использовано ${gb(s.traffic.used_gb)} из ${gb(s.traffic.limit_gb)} ГБ</p>` : `<p class="small">Не удалось уточнить трафик.</p>`}${trafficToneClass ? `<p class="small ${trafficToneClass}">Трафик ${remaining === 0 ? "закончился" : "заканчивается"}</p>` : ""}<p class="small">Обновление периода: ${date(s.traffic.reset_at)}</p></div>` : ""}
     </div>
-    <div class="card key-actions-card"><p class="title">Подключение</p><p class="muted">Откройте ключ в Happ или скопируйте его.</p>${s.subscription_url ? `<div class="keybox compact-key">${s.subscription_url}</div><div class="action-grid"><button class="button blue" data-action="happ" data-url="${encodeURIComponent(s.subscription_url)}">Открыть в Happ</button><button class="button ghost" onclick="copyText('${encodeURIComponent(s.subscription_url)}')">Скопировать</button></div>` : `<p class="muted">Ключ появится после активации оплаты.</p>`}</div>
-    <div class="action-grid sticky-actions">
-      <button class="button accent" data-action="renew" data-sub-id="${s.id}">Продлить</button>
-      <button class="button blue" data-action="devices" data-sub-id="${s.id}">Устройства</button>
-      ${s.status === "active" && devicePackages.length ? `<button class="button green wide" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
-      ${s.traffic.enabled ? `<button class="button green wide" data-action="traffic" data-sub-id="${s.id}">Купить ГБ</button>` : ""}
-      <button class="button danger wide" data-action="delete-subscription" data-sub-id="${s.id}">Удалить подписку</button>
+    <div class="action-grid">
+      ${active && encodedUrl ? `<button class="button accent" data-action="happ" data-url="${encodedUrl}">Открыть в Happ</button>` : ""}
+      <button class="button ${active && encodedUrl ? "ghost" : "accent wide"}" data-action="renew" data-sub-id="${s.id}">Продлить</button>
     </div>
+    ${active && !encodedUrl ? `<p class="muted">Ссылка подключения пока недоступна. Обновите данные или напишите в поддержку.</p><button class="button ghost" onclick="reloadData()">Обновить данные</button>` : ""}
+    ${encodedUrl ? `<button class="button ghost" onclick="copyText('${encodedUrl}')">Скопировать ссылку</button>${disclosure(`link-${s.id}`, "Ссылка подписки", `<div class="keybox">${escapeHtml(s.subscription_url)}</div>`)}` : ""}
+    <div class="details-list">
+      <button class="choice-button" data-action="devices" data-sub-id="${s.id}"><span>Устройства</span><span class="chevron" aria-hidden="true">›</span></button>
+      ${active && devicePackages.length ? `<button class="choice-button" data-action="device-addons" data-sub-id="${s.id}"><span>Докупить устройства</span><span class="chevron" aria-hidden="true">›</span></button>` : ""}
+      ${s.traffic?.enabled ? `<button class="choice-button" data-action="traffic" data-sub-id="${s.id}"><span>Докупить ГБ</span><span class="chevron" aria-hidden="true">›</span></button>` : ""}
+    </div>
+    ${disclosure(`more-${s.id}`, "Ещё", `<button class="button danger" data-action="delete-subscription" data-sub-id="${s.id}">Удалить подписку</button>`)}
   </div>`;
 }
 
@@ -411,19 +486,23 @@ function deviceTitle(device) {
 
 function devicesHtml(s) {
   const devices = state.devices[s.id] || [];
-  if (state.devicesLoading) {
-    return `<div class="grid"><button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button><div class="card empty"><h2>Загружаем устройства...</h2></div></div>`;
+  const back = `<button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button>`;
+  if (state.deviceStatus[s.id] === "loading") {
+    return `<div class="grid">${back}${pageHeading("Устройства")}${loadingHtml("Загружаем устройства…")}</div>`;
+  }
+  if (state.deviceStatus[s.id] === "error") {
+    return `<div class="grid">${back}${pageHeading("Устройства")}${errorHtml("Не удалось загрузить устройства", `openDevices(${s.id})`)}</div>`;
   }
 
   const list = devices.length
-    ? devices.map((device, index) => `<div class="card device-card"><div class="row start"><div><p class="title">${escapeHtml(deviceTitle(device))}</p><p class="muted">Подключено: ${date(device.created_at)}</p>${device.hwid ? `<p class="small">HWID: ${escapeHtml(device.hwid)}</p>` : ""}</div><span class="badge blue">${index + 1}</span></div>${device.hwid ? `<button class="button danger" data-action="delete-device" data-sub-id="${s.id}" data-hwid="${escapeHtml(device.hwid)}">Удалить устройство</button>` : ""}</div>`).join("")
-    : `<div class="card empty"><h2>Устройств пока нет</h2><p class="muted">Когда ключ подключат на телефоне или компьютере, устройство появится здесь.</p></div>`;
+    ? devices.map((device, index) => `<div class="card device-card"><p class="title">${escapeHtml(deviceTitle(device))}</p><p class="small">Добавлено: ${date(device.created_at)}</p>${device.hwid ? disclosure(`device-${s.id}-${index}`, "Данные устройства", `<p class="keybox">${escapeHtml(device.hwid)}</p>`) : ""}${device.hwid ? `<button class="button danger" data-action="delete-device" data-sub-id="${s.id}" data-hwid="${escapeHtml(device.hwid)}">Удалить устройство</button>` : ""}</div>`).join("")
+    : `<div class="card empty"><h2 class="title">Устройств пока нет</h2><p class="muted">Они появятся после подключения.</p></div>`;
 
   return `<div class="grid">
-    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-note"><p class="step">Устройства</p><p class="title">${subTitle(s)}</p><p class="muted">Лимит: до ${deviceLimitText(s)}. Удалите устройство, если нужно освободить слот для нового подключения.</p></div>
+    ${back}${pageHeading("Устройства", escapeHtml(subTitle(s)))}
+    <p class="muted">Лимит: ${deviceLimitText(s)}.</p>
     ${list}
-    ${s.status === "active" && (s.devices?.packages || []).length ? `<button class="button green" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
+    ${s.status === "active" && (s.devices?.packages || []).length ? `<button class="button ghost" data-action="device-addons" data-sub-id="${s.id}">Докупить устройства</button>` : ""}
     ${devices.length ? `<button class="button danger" data-action="delete-all-devices" data-sub-id="${s.id}">Удалить все устройства</button>` : ""}
   </div>`;
 }
@@ -431,42 +510,48 @@ function devicesHtml(s) {
 function deviceAddonsHtml(s) {
   const packages = s.devices?.packages || [];
   if (!packages.length) {
-    return `<div class="grid"><button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button><div class="card empty"><h2>Лимит уже максимальный</h2><p class="muted">Сейчас доступно до ${deviceLimitText(s)}.</p></div></div>`;
+    return `<div class="grid"><button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button><div class="card empty"><h2 class="title">Лимит уже максимальный</h2><p class="muted">Доступно: ${deviceLimitText(s)}.</p></div></div>`;
   }
   return `<div class="grid">
-    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-note"><p class="step">Устройства</p><p class="title">Докупить устройства</p><p class="muted">Выберите пакет для ${subTitle(s)}. Он действует до ${date(s.subscription_until)}.</p></div>
+    <button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button>
+    ${pageHeading("Докупить устройства", escapeHtml(subTitle(s)))}
+    <p class="muted">Дополнительные устройства действуют до ${date(s.subscription_until)}.</p>
     <div class="choice-list">${packages.map((pkg) => `<button class="choice-button" onclick="prepareDevicePayment(${s.id}, ${pkg.count})"><span>${devicePackageText(pkg)}<small>После окончания периода лимит вернётся к базовому.</small></span><b>›</b></button>`).join("")}</div>
   </div>`;
 }
 
 function renewHtml(s) {
-  const tariffs = state.tariffs[s.plan_kind] || [];
+  const unavailable = sectionState("tariffs");
+  const tariffs = state.tariffs?.[s.plan_kind] || [];
   return `<div class="grid">
-    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-note"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">Выберите срок продления.</p></div>
-    <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}<small>${subTitle(s)}</small></span>${priceHtml(t)}</button>`).join("")}</div>
+    <button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button>
+    ${pageHeading("Продлить подписку", escapeHtml(subTitle(s)))}
+    ${unavailable || `<p class="muted">Выберите срок.</p><div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}</span>${priceHtml(t)}</button>`).join("")}</div>`}
   </div>`;
 }
 
 function trafficHtml(s) {
-  if (!s.traffic.enabled) return subscriptionDetailHtml(s);
+  if (!s.traffic?.enabled) return subscriptionDetailHtml(s);
+  const unavailable = sectionState("tariffs");
   return `<div class="grid">
-    <button class="button ghost" onclick="openSubDetail(${s.id})">← Назад к ключу</button>
-    <div class="section-note"><p class="step">Шаг 2 из 3</p><p class="title">${subTitle(s)}</p><p class="muted">ГБ тратятся только при использовании антиглушилки.</p></div>
-    <div class="choice-list">${state.tariffs.traffic_packages.map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ<small>Дополнительный трафик</small></span>${priceHtml(p)}</button>`).join("")}</div>
+    <button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button>
+    ${pageHeading("Докупить ГБ", escapeHtml(subTitle(s)))}
+    ${unavailable || `<p class="muted">Для подключения через антиглушилку.</p><div class="choice-list">${(state.tariffs.traffic_packages || []).map((p) => `<button class="choice-button" onclick="prepareTrafficPayment(${s.id}, '${p.code}')"><span>+${p.gb} ГБ</span>${priceHtml(p)}</button>`).join("")}</div>`}
   </div>`;
 }
 
 function renderBuy() {
   const container = el("view-buy");
+  const unavailable = sectionState("tariffs");
+  if (unavailable) { container.innerHTML = pageHeading("Купить подписку") + unavailable; return; }
   if (state.buyMode === "plan") {
     container.innerHTML = `<div class="grid">
-      <div class="section-note"><p class="step">Шаг 1 из 3</p><p class="title">Выберите тип подписки</p></div>
+      ${pageHeading("Купить подписку", "Выберите вариант.")}
       <div class="plan-grid">
-        <button class="plan-card plan-regular" onclick="selectBuyPlan('regular')"><span>Обычная</span><b>5 устройств</b><small>Для ежедневного подключения.</small></button>
-        <button class="plan-card plan-bypass" onclick="selectBuyPlan('bypass')"><span>С антиглушилкой</span><b>${bypassBaseGb()} ГБ в месяц</b><small>3 устройства, обход ограничений.</small></button>
+        <button class="plan-card" onclick="selectBuyPlan('regular')"${state.tariffs.regular.length ? "" : " disabled"}><span class="title">Обычная</span><small>5 устройств · без лимита ГБ</small><small>Для ежедневного подключения</small></button>
+        <button class="plan-card" onclick="selectBuyPlan('bypass')"${state.tariffs.bypass.length ? "" : " disabled"}><span class="title">С антиглушилкой</span><small>3 устройства · ${baseTrafficText()}</small><small>Для обхода ограничений</small></button>
       </div>
+      ${!state.tariffs.regular.length && !state.tariffs.bypass.length ? `<p class="muted">Покупка временно недоступна.</p>` : ""}
     </div>`;
     return;
   }
@@ -474,9 +559,9 @@ function renderBuy() {
   if (state.buyMode === "tariff") {
     const tariffs = state.tariffs[state.buyPlan] || [];
     container.innerHTML = `<div class="grid">
-      <button class="button ghost" onclick="resetBuy()">← Назад к типам</button>
-      <div class="section-note ${state.buyPlan === "regular" ? "regular-note" : "bypass-note"}"><p class="step">Шаг 2 из 3</p><p class="title">${state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой"}</p><p class="muted">${state.buyPlan === "regular" ? "5 устройств, обычные серверы." : `3 устройства, ${bypassBaseGb()} ГБ в месяц.`}</p></div>
-      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}<small>${t.title}</small></span>${priceHtml(t)}</button>`).join("")}</div>
+      <button class="button back-button ghost" onclick="resetBuy()">← Назад</button>
+      ${pageHeading(state.buyPlan === "regular" ? "Обычная подписка" : "С антиглушилкой", "Выберите срок.")}
+      <div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareNewPayment('${t.code}')"><span>${tariffPeriod(t)}</span>${priceHtml(t)}</button>`).join("")}</div>
     </div>`;
     return;
   }
@@ -484,10 +569,33 @@ function renderBuy() {
   container.innerHTML = paymentHtml("Новая подписка");
 }
 
+function checkoutSummary(payment) {
+  if (!payment || !state.tariffs) return "";
+  const sub = state.subs.find(s => s.id === payment.subscription_id);
+  let product, description;
+  if (payment.type === "traffic") {
+    product = state.tariffs.traffic_packages?.find(p => p.code === payment.package_code);
+    description = product ? `+${product.gb} ГБ` : "Дополнительный трафик";
+  } else if (payment.type === "devices") {
+    product = sub?.devices?.packages?.find(p => p.count === payment.device_count);
+    description = product ? `+${product.count} ${deviceWord(product.count)}` : "Дополнительные устройства";
+  } else {
+    product = [...state.tariffs.regular, ...state.tariffs.bypass].find(t => t.code === payment.tariff_code);
+    const kind = product?.kind || (state.tariffs.bypass.some(t => t.code === payment.tariff_code) ? "bypass" : "regular");
+    description = product ? `${kind === "bypass" ? "С антиглушилкой" : "Обычная"} · ${tariffPeriod(product)}` : "Подписка";
+  }
+  return `<div class="card checkout-summary"><p class="title">${description}</p>${sub ? `<p class="small">${escapeHtml(subTitle(sub))}</p>` : ""}${product ? `<div class="summary-line"><span>К оплате</span>${priceHtml(product)}</div>` : `<p class="muted">Цена недоступна. Вернитесь к выбору покупки.</p>`}</div>`;
+}
+function sameCheckout(a, b) {
+  return a && b && ["type", "tariff_code", "payment_target", "subscription_id", "package_code", "device_count"].every(key => a[key] === b[key]);
+}
 function paymentHtml(title) {
+  const busy = state.paying;
+  const waiting = sameCheckout(state.activePayment, state.pendingPayment) ? state.activePayment : null;
   return `<div class="grid">
-    <button class="button ghost" onclick="backFromPayment()">← Назад</button>
-    <div class="section-note payment-note"><p class="step">Оплата</p><p class="title">${title}</p><p class="muted">Выберите удобный способ оплаты. После оплаты всё обновится автоматически.</p></div><div class="grid"><button class="button accent" onclick="payPrepared('cryptobot')">CryptoBot</button><button class="button green" onclick="payPrepared('yookassa')">Банковская карта</button></div>
+    <button class="button back-button ghost" onclick="backFromPayment()">← Назад</button>
+    ${pageHeading(title)}${checkoutSummary(state.pendingPayment)}
+    ${waiting ? `<div class="card payment-wait" role="status"><h2 class="title">Счёт создан</h2><p class="muted">${waiting.autoCheckPaused ? "Счёт сохранён. Проверьте оплату или обновите подписки." : "После оплаты покупка появится автоматически."}</p><button class="button accent" data-action="payment-link" data-url="${escapeHtml(encodeURIComponent(waiting.pay_url || ""))}">Открыть оплату</button><button class="button ghost" onclick="checkActivePayment()">Проверить оплату</button></div>` : `<p class="muted">Выберите способ оплаты.</p><div class="grid"><button class="button accent" data-provider="yookassa" onclick="payPrepared('yookassa')"${busy ? " disabled aria-busy=\"true\"" : ""}>${busy ? "Создаём счёт…" : "Банковская карта"}</button><button class="button ghost" data-provider="cryptobot" onclick="payPrepared('cryptobot')"${busy ? " disabled" : ""}>CryptoBot</button></div>`}
   </div>`;
 }
 
@@ -515,13 +623,19 @@ async function openDevices(id) {
   state.selectedSubId = id;
   state.keysMode = "devices";
   state.devicesLoading = true;
+  state.deviceStatus[id] = "loading";
+  const version = (state.deviceRequestVersion[id] || 0) + 1;
+  state.deviceRequestVersion[id] = version;
   renderKeys();
   try {
     const data = await api(`/miniapp/api/subscriptions/${id}/devices`);
-    state.devices[id] = data.devices || [];
+    if (state.deviceRequestVersion[id] !== version) return;
+    if (!Array.isArray(data.devices)) throw new Error("Devices unavailable");
+    state.devices[id] = data.devices;
+    state.deviceStatus[id] = "ready";
   } catch (e) {
     showToast(e.message);
-    state.devices[id] = [];
+    if (state.deviceRequestVersion[id] === version) state.deviceStatus[id] = "error";
   } finally {
     state.devicesLoading = false;
     renderKeys();
@@ -557,7 +671,7 @@ function confirmAction(message) {
 async function deleteSubscription(id) {
   const sub = state.subs.find((item) => item.id === Number(id));
   const name = sub ? subTitle(sub) : "эту подписку";
-  const ok = await confirmAction(`Удалить ${name}? Ключ будет удалён из Remnawave и перестанет работать. Деньги автоматически не возвращаются.`);
+  const ok = await confirmAction(`Удалить подписку «${name}»? Подключение перестанет работать. Деньги автоматически не возвращаются.`);
   if (!ok) return;
   try {
     await api(`/miniapp/api/subscriptions/${id}`, { method: "DELETE" });
@@ -607,21 +721,29 @@ function backFromPayment() {
 }
 
 async function payPrepared(provider) {
-  if (!state.pendingPayment) return;
+  if (!state.pendingPayment || state.paying || !["yookassa", "cryptobot"].includes(provider)) return;
+  const payment = { ...state.pendingPayment };
+  state.paying = true;
+  state.creatingPayment = payment;
+  render();
   try {
     let data;
-    if (state.pendingPayment.type === "traffic") {
-      data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
-    } else if (state.pendingPayment.type === "devices") {
-      data = await api("/miniapp/api/payments/devices", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
+    if (payment.type === "traffic") {
+      data = await api("/miniapp/api/payments/traffic", { method: "POST", body: JSON.stringify({ ...payment, provider }) });
+    } else if (payment.type === "devices") {
+      data = await api("/miniapp/api/payments/devices", { method: "POST", body: JSON.stringify({ ...payment, provider }) });
     } else {
-      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...state.pendingPayment, provider }) });
+      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...payment, provider }) });
     }
-    startPaymentPolling({ ...state.pendingPayment, invoice_id: data.invoice_id, provider });
+    startPaymentPolling({ ...payment, invoice_id: data.invoice_id, pay_url: data.pay_url, provider });
     openLink(data.pay_url);
     showToast("Счёт создан. Ждём оплату автоматически.");
   } catch (e) {
     showToast(e.message);
+  } finally {
+    state.paying = false;
+    state.creatingPayment = null;
+    render();
   }
 }
 
@@ -648,16 +770,36 @@ function copyReferral() {
   if (state.referral?.link) copyText(encodeURIComponent(state.referral.link));
 }
 async function refreshReferral({ recordView = false } = {}) {
+  const version = ++state.refRequestVersion;
+  state.dataStatus.ref = "loading";
+  renderReferral();
   try {
-    state.referral = await api("/miniapp/api/referral" + (recordView ? "?view=1" : ""));
-    if (state.currentView === "ref") renderReferral();
+    const data = validReferral(await api("/miniapp/api/referral" + (recordView ? "?view=1" : "")));
+    if (version !== state.refRequestVersion) return;
+    state.referral = data;
+    state.dataStatus.ref = "ready";
   }
-  catch (error) { showToast(error.message); }
+  catch (_) { if (version === state.refRequestVersion) state.dataStatus.ref = "error"; }
+  finally { if (version === state.refRequestVersion) renderReferral(); }
+}
+function validReferral(data) {
+  if (!data || data.current_balance == null || !Number.isFinite(Number(data.current_balance))) {
+    throw new Error("Referral data unavailable");
+  }
+  return data;
+}
+function referralMetric(value, currency = false) {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : currency ? rub(value) : Number(value).toLocaleString("ru-RU");
 }
 function renderReferral() {
   const r = state.referral;
+  const unavailable = sectionState("ref");
+  if (unavailable || !r || r.current_balance == null || !Number.isFinite(Number(r.current_balance))) {
+    el("view-ref").innerHTML = pageHeading("Заработать") + (unavailable || errorHtml("Не удалось загрузить баланс", "refreshReferral()"));
+    return;
+  }
   const minimum = r?.minimum_withdrawal || 1500;
-  const remaining = Math.max(0, minimum - Number(r?.current_balance || 0));
+  const remaining = Math.max(0, minimum - Number(r.current_balance));
   const statuses = {pending: "На рассмотрении", completed: "Выплачено", rejected: "Отклонено — резерв возвращён"};
   const history = (r?.history || []).map(row => {
     let title = 'Начисление за покупку друга', amount = '+' + rub(row.amount);
@@ -673,24 +815,33 @@ function renderReferral() {
   const examples = (r?.pricing_examples || []).map(example =>
     '<p class="muted">Оплата ' + rub(example.price) + ' → ' + rub(example.first_commission) + ' вам; следующая — ' + rub(example.repeat_commission) + '.</p>'
   ).join('');
-  const registered = r?.registered_referrals == null ? '—' : Number(r.registered_referrals);
+  const registered = referralMetric(r.registered_referrals);
   const refundNote = Number(r?.refunded_amount || 0) > 0
     ? '<p class="muted">Учтено возвратов: −' + rub(r.refunded_amount) + '. Доступный баланс уже скорректирован.</p>' : '';
-  el("view-ref").innerHTML = '<div class="grid">' +
-    '<div class="section-note bonus-note"><p class="title">💰 Заработать</p><p class="muted">Деньги с покупок и продлений друзей: <b>35%</b> с первой покупки, <b>15%</b> со следующих.</p><p class="title">Доступно: ' + rub(r?.current_balance || 0) + '</p></div>' +
-    '<div class="card link-card"><p class="title">Пригласите друга</p><div class="grid"><button class="button green" onclick="shareReferral()">📨 Пригласить друга</button><button class="button blue" onclick="copyReferral()">Скопировать ссылку</button></div><div class="keybox">' + escapeHtml(r?.link || '') + '</div></div>' +
-    '<div class="stats-grid"><div class="stat-card blue"><span>Зарегистрировались по ссылке</span><b>' + registered + '</b></div><div class="stat-card green"><span>Друзей с покупками</span><b>' + Number(r?.active_referrals || 0) + '</b></div><div class="stat-card bronze"><span>Всего заработано</span><b>' + rub(r?.total_earned || 0) + '</b></div></div>' + refundNote +
-    '<div class="card"><p class="title">' + (remaining ? 'До вывода осталось ' + rub(remaining) : 'Можно оформить вывод') + '</p><p class="muted">Вывод через СБП / USDT от ' + rub(minimum) + ' после проверки заявки. На свою подписку можно потратить сразу, когда хватает на тариф.</p><div class="grid"><button class="button green" onclick="openEarningBot(\'withdraw\')">Вывести в боте</button><button class="button blue" onclick="openEarningBot(\'spend\')">Потратить баланс в боте</button><button class="button ghost" onclick="document.getElementById(\'referral-history\').scrollIntoView({behavior:\'smooth\'})">История</button></div></div>' +
-    '<div class="card"><p class="title">Как это работает</p><ol><li>Отправьте другу свою ссылку.</li><li>Друг впервые регистрируется в боте по ней и покупает подписку — в боте или его MiniApp.</li><li>Получайте деньги с покупок и продлений.</li></ol>' + (examples ? '<p class="small">Примеры с текущих месячных цен</p>' + examples : '') + '<p class="muted">Считаем от фактически оплаченной суммы, в том числе со скидкой. Покупки за реферальный баланс не участвуют. Без покупки начислений нет. Уже зарегистрированного пользователя перепривязать нельзя. Самоприглашения не учитываются. Делитесь лично, без спама.</p></div>' +
-    '<div class="card" id="referral-history"><p class="title">Последние операции</p>' + (history || '<p class="muted">Начислений и заявок пока нет.</p>') + '<button class="button ghost" onclick="refreshReferral()">Обновить</button><p class="small">Полная история доступна в боте.</p><button class="button blue" onclick="openEarningBot(\'home\')">Открыть заработок в боте</button></div></div>';
+  const stats = '<div class="summary-line"><span>Пришли по ссылке</span><b>' + registered + '</b></div>' +
+    '<div class="summary-line"><span>Друзей с покупками</span><b>' + referralMetric(r.active_referrals) + '</b></div>' +
+    '<div class="summary-line"><span>Всего заработано</span><b>' + referralMetric(r.total_earned, true) + '</b></div>' + refundNote;
+  const rules = '<ol><li>Отправьте другу свою ссылку.</li><li>Друг впервые открывает бота по ней и покупает подписку.</li><li>Получайте деньги с покупок и продлений.</li></ol>' +
+    (examples ? '<p class="small">Примеры с текущих месячных цен</p>' + examples : '') +
+    '<p class="muted">Процент — от оплаченной суммы, включая скидки. Покупки за реферальный баланс не участвуют. Без покупки начислений нет. Уже зарегистрированного пользователя перепривязать нельзя. Самоприглашения не учитываются.</p>' +
+    (r.link ? '<p class="small">Ваша ссылка</p><div class="keybox">' + escapeHtml(r.link) + '</div>' : '');
+  el("view-ref").innerHTML = '<div class="grid">' + pageHeading('Заработать') +
+    '<div class="card earning-balance"><p class="small">Доступно</p><p class="balance-value">' + rub(r.current_balance) + '</p><p class="muted"><b>35%</b> — первая покупка друга<br><b>15%</b> — следующие покупки</p></div>' +
+    '<button class="button accent" onclick="shareReferral()"' + (r.link ? '' : ' disabled') + '>Пригласить друга</button>' +
+    '<button class="button ghost" onclick="copyReferral()"' + (r.link ? '' : ' disabled') + '>Скопировать ссылку</button>' +
+    '<div class="action-grid"><button class="button ghost" onclick="openEarningBot(\'spend\')">Потратить в боте</button><button class="button ghost" onclick="openEarningBot(\'withdraw\')">Вывести в боте</button></div>' +
+    '<p class="small">' + (remaining ? 'До вывода осталось ' + rub(remaining) : 'Можно оформить вывод') + '. Вывод через СБП / USDT от ' + rub(minimum) + ' после проверки заявки.</p>' +
+    disclosure('ref-stats', 'Статистика', stats) + disclosure('ref-rules', 'Как это работает', rules) +
+    disclosure('ref-history', 'История', '<div id="referral-history">' + (history || '<p class="muted">Операций пока нет.</p>') + '<p class="small">Полная история доступна в боте.</p><button class="button ghost" onclick="openEarningBot(\'home\')">Открыть историю в боте</button></div>') +
+    '<button class="button ghost" onclick="refreshReferral()">Обновить</button></div>';
 }
 
 function renderHelp() {
   el("view-help").innerHTML = `<div class="grid">
-    <div class="section-note help-note"><p class="step">Помощь</p><p class="title">Подключение и поддержка</p></div>
-    <div class="help-card blue"><span>1</span><div><p class="title">Добавьте ключ в Happ</p><p class="muted">Откройте «Ключи», выберите подписку и нажмите «Открыть в Happ».</p></div></div>
-    <div class="help-card green"><span>2</span><div><p class="title">Если Happ не открылся</p><p class="muted">Ключ уже будет скопирован. Откройте Happ вручную и вставьте его через “+”.</p></div></div>
-    <div class="card support-card"><p class="title">Поддержка</p><p class="muted">Если что-то не получается, напишите нам в Telegram.</p><button class="button blue" onclick="openLink('https://t.me/wayspn_support')">Открыть поддержку</button></div>
+    ${pageHeading("Помощь")}
+    <div class="card"><h2 class="title">Как подключиться</h2><ol><li>Откройте «Мой VPN» и выберите подписку.</li><li>Нажмите «Открыть в Happ».</li></ol></div>
+    <div class="card"><h2 class="title">Другое приложение?</h2><p class="muted">Нажмите «Скопировать ссылку» в подписке. Откройте VPN-приложение и добавьте её через «+».</p></div>
+    <button class="button accent" onclick="openLink('https://t.me/wayspn_support')">Написать в поддержку</button>
   </div>`;
 }
 
@@ -702,11 +853,11 @@ async function copyText(encoded) {
 
 function openKeyInHapp(encoded) {
   const text = decodeURIComponent(encoded);
-  navigator.clipboard.writeText(text).catch(() => {});
+  navigator.clipboard?.writeText?.(text)?.catch(() => {});
   const bridgeUrl = happBridgeLink(text);
   if (tg?.openLink) tg.openLink(bridgeUrl);
   else window.location.href = bridgeUrl;
-  showToast("Открываем Happ. Ключ также скопирован.");
+  showToast("Открываем Happ.");
 }
 
 load();
