@@ -18,13 +18,19 @@ from pydantic import BaseModel, Field
 
 import database as db
 from config import PUBLIC_SITE_URL, SUPPORT_URL, TARIFFS, TELEGRAPH_AGREEMENT_URL
-from services.discounts import calculate_discounted_price
+from services.discounts import calculate_subscription_price, current_price
 from services.payment_reconciliation import reconcile_payment
 from services.remnawave import (
     extract_public_subscription_short_uuid,
     remnawave_resolve_user_uuid_by_short_uuid,
 )
 from services.subscription_sync import refresh_subscription_expiry
+from services.subscription_checkout import (
+    SpecialDiscountCheckoutError,
+    ensure_checkout_price,
+    special_discount_fields,
+    subscription_checkout,
+)
 from services.yookassa import create_yookassa_payment
 
 
@@ -140,6 +146,7 @@ async def renewal_details(subscription=Depends(require_renewal_subscription)):
     until = await refresh_subscription_expiry(subscription)
     until = _iso_date(until)
     discounts = await db.get_active_discounts()
+    special_discounts = await db.get_eligible_special_discounts(int(subscription["tg_id"]))
     kind = subscription["plan_kind"]
     pending = await db.get_pending_renewal_for_subscription(subscription["id"], int(subscription["tg_id"]))
     return {
@@ -149,8 +156,8 @@ async def renewal_details(subscription=Depends(require_renewal_subscription)):
             "subscription_until": until,
         },
         "tariffs": [
-            {"code": code, "days": tariff["days"], **calculate_discounted_price(
-                tariff["price"], discounts, product_type="subscription", code=code, plan_kind=kind,
+            {"code": code, "days": tariff["days"], **calculate_subscription_price(
+                tariff, code, discounts, special_discounts, "renew",
             )}
             for code, tariff in TARIFFS.items() if tariff["kind"] == kind
         ],
@@ -175,34 +182,40 @@ async def renewal_payment(body: RenewalPaymentBody, subscription=Depends(require
         if (not _is_renewable(current) or current["remnawave_uuid"] != subscription["remnawave_uuid"]
                 or current["plan_kind"] != tariff["kind"]):
             raise HTTPException(409, "Подписка изменилась. Откройте сайт из вашей подписки ещё раз")
-        amount = calculate_discounted_price(
-            tariff["price"], await db.get_active_discounts(), product_type="subscription",
-            code=body.tariff_code, plan_kind=current["plan_kind"],
-        )["price"]
-        if body.expected_price != Decimal(str(amount)):
-            raise HTTPException(409, "Цена изменилась. Обновите страницу и выберите срок ещё раз")
-        request_key = str(uuid.uuid5(uuid.NAMESPACE_URL,
-            f"wayspn:renew:{current['id']}:{body.tariff_code}:{amount}:{body.request_id}"))
-        remote = await create_yookassa_payment(
-            None, amount, body.tariff_code, tg_id,
-            return_url=f"{PUBLIC_SITE_URL}/renew?payment=return", idempotence_key=request_key,
-        )
-        invoice_id = remote.get("id") if remote else None
-        pay_url = ((remote or {}).get("confirmation") or {}).get("confirmation_url")
-        try:
-            url = urlsplit(pay_url or "")
-            remote_amount = Decimal(str(((remote or {}).get("amount") or {}).get("value")))
-            valid = (invoice_id and url.scheme == "https" and url.hostname
-                     and not url.username and not url.password and remote_amount == Decimal(str(amount)))
-        except (ValueError, ArithmeticError):
-            valid = False
-        if not valid:
-            raise HTTPException(502, "Не удалось создать платёж. Попробуйте позже")
-        # Provider retries may return the same invoice. Do not reset a paid row.
-        payment = await db.create_renewal_checkout_payment(tg_id, current, body.tariff_code, amount, invoice_id)
-        if not _same_payment(payment, current) or Decimal(str(payment["amount"])) != Decimal(str(amount)):
-            raise HTTPException(409, "Не удалось проверить платёж. Попробуйте позже")
-        return {"invoice_id": invoice_id, "pay_url": pay_url, "status": payment["status"]}
+        price = await current_price(tariff["price"], product_type="subscription", code=body.tariff_code,
+                                    plan_kind=current["plan_kind"], tg_id=tg_id, payment_target="renew")
+        async with subscription_checkout(tg_id, body.tariff_code, "renew", current["id"], "yookassa", price) as pending:
+            amount = price["price"]
+            ensure_checkout_price(amount, body.expected_price)
+            if pending:
+                invoice_id, pay_url = pending
+                return {"invoice_id": invoice_id, "pay_url": pay_url, "status": "pending"}
+            request_key = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"wayspn:renew:{current['id']}:{body.tariff_code}:{amount}:{body.request_id}"))
+            remote = await create_yookassa_payment(
+                None, amount, body.tariff_code, tg_id,
+                return_url=f"{PUBLIC_SITE_URL}/renew?payment=return", idempotence_key=request_key,
+            )
+            invoice_id = remote.get("id") if remote else None
+            pay_url = ((remote or {}).get("confirmation") or {}).get("confirmation_url")
+            try:
+                url = urlsplit(pay_url or "")
+                remote_amount = Decimal(str(((remote or {}).get("amount") or {}).get("value")))
+                valid = (invoice_id and url.scheme == "https" and url.hostname
+                         and not url.username and not url.password and remote_amount == Decimal(str(amount)))
+            except (ValueError, ArithmeticError):
+                valid = False
+            if not valid:
+                raise HTTPException(502, "Не удалось создать платёж. Попробуйте позже")
+            # Provider retries may return the same invoice. Do not reset a paid row.
+            payment = await db.create_renewal_checkout_payment(
+                tg_id, current, body.tariff_code, amount, invoice_id, **special_discount_fields(price),
+            )
+            if not _same_payment(payment, current) or Decimal(str(payment["amount"])) != Decimal(str(amount)):
+                raise HTTPException(409, "Не удалось проверить платёж. Попробуйте позже")
+            return {"invoice_id": invoice_id, "pay_url": pay_url, "status": payment["status"]}
+    except SpecialDiscountCheckoutError as exc:
+        raise HTTPException(409, str(exc)) from exc
     finally:
         await db.release_user_lock(tg_id)
 

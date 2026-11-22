@@ -84,6 +84,13 @@ function priceHtml(item) {
   }
   return `<b>${rub(item.price)}</b>`;
 }
+function tariffForTarget(tariff, target) {
+  return target === "renew" && tariff?.renewal ? { ...tariff, ...tariff.renewal } : tariff;
+}
+function checkoutTariff(payment) {
+  const tariff = [...state.tariffs.regular, ...state.tariffs.bypass].find(item => item.code === payment.tariff_code);
+  return tariffForTarget(tariff, payment.payment_target);
+}
 function happLink(url) { return `happ://add/${encodeURIComponent(url)}`; }
 function happBridgeLink(url) { return `${window.location.origin}/app/open-happ?url=${encodeURIComponent(url)}`; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch])); }
@@ -564,7 +571,7 @@ function renewHtml(s) {
   return `<div class="grid">
     <button class="button back-button ghost" onclick="openSubDetail(${s.id})">← Назад к подписке</button>
     ${pageHeading("Продлить подписку", escapeHtml(subTitle(s)))}
-    ${unavailable || `<p class="muted">Выберите срок.</p><div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}</span>${priceHtml(t)}</button>`).join("")}</div>`}
+    ${unavailable || `<p class="muted">Выберите срок.</p><div class="choice-list">${tariffs.map((t) => `<button class="choice-button" onclick="prepareRenewPayment(${s.id}, '${t.code}')"><span>${tariffPeriod(t)}</span>${priceHtml(tariffForTarget(t, "renew"))}</button>`).join("")}</div>`}
   </div>`;
 }
 
@@ -618,7 +625,7 @@ function checkoutSummary(payment) {
     product = sub?.devices?.packages?.find(p => p.count === payment.device_count);
     description = product ? `+${product.count} ${deviceWord(product.count)}` : "Дополнительные устройства";
   } else {
-    product = [...state.tariffs.regular, ...state.tariffs.bypass].find(t => t.code === payment.tariff_code);
+    product = checkoutTariff(payment);
     const kind = product?.kind || (state.tariffs.bypass.some(t => t.code === payment.tariff_code) ? "bypass" : "regular");
     description = product ? `${kind === "bypass" ? "С антиглушилкой" : "Обычная"} · ${tariffPeriod(product)}` : "Подписка";
   }
@@ -771,13 +778,19 @@ async function payPrepared(provider) {
     } else if (payment.type === "devices") {
       data = await api("/miniapp/api/payments/devices", { method: "POST", body: JSON.stringify({ ...payment, provider }) });
     } else {
-      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...payment, provider }) });
+      const expectedPrice = checkoutTariff(payment)?.price;
+      if (expectedPrice === undefined) throw new Error("Цена недоступна. Вернитесь к выбору срока.");
+      data = await api("/miniapp/api/payments/subscription", { method: "POST", body: JSON.stringify({ ...payment, provider, expected_price: expectedPrice }) });
     }
     startPaymentPolling({ ...payment, invoice_id: data.invoice_id, pay_url: data.pay_url, provider });
     openLink(data.pay_url);
     showToast("Счёт создан. Ждём оплату автоматически.");
   } catch (e) {
     showToast(e.message);
+    if (payment.type === "subscription" && e.status === 409) {
+      await refreshCatalog();
+      if (sameCheckout(payment, state.pendingPayment)) backFromPayment();
+    }
   } finally {
     state.paying = false;
     state.creatingPayment = null;
@@ -970,9 +983,13 @@ function selectWalletSubscription(id) {
   renderReferral();
 }
 function selectWalletPlan(plan) { if (!state.wallet || !["regular", "bypass"].includes(plan) || nativeBusy("purchase")) return; state.wallet.plan = plan; state.wallet.step = "term"; renderReferral(); }
-function walletProduct() { return state.tariffs?.[state.wallet?.plan]?.find(item => item.code === state.wallet?.tariff_code); }
+function walletProduct() {
+  const tariff = state.tariffs?.[state.wallet?.plan]?.find(item => item.code === state.wallet?.tariff_code);
+  return tariffForTarget(tariff, state.wallet?.payment_target);
+}
 function reviewWalletTariff(code) {
-  const product = state.tariffs?.[state.wallet?.plan]?.find(item => item.code === code);
+  const tariff = state.tariffs?.[state.wallet?.plan]?.find(item => item.code === code);
+  const product = tariffForTarget(tariff, state.wallet?.payment_target);
   if (!product || !state.wallet || nativeBusy("purchase")) return;
   Object.assign(state.wallet, { tariff_code: code, expected_amount: moneyString(product.price), step: "review", error: null });
   renderReferral();
@@ -994,7 +1011,7 @@ function walletHtml() {
   else if (wallet.step === "target") body = `<div class="choice-list"><button class="choice-button" onclick="selectWalletTarget('new')">Купить новую подписку<span class="chevron">›</span></button><button class="choice-button" onclick="selectWalletTarget('renew')">Продлить подписку<span class="chevron">›</span></button></div>`;
   else if (wallet.step === "subs") body = state.subs.length ? `<p class="muted">Выберите подписку.</p><div class="choice-list">${state.subs.map(sub => `<button class="choice-button" data-action="wallet-renew" data-sub-id="${sub.id}"><span>${escapeHtml(subTitle(sub))}<small>${sub.status === "active" ? `До ${date(sub.subscription_until)}` : "Истекла"}</small></span><span class="chevron">›</span></button>`).join("")}</div>` : `<div class="card empty"><h2 class="title">Подписок пока нет</h2><button class="button accent" onclick="selectWalletTarget('new')">Купить новую подписку</button></div>`;
   else if (wallet.step === "plan") body = `<p class="muted">Выберите подписку.</p><div class="choice-list"><button class="choice-button" onclick="selectWalletPlan('regular')"${state.tariffs.regular.length ? "" : " disabled"}><span>Обычная<small>5 устройств · без лимита ГБ</small></span><span class="chevron">›</span></button><button class="choice-button" onclick="selectWalletPlan('bypass')"${state.tariffs.bypass.length ? "" : " disabled"}><span>С антиглушилкой<small>3 устройства · ${baseTrafficText()}</small></span><span class="chevron">›</span></button></div>`;
-  else if (wallet.step === "term") body = `<p class="muted">Выберите срок.</p><div class="choice-list">${(state.tariffs[wallet.plan] || []).map(product => `<button class="choice-button" data-action="wallet-tariff" data-code="${escapeHtml(product.code)}"><span>${tariffPeriod(product)}</span>${priceHtml(product)}</button>`).join("")}</div>`;
+  else if (wallet.step === "term") body = `<p class="muted">Выберите срок.</p><div class="choice-list">${(state.tariffs[wallet.plan] || []).map(product => `<button class="choice-button" data-action="wallet-tariff" data-code="${escapeHtml(product.code)}"><span>${tariffPeriod(product)}</span>${priceHtml(tariffForTarget(product, wallet.payment_target))}</button>`).join("")}</div>`;
   else {
     const product = walletProduct();
     const sub = state.subs.find(item => item.id === wallet.subscription_id);
@@ -1014,7 +1031,7 @@ async function submitWalletPurchase() {
   const payload = { request_key: operation.request_key, tariff_code: wallet.tariff_code, payment_target: wallet.payment_target, subscription_id: wallet.subscription_id, expected_amount: wallet.expected_amount };
   await submitNativeOperation(operation, payload);
 }
-async function refreshNativeCatalog() {
+async function refreshCatalog() {
   try {
     const catalog = await api("/miniapp/api/tariffs");
     if (!Array.isArray(catalog.regular) || !Array.isArray(catalog.bypass)) throw new Error();
@@ -1103,7 +1120,7 @@ async function submitNativeOperation(operation, payload) {
   } catch (error) {
     if (state.nativeOperations[type] !== operation) return;
     if (error.code === "price_changed" && type === "purchase") {
-      await refreshNativeCatalog();
+      await refreshCatalog();
       const product = walletProduct();
       if (state.wallet) {
         state.wallet.expected_amount = product ? moneyString(product.price) : null;

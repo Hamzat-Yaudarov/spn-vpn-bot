@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>WAY SPN · Управление серверами</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/"><span class="brandmark" aria-hidden="true">W</span><span>WAY SPN<span class="brand-sub">Управление серверами</span></span></a>
+      <div class="topbar-right"><span class="local-label">Мониторинг SSH</span><button id="logout" class="button quiet" hidden>Выйти</button></div>
+    </header>
+    <main>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <section id="login-view" class="login-card" hidden>
+        <div class="eyebrow">РЕЗЕРВНЫЕ АДРЕСА</div>
+        <h1>Серверы под контролем.</h1>
+        <p class="muted">Войдите, чтобы видеть доступность серверов и управлять резервными IP.</p>
+        <form id="login-form">
+          <label for="password">Пароль панели</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+          <button id="login-button" class="button primary" type="submit">Войти в панель <span aria-hidden="true">→</span></button>
+        </form>
+        <p id="setup-note" class="setup-note" hidden>Сначала задайте пароль командой настройки панели в терминале. Пароль по умолчанию отсутствует.</p>
+      </section>
+      <section id="dashboard" hidden>
+        <div class="page-heading"><div><div class="eyebrow">УПРАВЛЕНИЕ СЕРВЕРАМИ</div><h1>Ваши серверы</h1><p class="muted">Создание серверов, перенос установок и резервные IP.</p></div><div class="heading-actions"><button id="create-server" class="button primary" type="button" disabled>+ Добавить сервер</button><div class="refresh-note"><span class="live-dot"></span><span id="updated">Загрузка…</span></div></div></div>
+        <p id="provisioning-unavailable" class="muted provisioning-unavailable" hidden></p>
+        <section id="provisioning-panel" class="provisioning-panel" aria-labelledby="provisioning-title" hidden>
+          <div class="section-heading"><h2 id="provisioning-title">Новый сервер</h2><button id="close-provisioning" class="button quiet" type="button">Закрыть</button></div>
+          <p id="move-warning" class="move-warning" hidden>Домен и подписка сохранятся. При переносе текущие соединения оборвутся; обновление DNS у клиентов может занять некоторое время.</p>
+          <p id="move-source" class="muted small" hidden></p>
+          <form id="provisioning-form" autocomplete="off">
+            <div class="provisioning-grid">
+              <label class="form-field">IPv4 новой VPS<input id="provisioning-ip" type="text" inputmode="decimal" maxlength="15" required placeholder="203.0.113.10" autocomplete="off"></label>
+              <label class="form-field">SSH-порт<input id="provisioning-port" type="number" min="1" max="65535" value="22" required></label>
+              <label class="form-field">Пароль root<input id="provisioning-password" type="password" maxlength="1024" autocomplete="new-password"><span class="field-help">Можно оставить пустым, если служебный SSH-ключ уже добавлен.</span></label>
+              <label id="transport-field" class="form-field create-field">Подключение<select id="provisioning-transport"><option value="tls">VLESS · TLS</option><option value="reality">VLESS · REALITY</option><option value="cdn">Yandex CDN</option></select></label>
+              <label class="form-field create-field">Название<input id="provisioning-name" type="text" maxlength="60" placeholder="🇫🇮 Финляндия" required></label>
+              <label class="form-field create-field">Код страны<input id="provisioning-country" type="text" maxlength="2" pattern="[A-Za-z]{2}" placeholder="FI" autocomplete="off"><span class="field-help">Две латинские буквы, например FI, DE или AT.</span></label>
+              <label class="form-field create-field">Домен<input id="provisioning-domain" type="text" maxlength="253" placeholder="Автоматически" autocomplete="off"><span id="domain-help" class="field-help">Если оставить пустым, домен создастся автоматически.</span></label>
+              <label id="cdn-domain-field" class="form-field" hidden>Домен CDN<input id="provisioning-cdn-domain" type="text" maxlength="253" placeholder="Автоматически" autocomplete="off"><span class="field-help">Отдельный домен CDN. Если оставить пустым, создастся автоматически.</span></label>
+            </div>
+            <fieldset id="squad-field" class="squad-field create-field"><legend>Сквады</legend><p class="field-help">Выберите, кому будет доступен новый сервер.</p><div id="provisioning-squads" class="squad-options"></div></fieldset>
+            <div class="ssh-trust">
+              <div class="ssh-trust-heading"><strong>Ключ SSH новой VPS</strong><button id="read-ssh-key" class="button quiet" type="button">Получить отпечаток</button></div>
+              <p class="field-help">При первом подключении панель запрашивает ключ по указанному IP. Сверьте отпечаток с консолью хостера. При повторе ключ должен остаться тем же.</p>
+              <p id="ssh-fingerprint" class="ssh-fingerprint" hidden></p>
+              <label class="check-label"><input id="trust-ssh-key" type="checkbox" disabled><span>Подтверждаю этот ключ для указанной VPS</span></label>
+            </div>
+            <p id="provisioning-error" class="form-error" role="alert" hidden></p>
+            <div class="form-submit"><button id="submit-provisioning" class="button primary" type="submit" disabled>Создать сервер</button><span class="field-help">Установка продолжится, даже если закрыть страницу.</span></div>
+          </form>
+        </section>
+        <section id="jobs-section" class="jobs-section" aria-label="Установки и переносы" hidden><div class="section-heading"><h2>Установки и переносы <span id="job-count" class="count">0</span></h2><span class="muted small">Выполняются на контроллере</span></div><div id="provisioning-jobs" class="job-list"></div></section>
+        <div class="observer-note"><span class="observer-icon" aria-hidden="true">↗</span><div><strong>Проверка идёт из сети машины с мониторингом</strong><p>На ней нужно выключить VPN и выполнять проверку без белых списков. Зарубежная машина может видеть доступным заблокированный у вас IP. С телефона можно управлять панелью; проверки выполняет постоянно включённая машина.</p></div></div>
+        <div class="stats" aria-label="Состояние серверов"><div class="stat"><span>Всего серверов</span><strong id="total-count">0</strong></div><div class="stat"><span>SSH доступен</span><strong id="online-count" class="success">0</strong></div><div class="stat"><span>Требуют внимания</span><strong id="attention-count">0</strong></div><div class="stat"><span>Резервных IP</span><strong id="reserve-count">0</strong></div></div>
+        <section aria-label="Список серверов"><div class="section-heading"><h2>Серверы <span id="server-count" class="count">0</span></h2><span class="muted small">Обновление каждые 10 секунд</span></div><div id="servers" class="server-grid"></div><div id="empty" class="empty" hidden><div class="empty-icon" aria-hidden="true">⌘</div><h3>Здесь появятся ваши серверы</h3><p>Нажмите «Добавить сервер», чтобы установить VPN на новую VPS.<br>После завершения установки сервер появится здесь автоматически.</p></div></section>
+        <details id="archive-section" class="archive-section" hidden><summary>Архив установок <span id="archive-count" class="count">0</span></summary><p class="muted archive-note">Прежние установки сохранены для истории. Проверки и управление ими отключены.</p><div id="archived-servers" class="server-grid"></div></details>
+        <section class="event-section"><div class="section-heading"><h2>История событий</h2><span class="muted small">Последние действия программы</span></div><div id="events" class="event-list"></div></section>
+      </section>
+      <div id="loading" class="initial-loading">Открываем панель…</div>
+    </main>
+    <footer>WAY SPN <span>·</span> Резервные IP для вашей инфраструктуры</footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Свой сервис · SPN</title>
+    <link rel="stylesheet" href="/partners/assets/partners.css?v=20261026-payfirst2" />
+  </head>
+  <body>
+    <div id="demo-banner" class="demo-banner" hidden>Демонстрация — изменения не сохраняются, оплат нет</div>
+    <div class="shell">
+      <header class="topbar">
+        <a class="wordmark" href="/partners" aria-label="Партнёрский кабинет SPN">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 29 16 16 29 3 16Z"/><path d="m10 16 6-6 6 6-6 6Z"/></svg>
+          <span>SPN <small>для партнёров</small></span>
+        </a>
+        <span class="stage-badge">Свой сервис</span>
+      </header>
+      <div class="workspace">
+        <aside class="sidebar" aria-label="Навигация кабинета" hidden>
+          <p class="nav-caption">Личный кабинет</p>
+          <nav class="navigation" aria-label="Разделы">
+            <button type="button" data-view="overview" class="nav-button"><span>Обзор</span></button>
+            <button type="button" data-view="customers" class="nav-button"><span>Клиенты</span></button>
+            <button type="button" data-view="finance" data-feature="finance" class="nav-button" hidden><span>Финансы</span></button>
+            <button type="button" data-view="settings" class="nav-button"><span>Настройки</span></button>
+          </nav>
+          <p class="sidebar-note">Только ваш проект.</p>
+        </aside>
+        <main id="content" tabindex="-1" aria-label="Партнёрский кабинет">
+          <section class="state-card" role="status" aria-busy="true"><span class="spinner" aria-hidden="true"></span><h1>Открываем кабинет</h1><p class="muted">Проверяем доступ и загружаем проекты.</p></section>
+        </main>
+      </div>
+      <footer class="footer"><span>Ваш бренд. Наша инфраструктура.</span><a class="button quiet" href="https://t.me/vpnislam" target="_blank" rel="noopener noreferrer">Поддержка</a></footer>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <script src="/partners/assets/workspace.js?v=20261026-payfirst2"></script>
+    <script src="/partners/assets/partners.js?v=20261026-payfirst2"></script>
+  </body>
+</html>

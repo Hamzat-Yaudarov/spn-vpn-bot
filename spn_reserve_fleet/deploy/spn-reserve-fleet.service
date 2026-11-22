@@ -1,0 +1,22 @@
+# spn-reserve-fleet-installer-v1
+[Unit]
+Description=WAY SPN SSH monitor and reserve IP panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spn-reserve
+Group=spn-reserve
+WorkingDirectory=/opt/spn-reserve-fleet/current
+Environment=HOME=/var/lib/spn-reserve-fleet
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/spn-reserve-fleet/venv/bin/python -m spn_reserve_fleet --data-dir /var/lib/spn-reserve-fleet/.spn-reserve-fleet --env-file /var/lib/spn-reserve-fleet/config/remnawave.env serve --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

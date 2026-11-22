@@ -47,7 +47,9 @@ async function api(path, options = {}) {
       state.account = null;
       showAuth("login", true);
     }
-    throw new Error(data.detail || "Не удалось выполнить запрос");
+    const error = new Error(data.detail || "Не удалось выполнить запрос");
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -169,8 +171,9 @@ async function loadPayments() {
 
 async function loadAccountData() {
   try {
-    const data = await api("/subscriptions");
+    const [data, catalog] = await Promise.all([api("/subscriptions"), api("/catalog")]);
     state.subscriptions = data.subscriptions;
+    state.catalog = catalog;
     renderSubscriptions();
     renderTraffic();
     renderAccountPlans();
@@ -206,7 +209,7 @@ function openRenewDialog(subscription) {
   $("renewPlans").innerHTML = plans.map((plan) => `
     <button class="renew-option" data-renew-plan="${esc(plan.code)}">
       <span><b>${plan.days} дней</b><small>${subscription.plan_kind === "bypass" ? "С антиглушилкой" : "Обычная подписка"}</small></span>
-      <strong>${rubles(plan.price)}</strong>
+      <strong>${rubles(plan.renewal?.price ?? plan.price)}</strong>
     </button>
   `).join("");
   $("renewDialog").showModal();
@@ -216,8 +219,9 @@ function openCheckout(data) {
   state.checkout = data;
   if (data.type === "subscription") {
     const plan = findPlan(data.code);
+    data.expectedPrice = data.target === "renew" ? (plan.renewal?.price ?? plan.price) : plan.price;
     $("checkoutTitle").textContent = data.target === "renew" ? "Продление подписки" : "Новая подписка";
-    $("checkoutDetails").innerHTML = `<div class="checkout-summary"><div><span>Тариф</span><strong>${plan.kind === "bypass" ? "С антиглушилкой" : "Обычный"}</strong></div><div><span>Срок</span><strong>${plan.days} дней</strong></div><div><span>К оплате</span><strong>${rubles(plan.price)}</strong></div></div>`;
+    $("checkoutDetails").innerHTML = `<div class="checkout-summary"><div><span>Тариф</span><strong>${plan.kind === "bypass" ? "С антиглушилкой" : "Обычный"}</strong></div><div><span>Срок</span><strong>${plan.days} дней</strong></div><div><span>К оплате</span><strong>${rubles(data.expectedPrice)}</strong></div></div>`;
   } else if (data.type === "traffic") {
     const item = state.catalog.traffic_packages.find((entry) => entry.code === data.code);
     $("checkoutTitle").textContent = `Пакет ${item.gb} ГБ`;
@@ -238,7 +242,7 @@ async function confirmCheckout() {
   try {
     let result;
     if (state.checkout.type === "subscription") {
-      result = await api("/payments/subscription", { method: "POST", body: JSON.stringify({ tariff_code: state.checkout.code, payment_target: state.checkout.target, subscription_id: state.checkout.subscriptionId || null }) });
+      result = await api("/payments/subscription", { method: "POST", body: JSON.stringify({ tariff_code: state.checkout.code, payment_target: state.checkout.target, subscription_id: state.checkout.subscriptionId || null, expected_price: state.checkout.expectedPrice }) });
     } else if (state.checkout.type === "traffic") {
       result = await api("/payments/traffic", { method: "POST", body: JSON.stringify({ package_code: state.checkout.code, subscription_id: state.checkout.subscriptionId }) });
     } else {
@@ -248,6 +252,10 @@ async function confirmCheckout() {
     location.href = result.pay_url;
   } catch (error) {
     toast(error.message, true);
+    if (state.checkout.type === "subscription" && error.status === 409) {
+      $("checkoutDialog").close();
+      await loadAccountData();
+    }
     button.disabled = false;
     button.textContent = "Перейти к оплате";
   }

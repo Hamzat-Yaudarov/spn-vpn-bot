@@ -1,0 +1,31 @@
+:root { color-scheme: dark; --accent: #d8b55b; --on-accent: #000; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #151518; color: #f1f1f3; font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+main { width: min(100%, 520px); margin: auto; padding: 28px 16px max(28px, env(safe-area-inset-bottom)); }
+header { margin-bottom: 24px; }
+.mark { display: inline-grid; place-items: center; height: 44px; width: 44px; object-fit:contain; border: 1px solid #3c3c44; border-radius: 14px; font-size: 22px; color: var(--accent); }
+.brand { margin: 12px 0 4px; color: #b3b3bc; font-size: 14px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 12px; overflow-wrap: anywhere; }
+h2 { font-size: 19px; margin: 0 0 8px; overflow-wrap: anywhere; }
+p { margin: 8px 0; white-space: pre-line; overflow-wrap: anywhere; }
+.hint, footer, dt, label { color: #b3b3bc; font-size: 14px; }
+.card { background: #202024; border: 1px solid #3c3c44; border-radius: 16px; padding: 20px; margin: 16px 0; }
+dl { margin: 12px 0 0; }
+.metric { padding: 14px 0; border-bottom: 1px solid #3c3c44; }
+.metric:last-child { border: 0; padding-bottom: 0; }
+dd { margin: 3px 0 0; font-size: 24px; font-weight: 600; overflow-wrap: anywhere; }
+dd.small { font-size: 18px; }
+.metric p { color: #b3b3bc; font-size: 14px; }
+.button { display: flex; justify-content: center; align-items: center; width: 100%; min-height: 48px; padding: 12px 14px; margin-top: 12px; border-radius: 12px; border: 1px solid #4a4a54; background: transparent; color: #f1f1f3; font: inherit; text-decoration: none; text-align: center; cursor: pointer; overflow-wrap: anywhere; }
+.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.button:disabled{opacity:.55;cursor:wait}
+:focus-visible { outline: 3px solid #f1f1f3; outline-offset: 3px; }
+details { margin-top: 16px; }
+summary { padding: 12px 0; min-height: 48px; cursor: pointer; }
+label { display: block; margin-bottom: 8px; }
+input { width: 100%; min-height: 48px; border: 1px solid #4a4a54; border-radius: 8px; padding: 10px; font: inherit; font-size: 14px; background: #151518; color: #f1f1f3; }
+#copy-status { font-size: 14px; }
+#copy-status:empty { margin: 0; }
+footer { margin-top: 24px; text-align: center; }
+.demo-banner { margin: 0; padding: 12px 16px; color: #b3b3bc; border-bottom: 1px solid #3c3c44; font-size: 14px; text-align: center; }
+@media (max-width: 340px) { .card { padding: 16px; } h1 { font-size: 26px; } }

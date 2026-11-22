@@ -1,0 +1,33 @@
+# Example only. Shares the explicitly reviewed staging configuration, not SPN env.
+[Unit]
+Description=Isolated SPN partner staging recovery worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spn-partner
+Group=spn-partner
+WorkingDirectory=/opt/spn-partner
+Environment=PYTHON_DOTENV_DISABLED=1
+ExecStart=/opt/spn-partner/.venv/bin/python scripts/partner_runtime.py --config /etc/spn-partner/staging.json --worker
+Restart=on-failure
+RestartSec=15
+# Default commerce pass <= 8*30s, then entry <=30s and registered bounded hooks.
+# Match this to reviewed configured phase bounds before installing this example.
+TimeoutStopSec=360
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/spn-partner
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

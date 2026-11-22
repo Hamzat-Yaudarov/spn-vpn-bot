@@ -13,6 +13,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 MINIAPP_URL = os.getenv("MINIAPP_URL", "https://wayspn.ru/app")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "WaySPN_robot").lstrip("@")
+# Public username only: partner-platform secrets and its database are configured
+# separately. The owner confirmed this username; an explicit empty value keeps
+# the entry in its not-yet-connected state during a staged rollout.
+PARTNER_MANAGER_BOT_USERNAME = os.getenv("PARTNER_MANAGER_BOT_USERNAME", "spn_franchise_bot").strip()
 try:
     WAY_SPN_CUSTOM_EMOJI_IDS = {
         str(key): str(value)

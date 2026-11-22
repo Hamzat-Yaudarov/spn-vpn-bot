@@ -54,6 +54,7 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
                 _, keyboard = start.build_main_menu(user_id)
                 labels = _button_texts(keyboard)
                 self.assertEqual('🛠 Админ-панель' in labels, user_id == 999)
+                self.assertEqual('🚀 Создать свой VPN' in labels, user_id == 999)
                 if user_id == 999:
                     self.assertEqual(keyboard.inline_keyboard[-1][0].web_app.url, start.ADMIN_PANEL_URL)
 
@@ -63,13 +64,25 @@ class MainMenuSimplificationTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(start, 'send_text_with_photo', new_callable=AsyncMock) as send:
                 await start.show_main_menu(message)
             self.assertIn('🛠 Админ-панель', _button_texts(send.await_args.args[2]))
+            self.assertIn('🚀 Создать свой VPN', _button_texts(send.await_args.args[2]))
             callback = _callback('back_to_menu')
             callback.from_user.id = 999
             state = AsyncMock()
             with patch.object(callbacks, 'edit_text_with_photo', new_callable=AsyncMock) as edit:
                 await callbacks.back_to_menu(callback, state)
             self.assertIn('🛠 Админ-панель', _button_texts(edit.await_args.args[2]))
+            self.assertIn('🚀 Создать свой VPN', _button_texts(edit.await_args.args[2]))
             state.clear.assert_awaited_once()
+
+    async def test_start_and_callback_return_hide_franchise_entry_for_regular_user(self):
+        with patch.object(start, 'ADMIN_ID', 999):
+            message = SimpleNamespace(from_user=SimpleNamespace(id=123))
+            with patch.object(start, 'send_text_with_photo', new_callable=AsyncMock) as send:
+                await start.show_main_menu(message, welcome=True)
+            self.assertNotIn('🚀 Создать свой VPN', _button_texts(send.await_args.args[2]))
+            with patch.object(callbacks, 'edit_text_with_photo', new_callable=AsyncMock) as edit:
+                await callbacks.back_to_menu(_callback('back_to_menu'), AsyncMock())
+            self.assertNotIn('🚀 Создать свой VPN', _button_texts(edit.await_args.args[2]))
 
     @patch("handlers.start.db.is_partner", new_callable=AsyncMock, return_value=False)
     async def test_more_menu_contains_secondary_actions(self, _is_partner):
@@ -105,8 +118,9 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(show_types.await_args.kwargs["back_callback"], "back_to_menu")
 
     @patch("handlers.subscription.edit_text_with_photo", new_callable=AsyncMock)
+    @patch("handlers.subscription.db.get_eligible_special_discounts", new_callable=AsyncMock, return_value=[])
     @patch("handlers.subscription.db.get_active_discounts", new_callable=AsyncMock, return_value=[])
-    async def test_tariff_buttons_contain_only_period_and_price(self, _discounts, edit):
+    async def test_tariff_buttons_contain_only_period_and_price(self, _discounts, _special_discounts, edit):
         state = AsyncMock()
         state.get_data.return_value = {"plan_kind": "bypass", "purchase_mode": "new"}
 
@@ -120,8 +134,9 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(label) <= 32 for label in labels))
 
     @patch("handlers.subscription.edit_text_with_photo", new_callable=AsyncMock)
+    @patch("handlers.subscription.db.get_eligible_special_discounts", new_callable=AsyncMock, return_value=[])
     @patch("handlers.subscription.db.get_active_discounts", new_callable=AsyncMock)
-    async def test_discounted_tariff_uses_crossed_out_old_price_without_arrow(self, discounts, edit):
+    async def test_discounted_tariff_uses_crossed_out_old_price_without_arrow(self, discounts, _special_discounts, edit):
         discounts.return_value = [{
             "id": 1,
             "name": "20%",
@@ -165,11 +180,13 @@ class PurchaseSimplificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_insufficient_referral_balance_shows_alert_without_starting_purchase(self):
         for balance in (0, 199):
-            callback = _callback('pay_referral_balance')
+            callback = _callback('pay_referral_balance:wallet-key')
             state = AsyncMock()
-            state.get_data.return_value = {'tariff_code':'regular_1m', 'purchase_mode':'new'}
+            state.get_data.return_value = {'tariff_code':'regular_1m', 'purchase_mode':'new',
+                                          'wallet_request_key':'wallet-key'}
             with (
                 patch('handlers.subscription.current_price', new=AsyncMock(return_value={'price':200})),
+                patch('handlers.subscription.referral_accounting.get_balance_purchase', new=AsyncMock(return_value=None)),
                 patch('handlers.subscription.db.get_referral_stats', new=AsyncMock(return_value={'current_balance':balance})),
                 patch('handlers.subscription._get_or_create_target_subscription_for_direct_flow', new=AsyncMock()) as purchase,
                 patch('handlers.subscription.db.spend_referral_balance_for_subscription', new=AsyncMock()) as spend,
@@ -304,6 +321,7 @@ class SubscriptionNavigationTests(unittest.IsolatedAsyncioTestCase):
         state.get_data.return_value = {'purchase_mode':'renew', 'plan_kind':'bypass', 'target_subscription_id':7}
         with (
             patch.object(subscription.db, 'get_active_discounts', new=AsyncMock(return_value=[])),
+            patch.object(subscription.db, 'get_eligible_special_discounts', new=AsyncMock(return_value=[])),
             patch.object(subscription, 'edit_text_with_photo', new_callable=AsyncMock) as edit,
         ):
             await subscription._show_tariff_selection(_callback(), state, 'Продление')

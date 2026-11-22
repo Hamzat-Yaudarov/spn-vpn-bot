@@ -15,3 +15,6 @@ android/way-vpn/.gradle/
 android/way-vpn/.kotlin/
 android/way-vpn/app/build/
 android/way-vpn/build/
+.local-state/
+.vpn-test-link.txt
+.vpn-test-log.txt

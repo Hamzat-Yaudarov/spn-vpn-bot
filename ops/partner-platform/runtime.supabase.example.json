@@ -1,0 +1,28 @@
+{
+  "runtime": {
+    "mode": "disabled",
+    "enable_owner_entry_pilot": false,
+    "enable_entry_launch_notifications": false,
+    "enable_managed_bots": false,
+    "staging_isolation_confirmed": false,
+    "database_isolation_confirmed": false,
+    "database_api_disabled_confirmed": false,
+    "allow_staging_network": false,
+    "allow_staging_writes": false,
+    "database_dsn": "postgresql://spn_partner_runtime.crrmaqiakrqpfvhiwtkq:SET_PASSWORD_LOCALLY@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres",
+    "database_tls": true,
+    "database_ca_file": "",
+    "database_connection_mode": "session",
+    "database_project_ref": "crrmaqiakrqpfvhiwtkq",
+    "base_domain": "sub.wayspn.online",
+    "manager_origin": "",
+    "manager_bot_token": "",
+    "manager_bot_username": "spn_franchise_bot",
+    "encryption_keys": [],
+    "webhook_key_hex": "",
+    "subscription_key_hex": "",
+    "panel_identity_enabled": false,
+    "invoice_intents_enabled": false
+  },
+  "staging_addon_catalog": null
+}

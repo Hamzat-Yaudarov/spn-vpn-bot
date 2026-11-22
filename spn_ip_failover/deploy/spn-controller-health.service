@@ -1,0 +1,23 @@
+[Unit]
+Description=Refresh and verify Way SPN VPN health from Russia
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=spn-failover
+Group=spn-failover
+WorkingDirectory=/opt/wayspn
+StateDirectory=spn-ip-failover
+StateDirectoryMode=0700
+UMask=0077
+LoadCredential=remnawave:/etc/spn-ip-failover/credentials/remnawave
+ExecStartPre=/bin/sh /opt/wayspn/spn_ip_failover/deploy/run-refresh.sh
+ExecStart=/usr/bin/python3 -B -m spn_ip_failover.monitor --config /var/lib/spn-ip-failover/routes.json --output /var/lib/spn-ip-failover/latest.json
+TimeoutStartSec=10min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/spn-ip-failover
+

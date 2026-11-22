@@ -17,6 +17,7 @@ from config import (
     WEBHOOK_HOST,
     WEBHOOK_PORT,
     GB_BYTES,
+    PAYMENT_EXPIRY_TIME,
     DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
 )
 import database as db
@@ -44,7 +45,13 @@ from services.subscription_deletion import (
 )
 from services.yookassa import create_yookassa_payment, get_payment_status
 from services.subscription_sync import reconcile_subscription_expiry
-from services.discounts import calculate_discounted_price
+from services.discounts import calculate_discounted_price, current_price, subscription_catalog_price
+from services.subscription_checkout import (
+    SpecialDiscountCheckoutError,
+    ensure_checkout_price,
+    special_discount_fields,
+    subscription_checkout,
+)
 from services.telegram_auth import TelegramAuthError, validate_telegram_init_data
 from admin_web import router as admin_router
 from customer_web import router as customer_router
@@ -73,13 +80,18 @@ app.include_router(renewal_router)
 app.include_router(mobile_router)
 app.include_router(mobile_public_router)
 
+# White-label partners run only through scripts/partner_runtime.py with an
+# explicit, separate database. Restarting SPN (even with old PARTNER_* env
+# variables) must never mount partner stores against this service's db.get_pool.
+
 
 @app.middleware("http")
 async def no_cache_miniapp(request: Request, call_next):
     response = await call_next(request)
     if (
         request.url.path in {"/", "/account", "/login", "/register", "/renew", "/app", "/admin"}
-        or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/", "/miniapp/api/"))
+        or request.url.path in {"/partners"}
+        or request.url.path.startswith(("/app/", "/admin/", "/site/api/", "/mobile/api/", "/miniapp/api/", "/partners/"))
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -141,16 +153,10 @@ def _format_gb(bytes_value: int | None) -> float:
     return round((bytes_value or 0) / GB_BYTES, 1)
 
 
-def _serialize_tariffs(tariffs: dict, discounts=None) -> list[dict]:
+def _serialize_tariffs(tariffs: dict, discounts=None, special_discounts=()) -> list[dict]:
     result = []
     for code, tariff in tariffs.items():
-        pricing = calculate_discounted_price(
-            tariff["price"],
-            discounts,
-            product_type="subscription",
-            code=code,
-            plan_kind=tariff["kind"],
-        )
+        pricing = subscription_catalog_price(tariff, code, discounts, special_discounts)
         result.append({
             "code": code,
             "title": tariff["title"],
@@ -315,11 +321,12 @@ async def miniapp_me(request: Request):
 
 @app.get("/miniapp/api/tariffs")
 async def miniapp_tariffs(request: Request):
-    await _miniapp_user(request)
+    user = await _miniapp_user(request)
     discounts = await db.get_active_discounts()
+    special_discounts = await db.get_eligible_special_discounts(int(user["id"]))
     return JSONResponse({
-        "regular": _serialize_tariffs(REGULAR_TARIFFS, discounts),
-        "bypass": _serialize_tariffs(BYPASS_TARIFFS, discounts),
+        "regular": _serialize_tariffs(REGULAR_TARIFFS, discounts, special_discounts),
+        "bypass": _serialize_tariffs(BYPASS_TARIFFS, discounts, special_discounts),
         "traffic_packages": [
             {
                 "code": code,
@@ -334,7 +341,7 @@ async def miniapp_tariffs(request: Request):
             }
             for code, package in BYPASS_TRAFFIC_PACKAGES.items()
         ],
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/miniapp/api/subscriptions")
@@ -450,7 +457,8 @@ async def miniapp_create_subscription_payment(request: Request):
     payment_target = body.get("payment_target", "new")
     subscription_id = body.get("subscription_id")
 
-    if tariff_code not in TARIFFS or provider not in {"cryptobot", "yookassa"}:
+    if (tariff_code not in TARIFFS or provider not in {"cryptobot", "yookassa"}
+            or payment_target not in {"new", "renew"}):
         raise HTTPException(status_code=400, detail="Invalid tariff or provider")
 
     tariff = TARIFFS[tariff_code]
@@ -473,36 +481,35 @@ async def miniapp_create_subscription_payment(request: Request):
         if target_slot_number is None:
             raise HTTPException(status_code=400, detail=f"Достигнут лимит: максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок этого типа")
 
-    discounts = await db.get_active_discounts()
-    amount = calculate_discounted_price(
-        tariff["price"],
-        discounts,
-        product_type="subscription",
-        code=tariff_code,
-        plan_kind=tariff["kind"],
-    )["price"]
-    if provider == "cryptobot":
-        invoice = await create_cryptobot_invoice(_bot, amount, tariff_code, tg_id)
-        invoice_id = str(invoice["invoice_id"]) if invoice else None
-        pay_url = invoice.get("bot_invoice_url") if invoice else None
-    else:
-        payment = await create_yookassa_payment(_bot, amount, tariff_code, tg_id)
-        invoice_id = payment.get("id") if payment else None
-        pay_url = (payment.get("confirmation") or {}).get("confirmation_url") if payment else None
-
-    if not invoice_id or not pay_url:
-        raise HTTPException(status_code=502, detail="Payment provider error")
-
-    await db.create_payment(
-        tg_id,
-        tariff_code,
-        amount,
-        provider,
-        invoice_id,
-        subscription_id=int(subscription_id) if subscription_id else None,
-        payment_target=payment_target,
-        target_slot_number=target_slot_number,
-    )
+    subscription_id = int(subscription_id) if payment_target == "renew" else None
+    price = await current_price(tariff["price"], product_type="subscription", code=tariff_code,
+                                plan_kind=tariff["kind"], tg_id=tg_id, payment_target=payment_target)
+    try:
+        async with subscription_checkout(tg_id, tariff_code, payment_target, subscription_id, provider, price) as pending:
+            amount = price["price"]
+            ensure_checkout_price(amount, body.get("expected_price"))
+            if pending:
+                invoice_id, pay_url = pending
+            else:
+                special = special_discount_fields(price)
+                if provider == "cryptobot":
+                    invoice = await create_cryptobot_invoice(
+                        _bot, amount, tariff_code, tg_id, **({"expires_in": PAYMENT_EXPIRY_TIME} if special else {}),
+                    )
+                    invoice_id = str(invoice["invoice_id"]) if invoice else None
+                    pay_url = invoice.get("bot_invoice_url") if invoice else None
+                else:
+                    payment = await create_yookassa_payment(_bot, amount, tariff_code, tg_id)
+                    invoice_id = payment.get("id") if payment else None
+                    pay_url = ((payment or {}).get("confirmation") or {}).get("confirmation_url")
+                if not invoice_id or not pay_url:
+                    raise HTTPException(status_code=502, detail="Payment provider error")
+                await db.create_payment(
+                    tg_id, tariff_code, amount, provider, invoice_id, subscription_id=subscription_id,
+                    payment_target=payment_target, target_slot_number=target_slot_number, **special,
+                )
+    except SpecialDiscountCheckoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider})
 
 

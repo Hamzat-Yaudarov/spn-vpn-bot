@@ -58,12 +58,15 @@ class RenewalAPITests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(renewal, "refresh_subscription_expiry",
                                       AsyncMock(side_effect=lambda sub: sub["subscription_until"])))
         self.discounts = self.enterContext(patch.object(renewal.db, "get_active_discounts", AsyncMock(return_value=[])))
+        self.special_discounts = self.enterContext(patch.object(renewal.db, "get_eligible_special_discounts", AsyncMock(return_value=[])))
+        self.pending_special = self.enterContext(patch.object(renewal.db, "get_pending_special_discount_payment",
+                                                             AsyncMock(return_value=None)))
         self.pending = self.enterContext(patch.object(renewal.db, "get_pending_renewal_for_subscription",
                                                      AsyncMock(return_value=None)))
         self.acquire = self.enterContext(patch.object(renewal.db, "acquire_user_lock", AsyncMock(return_value=True)))
         self.release = self.enterContext(patch.object(renewal.db, "release_user_lock", AsyncMock()))
         self.record = self.enterContext(patch.object(renewal.db, "create_renewal_checkout_payment",
-                                                    AsyncMock(side_effect=lambda *args: self.payment)))
+                                                    AsyncMock(side_effect=lambda *args, **kwargs: self.payment)))
         self.get_payment = self.enterContext(patch.object(renewal.db, "get_payment_by_invoice",
                                                          AsyncMock(side_effect=lambda _: self.payment)))
         self.provider = self.enterContext(patch.object(renewal, "create_yookassa_payment", AsyncMock(return_value={
@@ -168,6 +171,41 @@ class RenewalAPITests(unittest.IsolatedAsyncioTestCase):
         result = (await self.client.get("/site/api/renewal/details")).json()
         self.assertEqual(result["tariffs"][0]["price"], 160)
         self.assertEqual(result["tariffs"][0]["original_price"], 200)
+
+    async def test_special_price_matches_tariff_and_renewal_and_is_saved_with_invoice(self):
+        self.special_discounts.return_value = [{
+            "id": 45, "name": "Возвращение", "percent": 75,
+            "tariff_codes": ["regular_1m"], "payment_target": "renew",
+        }]
+        self.provider.return_value["amount"] = {"value": "50.00"}
+        self.payment["amount"] = Decimal("50.00")
+        details = (await self.client.get("/site/api/renewal/details")).json()["tariffs"]
+        self.assertEqual(details[0]["price"], 50)
+        self.assertNotIn("special_discount_id", details[1])
+        self.assertEqual((await current_price(200, product_type="subscription", code="regular_1m",
+                                              plan_kind="regular", tg_id=123))["price"], 200)
+        response = await self.client.post("/site/api/renewal/payment", json={**self.body, "expected_price": 50})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.provider.await_args.args[1], 50)
+        self.assertEqual(self.record.await_args.kwargs, {"special_discount_id": 45})
+
+    async def test_pending_special_invoice_is_reused_only_for_matching_checkout(self):
+        self.special_discounts.return_value = [{
+            "id": 45, "name": "Возвращение", "percent": 75,
+            "tariff_codes": [], "payment_target": "renew",
+        }]
+        pending = payment(special_discount_id=45, amount=Decimal("50.00"))
+        self.pending_special.return_value = pending
+        remote = {**self.provider.return_value, "status": "pending"}
+        with patch.object(yookassa, "get_payment_status", AsyncMock(return_value=remote)):
+            response = await self.client.post("/site/api/renewal/payment", json={**self.body, "expected_price": 50})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["invoice_id"], INVOICE_ID)
+            pending["subscription_id"] = 999
+            response = await self.client.post("/site/api/renewal/payment", json={**self.body, "expected_price": 50})
+            self.assertEqual(response.status_code, 409)
+        self.provider.assert_not_awaited()
+        self.record.assert_not_awaited()
 
     async def test_all_renewal_prices_match_bot_with_global_and_targeted_discounts(self):
         cases = [[],
@@ -308,7 +346,7 @@ class RenewalStorageAndHeadersTests(unittest.IsolatedAsyncioTestCase):
         sql, params = execute.await_args.args
         self.assertIn("ON CONFLICT (invoice_id) DO NOTHING", sql)
         self.assertNotIn("UPDATE", sql)
-        self.assertEqual(params, (123, "regular_1m", 200, INVOICE_ID, 77, 2, None))
+        self.assertEqual(params, (123, "regular_1m", 200, INVOICE_ID, 77, 2, None, None))
 
     async def test_pending_lookup_is_scoped_to_subscription_and_owner(self):
         with patch.object(renewal.db, "db_execute", AsyncMock(return_value=None)) as execute:

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -52,8 +52,8 @@ ACTIVE_BROADCASTS: dict[str, dict] = {}
 
 class BroadcastStates(StatesGroup):
     """Состояния для рассылок сообщений"""
-    waiting_for_broadcast_all = State()
-    waiting_for_broadcast_no_sub = State()
+    waiting_for_inactive_days = State()
+    waiting_for_message = State()
     reviewing_broadcast = State()
     choosing_broadcast_buttons = State()
 
@@ -106,7 +106,8 @@ async def admin_help(message: Message):
         "<b>Пользователи и рассылки</b>\n"
         "• <code>/send ТГ_ИД текст</code> — отправить сообщение пользователю. Можно ответить командой на фото/сообщение.\n"
         "• <code>/all_sms</code> — рассылка всем пользователям.\n"
-        "• <code>/not_sub_sms</code> — рассылка пользователям без активной подписки.\n"
+        "• <code>/active_sub_sms</code> — рассылка пользователям с активной подпиской.\n"
+        "• <code>/not_sub_sms</code> — рассылка по числу дней без активной подписки.\n"
         "• <code>/emoji_ids</code> — показать ID премиум-эмодзи из сообщения.\n"
         "• <code>/enable_collab ТГ_ИД %</code> — включить партнёрство: 15, 20, 25 или 30%.\n"
         "• <code>/stats</code> — статистика бота.\n\n"
@@ -371,20 +372,27 @@ def _broadcast_button_selection_text(selected_buttons: list[str] | None) -> str:
     )
 
 
-def _broadcast_mode_text(mode: str) -> str:
-    return "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
+def _broadcast_mode_text(mode: str, inactive_days: int | None = None) -> str:
+    if mode == "no_sub":
+        if inactive_days:
+            return f"пользователям без активной подписки от {inactive_days} дн. включительно"
+        return "всем пользователям без активной подписки"
+    if mode == "active":
+        return "пользователям с активной подпиской"
+    return "всем пользователям"
 
 
 def _broadcast_summary_text(
     mode: str,
     selected_buttons: list[str] | None = None,
     custom_emoji_ids: list[str] | None = None,
+    inactive_days: int | None = None,
 ) -> str:
     selected_labels = [_broadcast_button_label(key) for key in BROADCAST_BUTTON_ORDER if key in (selected_buttons or [])]
     selected_text = ", ".join(selected_labels) if selected_labels else "пока не выбраны"
     return (
         "📤 <b>Рассылка подготовлена</b>\n\n"
-        f"Кому: <b>{_broadcast_mode_text(mode)}</b>\n"
+        f"Кому: <b>{_broadcast_mode_text(mode, inactive_days)}</b>\n"
         "Сообщение: <b>получено</b>\n"
         f"Премиум-эмодзи: <b>{len(custom_emoji_ids or [])}</b>\n"
         f"Кнопки: <b>{selected_text}</b>\n\n"
@@ -430,28 +438,52 @@ async def _send_broadcast_preview(callback: CallbackQuery, state: FSMContext) ->
         message_id=source_message_id,
         reply_markup=_build_broadcast_user_keyboard(selected_buttons),
     )
+    current = await state.get_data()
+    if (
+        current.get("review_message_id") != data.get("review_message_id")
+        or (current.get("selected_buttons") or []) != selected_buttons
+    ):
+        await callback.answer("Рассылка изменилась. Открой актуальный предпросмотр.", show_alert=True)
+        return False
     await state.update_data(preview_sent=True)
     return True
 
 
-async def _get_broadcast_users(mode: str):
-    pool = await db.get_pool()
-    async with pool.acquire() as conn:
-        if mode == "no_sub":
-            return await conn.fetch(
-                """
-                SELECT tg_id FROM users
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM subscriptions
-                    WHERE subscriptions.tg_id = users.tg_id
-                      AND subscriptions.subscription_until IS NOT NULL
-                      AND subscriptions.subscription_until > now() AT TIME ZONE 'UTC'
-                )
-                ORDER BY tg_id
-                """
-            )
+def _broadcast_inactive_cutoff(days: int) -> datetime:
+    if days < 0:
+        raise ValueError("Inactive days must be nonnegative")
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
-        return await conn.fetch("SELECT tg_id FROM users ORDER BY tg_id")
+
+async def _get_broadcast_users(mode: str, inactive_days: int | None = None):
+    if mode == "no_sub" and inactive_days is not None:
+        return await db.db_execute(
+            """
+            SELECT u.tg_id FROM users u
+            WHERE u.tg_id > 0
+              AND GREATEST(u.created_at, u.last_deleted_subscription_ended_at, (
+                  SELECT MAX(s.subscription_until) FROM subscriptions s WHERE s.tg_id = u.tg_id
+              )) <= $1
+            ORDER BY u.tg_id
+            """,
+            (_broadcast_inactive_cutoff(inactive_days),),
+            fetch_all=True,
+        )
+    if mode == "active":
+        return await db.db_execute(
+            """
+            SELECT u.tg_id FROM users u
+            WHERE u.tg_id > 0 AND EXISTS (
+                SELECT 1 FROM subscriptions s
+                WHERE s.tg_id = u.tg_id AND s.subscription_until > now() AT TIME ZONE 'UTC'
+            )
+            ORDER BY u.tg_id
+            """,
+            fetch_all=True,
+        )
+    if mode == "all":
+        return await db.db_execute("SELECT tg_id FROM users WHERE tg_id > 0 ORDER BY tg_id", fetch_all=True)
+    raise ValueError("Invalid broadcast audience")
 
 
 async def _run_broadcast_copy(
@@ -463,6 +495,7 @@ async def _run_broadcast_copy(
     reply_markup: InlineKeyboardMarkup | None,
     mode: str,
     broadcast_id: str,
+    inactive_days: int | None = None,
 ):
     total_users = len(users)
     sent_count = 0
@@ -470,7 +503,7 @@ async def _run_broadcast_copy(
     blocked_count = 0
     unreachable_count = 0
     rate_limited_delay = 0.3
-    mode_text = "пользователям без подписки" if mode == "no_sub" else "всем пользователям"
+    mode_text = _broadcast_mode_text(mode, inactive_days)
 
     progress_message = await status_message.answer(
         f"📤 <b>Начинаю рассылку {mode_text}: {total_users} получателей...</b>\n\n"
@@ -1648,111 +1681,106 @@ async def handle_direct_message(message: Message, state: FSMContext):
         logger.warning("Direct message to %s failed: %s", target_id, exc)
 
 
-@router.message(Command("all_sms"))
-async def admin_broadcast_all(message: Message, state: FSMContext):
-    """Админ команда: начать рассылку всем пользователям"""
-    admin_id = message.from_user.id
+async def _ask_for_broadcast_message(message: Message, state: FSMContext, mode: str, inactive_days: int | None = None):
+    await state.set_state(BroadcastStates.waiting_for_message)
+    await message.answer(
+        f"📤 <b>Рассылка {_broadcast_mode_text(mode, inactive_days)}</b>\n\n"
+        "Отправь сообщение для рассылки. Можно добавить фото или видео.\n\n"
+        "Для отмены введи /cancel."
+    )
 
-    if not is_admin(admin_id):
+
+@router.message(Command("all_sms", "active_sub_sms", "not_sub_sms"))
+async def admin_broadcast(message: Message, state: FSMContext, command: CommandObject):
+    if not is_admin(message.from_user.id):
         await message.answer("❌ Эта команда доступна только администратору")
-        logger.warning(f"Unauthorized /all_sms attempt from user {admin_id}")
+        logger.warning("Unauthorized /%s attempt from user %s", command.command, message.from_user.id)
         return
 
-    await state.set_state(BroadcastStates.waiting_for_broadcast_all)
-    await message.answer(
-        "📤 <b>Режим рассылки всем пользователям</b>\n\n"
-        "Отправь сообщение, которое нужно разослать:\n"
-        "• Только текст\n"
-        "• Текст + фото\n"
-        "• Текст + видео\n"
-        "• Любая комбинация\n\n"
-        "<i>После этого я предложу выбрать кнопки для сообщения</i>"
-    )
-    logger.info(f"Admin {admin_id} started /all_sms broadcast mode")
+    mode = {"all_sms": "all", "active_sub_sms": "active", "not_sub_sms": "no_sub"}[command.command]
+    await state.set_data({"broadcast_mode": mode})
+    if mode == "no_sub":
+        await state.set_state(BroadcastStates.waiting_for_inactive_days)
+        await message.answer(
+            "Сколько дней должно пройти без активной подписки? Введи целое число.\n\n"
+            "Например, 15 — от 15 дней включительно. Если у пользователя ещё не было подписки, "
+            "дни считаются с регистрации. Введи 0, чтобы выбрать всех без активной подписки.\n\n"
+            "Для отмены введи /cancel."
+        )
+        return
+
+    await _ask_for_broadcast_message(message, state, mode)
 
 
-@router.message(BroadcastStates.waiting_for_broadcast_all)
-async def handle_broadcast_all_message(message: Message, state: FSMContext):
-    """Обработчик сообщения в режиме рассылки всем пользователям"""
-    admin_id = message.from_user.id
+@router.message(StateFilter(*BroadcastStates.__all_states__), Command("cancel"))
+async def cancel_broadcast_message(message: Message, state: FSMContext):
+    if is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("🚫 <b>Рассылка отменена</b>")
 
-    if not is_admin(admin_id):
+
+@router.message(BroadcastStates.waiting_for_inactive_days)
+async def handle_broadcast_inactive_days(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    try:
+        days = int(message.text or "")
+        _broadcast_inactive_cutoff(days)
+    except (ValueError, OverflowError):
+        await message.answer("Введи целое число дней от 0, например 15.")
+        return
+
+    await state.update_data(inactive_days=days)
+    await _ask_for_broadcast_message(message, state, "no_sub", days)
+
+
+@router.message(BroadcastStates.waiting_for_message)
+async def handle_broadcast_message(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа")
         await state.clear()
         return
 
+    data = await state.get_data()
+    custom_emoji_ids = _message_custom_emoji_ids(message)
     await state.update_data(
-        broadcast_mode="all",
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
-        custom_emoji_ids=_message_custom_emoji_ids(message),
+        custom_emoji_ids=custom_emoji_ids,
         selected_buttons=[],
         preview_sent=False,
     )
     await state.set_state(BroadcastStates.reviewing_broadcast)
-    await message.answer(
-        _broadcast_summary_text("all", [], _message_custom_emoji_ids(message)),
+    review_message = await message.answer(
+        _broadcast_summary_text(data["broadcast_mode"], [], custom_emoji_ids, data.get("inactive_days")),
         reply_markup=_build_broadcast_summary_keyboard(),
     )
+    if (await state.get_data()).get("source_message_id") == message.message_id:
+        await state.update_data(review_message_id=review_message.message_id)
 
 
-@router.message(Command("not_sub_sms"))
-async def admin_broadcast_no_subscription(message: Message, state: FSMContext):
-    """Админ команда: начать рассылку пользователям без активной подписки"""
-    admin_id = message.from_user.id
+async def _get_broadcast_review(callback: CallbackQuery, state: FSMContext) -> dict | None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа", show_alert=True)
+        return None
 
-    if not is_admin(admin_id):
-        await message.answer("❌ Эта команда доступна только администратору")
-        logger.warning(f"Unauthorized /not_sub_sms attempt from user {admin_id}")
-        return
-
-    await state.set_state(BroadcastStates.waiting_for_broadcast_no_sub)
-    await message.answer(
-        "📤 <b>Режим рассылки пользователям без подписки</b>\n\n"
-        "Отправь сообщение, которое нужно разослать:\n"
-        "• Только текст\n"
-        "• Текст + фото\n"
-        "• Текст + видео\n"
-        "• Любая комбинация\n\n"
-        "<i>После этого я предложу выбрать кнопки для сообщения</i>"
-    )
-    logger.info(f"Admin {admin_id} started /not_sub_sms broadcast mode")
-
-
-@router.message(BroadcastStates.waiting_for_broadcast_no_sub)
-async def handle_broadcast_no_sub_message(message: Message, state: FSMContext):
-    """Обработчик сообщения в режиме рассылки пользователям без подписки"""
-    admin_id = message.from_user.id
-
-    if not is_admin(admin_id):
-        await message.answer("❌ У вас нет доступа")
-        await state.clear()
-        return
-
-    await state.update_data(
-        broadcast_mode="no_sub",
-        source_chat_id=message.chat.id,
-        source_message_id=message.message_id,
-        custom_emoji_ids=_message_custom_emoji_ids(message),
-        selected_buttons=[],
-        preview_sent=False,
-    )
-    await state.set_state(BroadcastStates.reviewing_broadcast)
-    await message.answer(
-        _broadcast_summary_text("no_sub", [], _message_custom_emoji_ids(message)),
-        reply_markup=_build_broadcast_summary_keyboard(),
-    )
+    data = await state.get_data()
+    review_message_id = data.get("review_message_id")
+    if not review_message_id or review_message_id != getattr(callback.message, "message_id", None):
+        await callback.answer("Это меню рассылки устарело", show_alert=True)
+        return None
+    return data
 
 
 @router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_choose_buttons")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_choose_buttons")
 async def choose_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    data = await _get_broadcast_review(callback, state)
+    if data is None:
         return
 
-    data = await state.get_data()
     selected_buttons = data.get("selected_buttons") or []
     await state.set_state(BroadcastStates.choosing_broadcast_buttons)
     await callback.message.edit_text(
@@ -1764,10 +1792,8 @@ async def choose_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data.startswith("broadcast_toggle:"))
 async def toggle_broadcast_button(callback: CallbackQuery, state: FSMContext):
-    admin_id = callback.from_user.id
-    if not is_admin(admin_id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    data = await _get_broadcast_review(callback, state)
+    if data is None:
         return
 
     key = callback.data.split(":", 1)[1]
@@ -1775,7 +1801,6 @@ async def toggle_broadcast_button(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Неизвестная кнопка", show_alert=True)
         return
 
-    data = await state.get_data()
     selected_buttons = list(data.get("selected_buttons") or [])
     if key in selected_buttons:
         selected_buttons.remove(key)
@@ -1793,12 +1818,10 @@ async def toggle_broadcast_button(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_no_buttons")
 async def clear_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    data = await _get_broadcast_review(callback, state)
+    if data is None:
         return
 
-    data = await state.get_data()
     if not data.get("selected_buttons"):
         await callback.answer("Кнопок уже нет")
         return
@@ -1814,20 +1837,19 @@ async def clear_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_preview")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_preview")
 async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    data = await _get_broadcast_review(callback, state)
+    if data is None:
         return
 
     try:
         if not await _send_broadcast_preview(callback, state):
             return
-        data = await state.get_data()
         await callback.message.edit_text(
             _broadcast_summary_text(
                 data.get("broadcast_mode"),
                 data.get("selected_buttons") or [],
                 data.get("custom_emoji_ids") or [],
+                data.get("inactive_days"),
             )
             + "\n\n✅ <b>Предпросмотр отправлен.</b> Если всё выглядит правильно, запускай рассылку.",
             reply_markup=_build_broadcast_ready_keyboard(),
@@ -1841,9 +1863,7 @@ async def preview_broadcast(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(BroadcastStates.reviewing_broadcast, F.data == "broadcast_cancel")
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_cancel")
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    if await _get_broadcast_review(callback, state) is None:
         return
 
     await state.clear()
@@ -1879,18 +1899,17 @@ async def stop_active_broadcast(callback: CallbackQuery):
 @router.callback_query(BroadcastStates.choosing_broadcast_buttons, F.data == "broadcast_start")
 async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
     admin_id = callback.from_user.id
-    if not is_admin(admin_id):
-        await callback.answer("❌ У вас нет доступа", show_alert=True)
-        await state.clear()
+    data = await _get_broadcast_review(callback, state)
+    if data is None:
         return
 
-    data = await state.get_data()
     mode = data.get("broadcast_mode")
+    inactive_days = data.get("inactive_days")
     source_chat_id = data.get("source_chat_id")
     source_message_id = data.get("source_message_id")
     selected_buttons = data.get("selected_buttons") or []
     preview_sent = data.get("preview_sent") is True
-    if mode not in {"all", "no_sub"} or not source_chat_id or not source_message_id:
+    if mode not in {"all", "active", "no_sub"} or not source_chat_id or not source_message_id:
         await callback.answer("Данные рассылки устарели", show_alert=True)
         await state.clear()
         return
@@ -1898,23 +1917,22 @@ async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Сначала отправь предпросмотр", show_alert=True)
         return
 
+    await state.clear()
+    broadcast_id = uuid.uuid4().hex
     try:
-        users = await _get_broadcast_users(mode)
+        users = await _get_broadcast_users(mode, inactive_days)
         if not users:
-            text = "❌ В БД нет пользователей" if mode == "all" else "❌ Не найдено пользователей без подписки"
-            await callback.message.answer(text)
-            await state.clear()
+            await callback.message.edit_text("❌ По выбранным условиям получателей нет.")
             await callback.answer()
             return
 
         await callback.message.edit_text("✅ <b>Рассылка подтверждена</b>")
         await callback.answer("Запускаю рассылку")
-        broadcast_id = uuid.uuid4().hex
         ACTIVE_BROADCASTS[broadcast_id] = {
             "admin_id": admin_id,
             "mode": mode,
             "stop_requested": False,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
         }
         await _run_broadcast_copy(
             callback.bot,
@@ -1925,12 +1943,11 @@ async def start_selected_broadcast(callback: CallbackQuery, state: FSMContext):
             _build_broadcast_user_keyboard(selected_buttons),
             mode,
             broadcast_id,
+            inactive_days,
         )
         logger.info(f"Admin {admin_id} completed selected broadcast mode={mode} buttons={selected_buttons}")
     except Exception as e:
         logger.error(f"Selected broadcast error: {e}", exc_info=True)
-        await callback.message.answer(f"❌ Ошибка при рассылке: {str(e)[:100]}")
+        await callback.message.answer(f"❌ Ошибка при рассылке: {html.escape(str(e)[:100])}")
     finally:
-        if 'broadcast_id' in locals():
-            ACTIVE_BROADCASTS.pop(broadcast_id, None)
-        await state.clear()
+        ACTIVE_BROADCASTS.pop(broadcast_id, None)

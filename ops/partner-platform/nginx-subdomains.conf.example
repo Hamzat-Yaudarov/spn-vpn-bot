@@ -1,0 +1,90 @@
+# EXAMPLE ONLY. Not installed or production-tested by the local stage-6 work.
+# Replace partners.example.com consistently in DNS, certificates, app settings,
+# and the anchored regex below. Escape every dot when editing a regex.
+#
+# Prerequisites (separate deployment approval):
+# - An operator-owned base dedicated to partners, e.g. partners.example.com.
+# - Wildcard DNS *.partners.example.com -> the public gateway address.
+# - A certificate for *.partners.example.com, renewed via an automated DNS-01
+#   integration. A single wildcard covers only ONE label, not nested names.
+# - A DEDICATED public partner gateway on loopback:8097, not the existing main
+#   bot/admin/Remnawave HTTP port. No upstream address may come from Host.
+# - The gateway validates canonical Host again, looks up an ACTIVE project by
+#   hostname in its database, rejects reserved/unknown names, and authorizes
+#   every private operation. A hostname is routing data, NOT authentication.
+#
+# Do not put tenant-controlled values into generated nginx directives, TLS file
+# paths, proxy_pass, aliases, filesystem roots, or certificate issuance commands.
+# Branding is application data. DNS/certificate provisioning is operator-only.
+
+upstream spn_partner_public_gateway {
+    server 127.0.0.1:8097;
+    keepalive 16;
+}
+
+# http{} scope; sizing/limits require staging load tests, not per-user billing.
+limit_req_zone $binary_remote_addr zone=partner_subscriptions:10m rate=5r/s;
+
+# Merge defaults into the existing gateway deliberately; do not introduce a
+# second conflicting default_server into an installed configuration.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name "~^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])\.partners\.example\.com$";
+    # $host can only match the anchored one-level DNS label above. The public
+    # gateway still rejects unknown projects after the HTTPS connection.
+    return 308 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name "~^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])\.partners\.example\.com$";
+
+    ssl_certificate /etc/letsencrypt/live/partners.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/partners.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+
+    # Do not accept TLS for one tenant and route an unrelated HTTP Host.
+    if ($ssl_server_name != $host) { return 421; }
+
+    client_max_body_size 1m;
+    # Capability paths and HWID headers are secrets. The dedicated gateway must
+    # ALSO run with ASGI access logging disabled (e.g. uvicorn --no-access-log).
+    # No CDN/cache/error tracker may record these paths or upstream responses.
+    access_log off;
+    error_log /var/log/nginx/partner-gateway-error.log crit;
+    location / {
+        limit_req zone=partner_subscriptions burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass http://spn_partner_public_gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Do not pass client-supplied routing/auth proxy headers through.
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Original-URL "";
+        proxy_set_header X-Rewrite-URL "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+    }
+}

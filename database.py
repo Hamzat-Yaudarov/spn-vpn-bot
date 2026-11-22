@@ -1,7 +1,8 @@
 import asyncio
 import asyncpg
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from config import (
     DATABASE_URL,
     PAYMENT_EXPIRY_TIME,
@@ -13,6 +14,7 @@ from config import (
     BYPASS_HWID_DEVICE_LIMIT,
     GB_BYTES,
     REGULAR_HWID_DEVICE_LIMIT,
+    TARIFFS,
 )
 
 
@@ -26,6 +28,51 @@ CREATE TABLE IF NOT EXISTS payment_subscription_activations (
     created_at TIMESTAMP NOT NULL DEFAULT now()
 )
 """
+
+SPECIAL_DISCOUNT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS special_discounts (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    percent NUMERIC NOT NULL CHECK (percent > 0 AND percent < 100),
+    audience TEXT NOT NULL CHECK (audience IN ('all', 'new', 'existing')),
+    tariff_codes TEXT[] NOT NULL DEFAULT '{}',
+    payment_target TEXT NOT NULL DEFAULT 'any' CHECK (payment_target IN ('any', 'new', 'renew')),
+    inactive_days INTEGER CHECK (inactive_days >= 0),
+    starts_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP CHECK (ends_at > starts_at),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
+);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS special_discount_id BIGINT REFERENCES special_discounts(id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'payments'::regclass AND attname = 'paid_at' AND NOT attisdropped
+    ) THEN
+        ALTER TABLE payments ADD COLUMN paid_at TIMESTAMP;
+        UPDATE payments AS payment
+        SET paid_at = COALESCE(
+            (SELECT activation.created_at FROM payment_subscription_activations AS activation
+             WHERE activation.invoice_id = payment.invoice_id),
+            payment.updated_at, payment.created_at
+        )
+        WHERE payment.status = 'paid'
+          AND COALESCE(payment.payment_kind, 'subscription') = 'subscription';
+    END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_special_discount_pending_user
+    ON payments (tg_id) WHERE special_discount_id IS NOT NULL AND status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_special_discount_redemption
+    ON payments (tg_id, special_discount_id)
+    WHERE special_discount_id IS NOT NULL AND status IN ('pending', 'paid');
+"""
+
+
+class SpecialDiscountUnavailable(RuntimeError):
+    """The campaign changed or a discounted invoice already exists."""
+
 
 # Keep existing UUID references intact; Remnawave 3 uses separate numeric user IDs.
 REMNAWAVE_IDENTITY_SCHEMA = """
@@ -158,6 +205,7 @@ async def run_migrations():
                 'remnawave_uuid': {'type': 'UUID', 'nullable': True},
                 'remnawave_username': {'type': 'TEXT', 'nullable': True},
                 'subscription_until': {'type': 'TIMESTAMP', 'nullable': True},
+                'last_deleted_subscription_ended_at': {'type': 'TIMESTAMP', 'nullable': True},
                 'squad_uuid': {'type': 'UUID', 'nullable': True},
                 'referrer_id': {'type': 'BIGINT', 'nullable': True},
                 'referral_entry_intent': {'type': 'TEXT', 'nullable': True},
@@ -187,6 +235,8 @@ async def run_migrations():
                 'tracking_code': {'type': 'TEXT', 'nullable': True},
                 'refund_requested_at': {'type': 'TIMESTAMP', 'nullable': True},
                 'refund_status': {'type': 'TEXT', 'nullable': True},
+                'special_discount_id': {'type': 'BIGINT', 'nullable': True},
+                'paid_at': {'type': 'TIMESTAMP', 'nullable': True},
                 'status': {'type': 'TEXT', 'nullable': False, 'default': "'pending'"},
             }
 
@@ -386,6 +436,7 @@ async def run_migrations():
                     remnawave_uuid UUID,
                     remnawave_username TEXT,
                     subscription_until TIMESTAMP,
+                    last_deleted_subscription_ended_at TIMESTAMP,
                     squad_uuid UUID,
 
                     -- Реферальная программа
@@ -903,6 +954,8 @@ async def run_migrations():
                         logging.debug(f"Столбец уже существует, пропускаем: {query.strip()}")
                     else:
                         logging.warning(f"⚠️ Ошибка миграции: {e}")
+
+            await conn.execute(SPECIAL_DISCOUNT_SCHEMA)
 
             # ═══════════════════════════════════════════════════════════
             # ЭТАП 3.5: ОЧИСТКА ДУБЛИКАТОВ И ДОБАВЛЕНИЕ CONSTRAINTS
@@ -1991,6 +2044,18 @@ async def delete_subscription_record(subscription_id: int):
                 return False
 
             tg_id = subscription["tg_id"]
+            if subscription["subscription_until"] is not None:
+                await conn.execute(
+                    """
+                    UPDATE users
+                    SET last_deleted_subscription_ended_at = GREATEST(
+                        last_deleted_subscription_ended_at, LEAST($2, now() AT TIME ZONE 'UTC')
+                    )
+                    WHERE tg_id = $1
+                    """,
+                    tg_id,
+                    subscription["subscription_until"],
+                )
             await conn.execute(
                 "DELETE FROM notification_state WHERE subscription_id = $1",
                 subscription_id,
@@ -2227,6 +2292,16 @@ async def get_tracking_link_stats(code: str):
 #               PAYMENT MANAGEMENT
 # ────────────────────────────────────────────────
 
+async def _write_checkout_payment(query, params, tg_id, tariff_code, payment_target, special_discount_id, amount):
+    if special_discount_id is None:
+        await db_execute(query, params)
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        await validate_special_discount_checkout(conn, tg_id, special_discount_id, tariff_code, payment_target, amount)
+        await conn.execute(query, *params)
+
+
 async def create_payment(
     tg_id: int,
     tariff_code: str,
@@ -2239,11 +2314,13 @@ async def create_payment(
     target_slot_number: int | None = None,
     payment_kind: str = 'subscription',
     traffic_package_code: str | None = None,
+    special_discount_id: int | None = None,
 ):
     """Создать запись о платеже"""
-    from datetime import datetime
     tracking_code = await get_payment_tracking_code(tg_id)
-    await db_execute(
+    if special_discount_id is not None and payment_kind != 'subscription':
+        raise SpecialDiscountUnavailable("Спецскидка действует только на подписку.")
+    await _write_checkout_payment(
         """
         INSERT INTO payments (
             tg_id,
@@ -2257,9 +2334,10 @@ async def create_payment(
             target_slot_number,
             payment_kind,
             traffic_package_code,
-            tracking_code
+            tracking_code,
+            special_discount_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         """,
         (
             tg_id,
@@ -2274,7 +2352,9 @@ async def create_payment(
             payment_kind,
             traffic_package_code,
             tracking_code,
-        )
+            special_discount_id,
+        ),
+        tg_id, tariff_code, payment_target, special_discount_id, amount,
     )
 
 
@@ -2304,6 +2384,7 @@ async def get_active_payment_for_user_and_tariff(
     subscription_id: int | None = None,
     payment_target: str = 'new',
     target_slot_number: int | None = None,
+    special_discount_id: int | None = None,
 ):
     """
     Получить существующий неоплаченный счёт пользователя для конкретного тарифа и провайдера
@@ -2329,10 +2410,11 @@ async def get_active_payment_for_user_and_tariff(
           AND payment_target = $5
           AND target_slot_number IS NOT DISTINCT FROM $6
           AND ($7::numeric IS NULL OR amount = $7)
+          AND special_discount_id IS NOT DISTINCT FROM $8
         ORDER BY id DESC
         LIMIT 1
         """,
-        (tg_id, tariff_code, provider, subscription_id, payment_target, target_slot_number, amount),
+        (tg_id, tariff_code, provider, subscription_id, payment_target, target_slot_number, amount, special_discount_id),
         fetch_one=True
     )
 
@@ -2407,20 +2489,31 @@ async def get_payment_by_invoice(invoice_id: str):
     )
 
 
-async def create_renewal_checkout_payment(tg_id: int, subscription, tariff_code: str, amount, invoice_id: str):
+async def get_pending_special_discount_payment(tg_id: int):
+    return await db_execute(
+        "SELECT * FROM payments WHERE tg_id = $1 AND special_discount_id IS NOT NULL AND status = 'pending'",
+        (tg_id,),
+        fetch_one=True,
+    )
+
+
+async def create_renewal_checkout_payment(
+    tg_id: int, subscription, tariff_code: str, amount, invoice_id: str, *, special_discount_id: int | None = None,
+):
     """Persist retries of one renewal invoice without changing its existing state."""
     tracking_code = await get_payment_tracking_code(tg_id)
-    await db_execute(
+    await _write_checkout_payment(
         """
         INSERT INTO payments (
             tg_id, tariff_code, amount, provider, invoice_id, subscription_id,
-            payment_target, target_slot_number, payment_kind, tracking_code
+            payment_target, target_slot_number, payment_kind, tracking_code, special_discount_id
         )
-        VALUES ($1, $2, $3, 'yookassa', $4, $5, 'renew', $6, 'subscription', $7)
+        VALUES ($1, $2, $3, 'yookassa', $4, $5, 'renew', $6, 'subscription', $7, $8)
         ON CONFLICT (invoice_id) DO NOTHING
         """,
         (tg_id, tariff_code, amount, str(invoice_id), subscription["id"],
-         subscription.get("type_index"), tracking_code),
+         subscription.get("type_index"), tracking_code, special_discount_id),
+        tg_id, tariff_code, 'renew', special_discount_id, amount,
     )
     return await get_payment_by_invoice(invoice_id)
 
@@ -4600,3 +4693,117 @@ async def delete_discount(discount_id: int) -> bool:
         fetch_one=True,
     )
     return result is not None
+
+
+async def list_special_discounts():
+    return await db_execute(
+        "SELECT * FROM special_discounts ORDER BY starts_at DESC, id DESC",
+        fetch_all=True,
+    )
+
+
+async def create_special_discount(
+    *, name, percent, audience, tariff_codes, starts_at, ends_at, active, inactive_days, payment_target,
+):
+    return await db_execute(
+        """
+        INSERT INTO special_discounts (
+            name, percent, audience, tariff_codes, starts_at, ends_at, active, inactive_days, payment_target
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
+        """,
+        (name, percent, audience, tariff_codes, starts_at, ends_at, active, inactive_days, payment_target),
+        fetch_one=True,
+    )
+
+
+async def update_special_discount(
+    campaign_id: int, *, name, percent, audience, tariff_codes, starts_at, ends_at, active, inactive_days, payment_target,
+):
+    return await db_execute(
+        """
+        UPDATE special_discounts SET name = $1, percent = $2, audience = $3, tariff_codes = $4,
+            starts_at = $5, ends_at = $6, active = $7, inactive_days = $8, payment_target = $9,
+            updated_at = now() AT TIME ZONE 'UTC'
+        WHERE id = $10
+        RETURNING *
+        """,
+        (name, percent, audience, tariff_codes, starts_at, ends_at, active, inactive_days, payment_target, campaign_id),
+        fetch_one=True,
+    )
+
+
+async def set_special_discount_active(campaign_id: int, active: bool) -> bool:
+    result = await db_execute(
+        """
+        UPDATE special_discounts SET active = $2, updated_at = now() AT TIME ZONE 'UTC'
+        WHERE id = $1 RETURNING 1
+        """,
+        (campaign_id, active),
+        fetch_one=True,
+    )
+    return result is not None
+
+
+ELIGIBLE_SPECIAL_DISCOUNTS = """
+SELECT campaign.*
+FROM special_discounts AS campaign
+JOIN users AS customer ON customer.tg_id = $1
+WHERE campaign.active
+  AND campaign.starts_at <= $2 AND (campaign.ends_at IS NULL OR campaign.ends_at > $2)
+  AND ($3::bigint IS NULL OR campaign.id = $3)
+  AND (campaign.audience <> 'new' OR customer.created_at >= campaign.starts_at)
+  AND (campaign.audience <> 'existing' OR customer.created_at IS NULL OR customer.created_at < campaign.starts_at)
+  AND (customer.created_at IS NULL OR customer.created_at < campaign.starts_at OR NOT COALESCE(customer.first_payment, FALSE))
+  AND (
+    campaign.inactive_days IS NULL OR GREATEST(
+        customer.created_at,
+        customer.last_deleted_subscription_ended_at,
+        (SELECT MAX(subscription.subscription_until) FROM subscriptions AS subscription WHERE subscription.tg_id = $1)
+    ) <= $2 - make_interval(days => campaign.inactive_days)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM payments AS payment
+    WHERE payment.tg_id = $1
+      AND COALESCE(payment.payment_kind, 'subscription') = 'subscription' AND payment.amount > 0
+      AND (payment.status = 'paid' OR (payment.status = 'pending' AND payment.paid_at IS NOT NULL))
+      AND (
+        payment.special_discount_id = campaign.id
+        OR customer.created_at >= campaign.starts_at
+        OR COALESCE(payment.paid_at, payment.updated_at, payment.created_at) >= campaign.starts_at
+      )
+  )
+ORDER BY campaign.percent DESC, campaign.id DESC
+"""
+
+
+async def get_eligible_special_discounts(tg_id: int):
+    return await db_execute(
+        ELIGIBLE_SPECIAL_DISCOUNTS,
+        (tg_id, datetime.now(timezone.utc).replace(tzinfo=None), None),
+        fetch_all=True,
+    )
+
+
+async def validate_special_discount_checkout(conn, tg_id: int, campaign_id: int, tariff_code: str, payment_target: str, amount):
+    """Validate the offer while the transaction serializes reservations for this user."""
+    tariff = TARIFFS.get(tariff_code)
+    if not tariff or payment_target not in ('new', 'renew'):
+        raise SpecialDiscountUnavailable("Спецскидка недоступна для выбранного тарифа.")
+    await conn.fetchval("SELECT 1 FROM users WHERE tg_id = $1 FOR UPDATE", tg_id)
+    if await conn.fetchval(
+        "SELECT 1 FROM payments WHERE tg_id = $1 AND special_discount_id IS NOT NULL AND status = 'pending'",
+        tg_id,
+    ):
+        raise SpecialDiscountUnavailable("У вас уже есть неоплаченный счёт со спецскидкой.")
+    campaign = await conn.fetchrow(
+        ELIGIBLE_SPECIAL_DISCOUNTS + "FOR SHARE OF campaign",
+        tg_id, datetime.now(timezone.utc).replace(tzinfo=None), campaign_id,
+    )
+    if not campaign:
+        raise SpecialDiscountUnavailable("Условия спецскидки изменились. Обновите цену и попробуйте ещё раз.")
+    from services.discounts import calculate_subscription_price
+
+    pricing = calculate_subscription_price(tariff, tariff_code, (), (campaign,), payment_target)
+    if not pricing.get('special_discount_id') or Decimal(str(amount)) != Decimal(str(pricing['price'])):
+        raise SpecialDiscountUnavailable("Цена изменилась. Обновите её и попробуйте ещё раз.")

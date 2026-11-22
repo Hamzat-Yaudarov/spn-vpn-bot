@@ -27,6 +27,7 @@ from config import (
     BYPASS_TRAFFIC_PACKAGES,
     DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
     GB_BYTES,
+    PAYMENT_EXPIRY_TIME,
     PUBLIC_SITE_URL,
     REGULAR_TARIFFS,
     BYPASS_TARIFFS,
@@ -34,7 +35,7 @@ from config import (
 )
 from services.cryptobot import create_cryptobot_invoice
 from services.device_addons import available_device_addon_packages, current_device_limit, effective_device_limit
-from services.discounts import calculate_discounted_price
+from services.discounts import calculate_discounted_price, current_price, subscription_catalog_price
 from services.mobile_auth import (
     MobileAuthError,
     authenticate_access_token,
@@ -53,6 +54,7 @@ from services.remnawave import (
     remnawave_get_hwid_devices,
     remnawave_get_subscription_url,
 )
+from services.subscription_checkout import SpecialDiscountCheckoutError, special_discount_fields, subscription_checkout
 from services.yookassa import create_yookassa_payment
 
 
@@ -229,7 +231,7 @@ async def _serialize_subscription(subscription) -> dict:
     }
 
 
-def _serialize_tariffs(tariffs: dict, discounts) -> list[dict]:
+def _serialize_tariffs(tariffs: dict, discounts, special_discounts=()) -> list[dict]:
     return [
         {
             "code": code,
@@ -237,9 +239,7 @@ def _serialize_tariffs(tariffs: dict, discounts) -> list[dict]:
             "days": tariff["days"],
             "kind": tariff["kind"],
             "base_gb": tariff.get("base_gb"),
-            **calculate_discounted_price(
-                tariff["price"], discounts, product_type="subscription", code=code, plan_kind=tariff["kind"]
-            ),
+            **subscription_catalog_price(tariff, code, discounts, special_discounts),
         }
         for code, tariff in tariffs.items()
     ]
@@ -361,9 +361,10 @@ async def mobile_me(session=Depends(_mobile_session)):
 @router.get("/catalog")
 async def mobile_catalog(session=Depends(_mobile_session)):
     discounts = await db.get_active_discounts()
+    special_discounts = await db.get_eligible_special_discounts(int(session["tg_id"]))
     return JSONResponse({
-        "regular": _serialize_tariffs(REGULAR_TARIFFS, discounts),
-        "bypass": _serialize_tariffs(BYPASS_TARIFFS, discounts),
+        "regular": _serialize_tariffs(REGULAR_TARIFFS, discounts, special_discounts),
+        "bypass": _serialize_tariffs(BYPASS_TARIFFS, discounts, special_discounts),
         "traffic_packages": [
             {
                 "code": code,
@@ -374,7 +375,7 @@ async def mobile_catalog(session=Depends(_mobile_session)):
             }
             for code, package in BYPASS_TRAFFIC_PACKAGES.items()
         ],
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/subscriptions")
@@ -458,10 +459,14 @@ async def mobile_delete_subscription_device(subscription_id: int, hwid: str, ses
     return JSONResponse({"ok": True})
 
 
-async def _provider_invoice(provider: str, amount: float, tariff_code: str, tg_id: int) -> tuple[str | None, str | None]:
+async def _provider_invoice(provider: str, amount: float, tariff_code: str, tg_id: int,
+                            *, special_discount_id=None) -> tuple[str | None, str | None]:
     return_url = f"{PUBLIC_SITE_URL}/mobile/payment-return"
     if provider == "cryptobot":
-        invoice = await create_cryptobot_invoice(None, amount, tariff_code, tg_id, return_url=return_url)
+        invoice = await create_cryptobot_invoice(
+            None, amount, tariff_code, tg_id, return_url=return_url,
+            **({"expires_in": PAYMENT_EXPIRY_TIME} if special_discount_id else {}),
+        )
         return (str(invoice["invoice_id"]), invoice.get("bot_invoice_url") or invoice.get("mini_app_invoice_url")) if invoice else (None, None)
     payment = await create_yookassa_payment(None, amount, tariff_code, tg_id, return_url=return_url)
     return (payment.get("id"), (payment.get("confirmation") or {}).get("confirmation_url")) if payment else (None, None)
@@ -493,19 +498,25 @@ async def mobile_create_subscription_payment(request: Request, session=Depends(_
         target_index = await db.get_next_type_index(tg_id, tariff["kind"])
         if target_index is None:
             raise HTTPException(status_code=409, detail={"code": "subscription_limit", "message": "Достигнут лимит подписок"})
-    discounts = await db.get_active_discounts()
-    amount = calculate_discounted_price(
-        tariff["price"], discounts, product_type="subscription", code=code, plan_kind=tariff["kind"]
-    )["price"]
-    invoice_id, pay_url = await _provider_invoice(provider, amount, code, tg_id)
-    if not invoice_id or not pay_url:
-        raise HTTPException(status_code=502, detail="Payment provider error")
-    await db.create_payment(
-        tg_id, code, amount, provider, invoice_id,
-        subscription_id=int(subscription_id) if subscription_id else None,
-        payment_target=target,
-        target_slot_number=target_index,
-    )
+    subscription_id = int(subscription_id) if target == "renew" else None
+    price = await current_price(tariff["price"], product_type="subscription", code=code,
+                                plan_kind=tariff["kind"], tg_id=tg_id, payment_target=target)
+    try:
+        async with subscription_checkout(tg_id, code, target, subscription_id, provider, price) as pending:
+            amount = price["price"]
+            if pending:
+                invoice_id, pay_url = pending
+            else:
+                special = special_discount_fields(price)
+                invoice_id, pay_url = await _provider_invoice(provider, amount, code, tg_id, **special)
+                if not invoice_id or not pay_url:
+                    raise HTTPException(status_code=502, detail="Payment provider error")
+                await db.create_payment(
+                    tg_id, code, amount, provider, invoice_id, subscription_id=subscription_id,
+                    payment_target=target, target_slot_number=target_index, **special,
+                )
+    except SpecialDiscountCheckoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return JSONResponse({"invoice_id": invoice_id, "pay_url": pay_url, "provider": provider, "amount": amount})
 
 

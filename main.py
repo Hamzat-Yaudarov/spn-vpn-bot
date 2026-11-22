@@ -12,6 +12,7 @@ import database as db
 
 # Импортируем все роутеры обработчиков
 from handlers import start, callbacks, subscription, gift, referral, promo, admin, partnership, reactivation, smart_assistant
+from handlers import contest as contest_handlers, contest_admin
 from services.cryptobot import check_cryptobot_invoices
 from services.yookassa import check_yookassa_payments, cleanup_expired_payments
 from services.subscription_notifications import check_and_send_notifications
@@ -19,7 +20,7 @@ from services.traffic_resets import run_traffic_reset_loop
 from services.device_addon_expiry import run_device_addon_expiry_loop
 from services.reactivation_campaigns import run_reactivation_cleanup_loop
 import webhooks
-from services import referral_store
+from services import contest, contest_delivery, referral_store
 
 
 # ────────────────────────────────────────────────
@@ -53,6 +54,8 @@ dp = Dispatcher(storage=storage)
 
 def setup_handlers():
     """Регистрируем все роутеры обработчиков"""
+    dp.include_router(contest_handlers.router)
+    dp.include_router(contest_admin.router)
     dp.include_router(start.router)
     dp.include_router(callbacks.router)
     dp.include_router(subscription.router)
@@ -81,7 +84,9 @@ async def setup_menu_button():
                     BotCommand(command="help", description="Команды админа"),
                     BotCommand(command="send", description="Сообщение пользователю по ID"),
                     BotCommand(command="all_sms", description="Рассылка всем"),
-                    BotCommand(command="not_sub_sms", description="Рассылка без подписки"),
+                    BotCommand(command="active_sub_sms", description="Рассылка с активной подпиской"),
+                    BotCommand(command="not_sub_sms", description="Рассылка по дням без подписки"),
+                    BotCommand(command="contest_admin", description="Управление конкурсом"),
                     BotCommand(command="emoji_ids", description="ID премиум-эмодзи"),
                     BotCommand(command="reset_traffic_all", description="Сбросить трафик антиглушилок"),
                 ],
@@ -139,6 +144,10 @@ async def main():
     # Инициализируем БД
     await db.init_db()
     await referral_store.initialize()
+    pool = await db.get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        await contest.initialize(conn)
+    await contest_delivery.initialize()
     logger.info("✅ Database initialized")
 
     # Регистрируем обработчики
@@ -154,6 +163,7 @@ async def main():
     # Список активных задач
     from services.referral_balance_payments import run_recovery_loop
     tasks = [asyncio.create_task(referral_store.run_delivery_loop(bot)),
+             asyncio.create_task(contest_delivery.run_delivery_loop(bot)),
              asyncio.create_task(run_recovery_loop(bot))]
 
     # YooKassa проверяется всегда: webhook даёт мгновенную активацию,

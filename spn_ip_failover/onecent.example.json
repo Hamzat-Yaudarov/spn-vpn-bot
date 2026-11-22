@@ -1,0 +1,17 @@
+{
+  "profile": "/var/lib/spn-ip-failover/onecent-browser",
+  "journal": "/var/lib/spn-ip-failover/onecent-orders",
+  "budget": {
+    "journal": "/var/lib/spn-ip-failover/onecent-daily-budget",
+    "max_daily_rub": "0.00",
+    "timezone": "Europe/Saratov"
+  },
+  "servers": {
+    "00000000-0000-4000-8000-000000000001": {
+      "name": "ТОЧНОЕ_ИМЯ_VPS_ИЗ_КАБИНЕТА",
+      "max_upfront_rub": "0.00",
+      "max_monthly_rub": "0.00",
+      "removable_existing_additional_ipv4": []
+    }
+  }
+}

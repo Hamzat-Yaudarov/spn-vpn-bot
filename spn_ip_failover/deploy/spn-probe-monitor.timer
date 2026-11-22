@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Way SPN VPN health checks regularly
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=120s
+AccuracySec=5s
+Unit=spn-probe-monitor.service
+
+[Install]
+WantedBy=timers.target

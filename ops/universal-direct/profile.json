@@ -1,0 +1,35 @@
+{
+  "log": {"loglevel": "warning", "access": "none"},
+  "dns": {"servers": ["1.1.1.1", "8.8.8.8"], "queryStrategy": "UseIPv4"},
+  "inbounds": [
+    {
+      "tag": "direct-grpc",
+      "listen": "127.0.0.1",
+      "port": 10087,
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"], "routeOnly": true},
+      "streamSettings": {"network": "grpc", "security": "none", "grpcSettings": {"serviceName": "spngrpc"}}
+    },
+    {
+      "tag": "direct-ws",
+      "listen": "127.0.0.1",
+      "port": 10088,
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"], "routeOnly": true},
+      "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": "/direct/ws/"}}
+    }
+  ],
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}},
+    {"tag": "block", "protocol": "blackhole"}
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {"type": "field", "ip": ["geoip:private", "169.254.0.0/16", "168.63.129.16/32", "100.64.0.0/10"], "outboundTag": "block"},
+      {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"}
+    ]
+  }
+}

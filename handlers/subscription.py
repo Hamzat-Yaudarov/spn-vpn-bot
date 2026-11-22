@@ -20,6 +20,7 @@ from config import (
     BYPASS_TARIFFS,
     DEVICE_ADDON_MAX_HWID_DEVICE_LIMIT,
     GB_BYTES,
+    PAYMENT_EXPIRY_TIME,
     REGULAR_HWID_DEVICE_LIMIT,
     REGULAR_SQUAD_UUID,
     REGULAR_TARIFFS,
@@ -64,7 +65,13 @@ from services.subscription_deletion import (
 )
 from services.yookassa import create_yookassa_payment, get_payment_status
 from services.subscription_sync import refresh_subscription_expiry
-from services.discounts import calculate_discounted_price, current_price
+from services.discounts import calculate_discounted_price, calculate_subscription_price, current_price
+from services.subscription_checkout import (
+    SpecialDiscountCheckoutError,
+    ensure_checkout_price,
+    special_discount_fields,
+    subscription_checkout,
+)
 from services.traffic_periods import build_traffic_period_state
 from states import UserStates
 
@@ -279,10 +286,11 @@ async def _show_tariff_selection(callback: CallbackQuery, state: FSMContext, tit
     plan_kind = data.get("plan_kind", "regular")
     tariffs = REGULAR_TARIFFS if plan_kind == "regular" else BYPASS_TARIFFS
     discounts = await db.get_active_discounts()
+    special_discounts = await db.get_eligible_special_discounts(callback.from_user.id)
 
     keyboard = []
     for tariff_code, tariff in tariffs.items():
-        pricing = calculate_discounted_price(tariff["price"], discounts, product_type="subscription", code=tariff_code, plan_kind=plan_kind)
+        pricing = calculate_subscription_price(tariff, tariff_code, discounts, special_discounts, data.get("purchase_mode", "new"))
         price_label = _discount_price_label(pricing)
         period = f"{tariff['days']} дней"
         label = f"{period} — {price_label}"
@@ -1547,7 +1555,8 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     await state.update_data(tariff_code=tariff_code)
 
     tariff = TARIFFS[tariff_code]
-    pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"])
+    pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code,
+                                  plan_kind=tariff["kind"], tg_id=tg_id, payment_target=purchase_mode)
     wallet_request_key = uuid4().hex
     await state.update_data(wallet_request_key=wallet_request_key, wallet_amount=str(pricing['price']))
     if purchase_mode == "renew" and target_slot_number:
@@ -1581,72 +1590,70 @@ async def process_tariff_choice(callback: CallbackQuery, state: FSMContext):
     await state.set_state(UserStates.choosing_payment)
 
 
-@router.callback_query(F.data == "pay_cryptobot")
-async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
-    """Создать или вернуть существующий счёт в CryptoBot."""
+async def _create_subscription_payment(callback: CallbackQuery, state: FSMContext, provider: str):
     tg_id = callback.from_user.id
     data = await state.get_data()
     tariff_code = data.get("tariff_code")
-    purchase_mode = data.get("purchase_mode", "new")
-    target_subscription_id = data.get("target_subscription_id")
-    target_slot_number = data.get("target_slot_number")
-    type_index = data.get("type_index")
-
-    if not tariff_code:
+    tariff = TARIFFS.get(tariff_code)
+    if not tariff:
         await callback.answer("Ошибка: тариф не выбран", show_alert=True)
         await state.clear()
         return
 
+    purchase_mode = data.get("purchase_mode", "new")
+    subscription_id = data.get("target_subscription_id")
+    target_slot_number = data.get("target_slot_number")
     if purchase_mode == "new" and target_slot_number is None:
-        target_slot_number = type_index
+        target_slot_number = data.get("type_index")
         await state.update_data(target_slot_number=target_slot_number)
 
-    tariff = TARIFFS[tariff_code]
-    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
-
-    existing_invoice_id = await db.get_active_payment_for_user_and_tariff(
-        tg_id,
-        tariff_code,
-        "cryptobot",
-        amount=amount,
-        subscription_id=target_subscription_id,
-        payment_target=purchase_mode,
-        target_slot_number=target_slot_number,
-    )
-
-    if existing_invoice_id:
-        invoice = await get_invoice_status(existing_invoice_id)
-        if invoice and invoice.get("status") == "active":
-            pay_url = invoice.get("bot_invoice_url", "")
-            if pay_url:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
-                    [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-                    [semantic_button(text="← Назад", callback_data=_purchase_back_callback(data), style="primary")],
-                ])
-                await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
-                await state.clear()
-                return
-
-    invoice = await create_cryptobot_invoice(callback.bot, amount, tariff_code, tg_id)
-    if not invoice:
-        await callback.answer("Не удалось создать счёт. Попробуйте позже.", show_alert=True)
-        await state.clear()
+    pricing = await current_price(tariff["price"], product_type="subscription", code=tariff_code,
+                                  plan_kind=tariff["kind"], tg_id=tg_id, payment_target=purchase_mode)
+    try:
+        async with subscription_checkout(tg_id, tariff_code, purchase_mode, subscription_id, provider, pricing) as pending:
+            amount = pricing["price"]
+            ensure_checkout_price(amount, data.get("wallet_amount"))
+            special = special_discount_fields(pricing)
+            if pending:
+                _, pay_url = pending
+            else:
+                pay_url = None
+                if not special:
+                    existing_invoice = await db.get_active_payment_for_user_and_tariff(
+                        tg_id, tariff_code, provider, amount=amount, subscription_id=subscription_id,
+                        payment_target=purchase_mode, target_slot_number=target_slot_number,
+                    )
+                    if existing_invoice and provider == "cryptobot":
+                        remote = await get_invoice_status(existing_invoice)
+                        if remote and remote.get("status") == "active":
+                            pay_url = remote.get("bot_invoice_url")
+                    elif existing_invoice:
+                        remote = await get_payment_status(existing_invoice)
+                        if remote and remote.get("status") == "pending":
+                            pay_url = (remote.get("confirmation") or {}).get("confirmation_url")
+                if not pay_url:
+                    if provider == "cryptobot":
+                        invoice = await create_cryptobot_invoice(
+                            callback.bot, amount, tariff_code, tg_id,
+                            **({"expires_in": PAYMENT_EXPIRY_TIME} if special else {}),
+                        )
+                        invoice_id = invoice.get("invoice_id") if invoice else None
+                        pay_url = invoice.get("bot_invoice_url") if invoice else None
+                    else:
+                        payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
+                        invoice_id = payment.get("id") if payment else None
+                        pay_url = ((payment or {}).get("confirmation") or {}).get("confirmation_url")
+                    if not invoice_id or not pay_url:
+                        await callback.answer("Не удалось создать платёж. Попробуйте позже.", show_alert=True)
+                        await state.clear()
+                        return
+                    await db.create_payment(
+                        tg_id, tariff_code, amount, provider, invoice_id, subscription_id=subscription_id,
+                        payment_target=purchase_mode, target_slot_number=target_slot_number, **special,
+                    )
+    except SpecialDiscountCheckoutError as exc:
+        await callback.answer(str(exc), show_alert=True)
         return
-
-    invoice_id = invoice["invoice_id"]
-    pay_url = invoice["bot_invoice_url"]
-
-    await db.create_payment(
-        tg_id,
-        tariff_code,
-        amount,
-        "cryptobot",
-        invoice_id,
-        subscription_id=target_subscription_id,
-        payment_target=purchase_mode,
-        target_slot_number=target_slot_number,
-    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [semantic_button(text="💳 Оплатить", url=pay_url, style="success")],
@@ -1657,84 +1664,14 @@ async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
+@router.callback_query(F.data == "pay_cryptobot")
+async def process_pay_cryptobot(callback: CallbackQuery, state: FSMContext):
+    await _create_subscription_payment(callback, state, "cryptobot")
+
+
 @router.callback_query(F.data == "pay_yookassa")
 async def process_pay_yookassa(callback: CallbackQuery, state: FSMContext):
-    """Создать или вернуть существующий платёж через Yookassa."""
-    tg_id = callback.from_user.id
-    data = await state.get_data()
-    tariff_code = data.get("tariff_code")
-    purchase_mode = data.get("purchase_mode", "new")
-    target_subscription_id = data.get("target_subscription_id")
-    target_slot_number = data.get("target_slot_number")
-    type_index = data.get("type_index")
-
-    if not tariff_code:
-        await callback.answer("Ошибка: тариф не выбран", show_alert=True)
-        await state.clear()
-        return
-
-    if purchase_mode == "new" and target_slot_number is None:
-        target_slot_number = type_index
-        await state.update_data(target_slot_number=target_slot_number)
-
-    tariff = TARIFFS[tariff_code]
-    amount = (await current_price(tariff["price"], product_type="subscription", code=tariff_code, plan_kind=tariff["kind"]))["price"]
-
-    existing_payment_id = await db.get_active_payment_for_user_and_tariff(
-        tg_id,
-        tariff_code,
-        "yookassa",
-        amount=amount,
-        subscription_id=target_subscription_id,
-        payment_target=purchase_mode,
-        target_slot_number=target_slot_number,
-    )
-
-    if existing_payment_id:
-        payment = await get_payment_status(existing_payment_id)
-        if payment and payment.get("status") == "pending":
-            confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
-            if confirmation_url:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [semantic_button(text="💳 Оплатить", url=confirmation_url, style="success")],
-                    [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-                    [semantic_button(text="← Назад", callback_data=_purchase_back_callback(data), style="primary")],
-                ])
-                await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
-                await state.clear()
-                return
-
-    payment = await create_yookassa_payment(callback.bot, amount, tariff_code, tg_id)
-    if not payment:
-        await callback.answer("Не удалось создать платёж. Попробуйте позже.", show_alert=True)
-        await state.clear()
-        return
-
-    payment_id = payment["id"]
-    confirmation_url = payment.get("confirmation", {}).get("confirmation_url", "")
-    if not confirmation_url:
-        await callback.answer("Ошибка: не получена ссылка для оплаты", show_alert=True)
-        await state.clear()
-        return
-
-    await db.create_payment(
-        tg_id,
-        tariff_code,
-        amount,
-        "yookassa",
-        payment_id,
-        subscription_id=target_subscription_id,
-        payment_target=purchase_mode,
-        target_slot_number=target_slot_number,
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [semantic_button(text="💳 Оплатить", url=confirmation_url, style="success")],
-        [semantic_button(text="✅ Проверить оплату", callback_data="check_payment", style="primary")],
-        [semantic_button(text="← Назад", callback_data=_purchase_back_callback(data), style="primary")],
-    ])
-    await edit_text_with_photo(callback, _subscription_invoice_text(tariff, amount), kb, "Оплати")
-    await state.clear()
+    await _create_subscription_payment(callback, state, "yookassa")
 
 
 @router.callback_query((F.data == "pay_referral_balance") | F.data.startswith("pay_referral_balance:"))
@@ -1752,33 +1689,33 @@ async def process_pay_referral_balance(callback: CallbackQuery, state: FSMContex
             ):
                 await callback.answer('Этот экран устарел. Выберите подписку и тариф заново.', show_alert=True)
                 return
-            tariff = TARIFFS[tariff_code]
-            quoted = data.get('wallet_amount')
-            if quoted is None:  # Compatibility for a checkout opened before this update.
-                quoted = (await current_price(tariff['price'], product_type='subscription', code=tariff_code, plan_kind=tariff['kind']))['price']
-            amount = referral_accounting.money(quoted)
-            stats = await db.get_referral_stats(tg_id)
-            available = Decimal(str(stats['current_balance']))
-            if available < amount:
-                await callback.answer(
-                    f'Недостаточно денег на балансе.\n\nВаш баланс: {available:.2f} ₽\n'
-                    f'Стоимость подписки: {amount:.2f} ₽\nНе хватает: {amount - available:.2f} ₽',
-                    show_alert=True,
-                )
-                return
             if not request_key:
-                # An old generic button has no durable idempotency identity.
-                # Refresh its checkout instead of issuing two orders on racing clicks.
                 await callback.answer('Выберите тариф заново — этот экран устарел.', show_alert=True)
                 return
+            tariff = TARIFFS[tariff_code]
             mode = data.get('purchase_mode', 'new')
+            subscription_id = data.get('target_subscription_id')
             slot = data.get('target_slot_number')
             if mode == 'new' and slot is None:
                 slot = data.get('type_index')
-            order = await referral_accounting.reserve_balance_purchase(
-                tg_id, request_key, tariff_code, amount, purchase_mode=mode,
-                subscription_id=data.get('target_subscription_id'), target_slot_number=slot,
-            )
+            pricing = await current_price(tariff['price'], product_type='subscription', code=tariff_code,
+                                          plan_kind=tariff['kind'], tg_id=tg_id, payment_target=mode)
+            async with subscription_checkout(tg_id, tariff_code, mode, subscription_id, 'referral_balance', pricing):
+                amount = referral_accounting.money(pricing['price'])
+                ensure_checkout_price(amount, data.get('wallet_amount'))
+                stats = await db.get_referral_stats(tg_id)
+                available = Decimal(str(stats['current_balance']))
+                if available < amount:
+                    await callback.answer(
+                        f'Недостаточно денег на балансе.\n\nВаш баланс: {available:.2f} ₽\n'
+                        f'Стоимость подписки: {amount:.2f} ₽\nНе хватает: {amount - available:.2f} ₽',
+                        show_alert=True,
+                    )
+                    return
+                order = await referral_accounting.reserve_balance_purchase(
+                    tg_id, request_key, tariff_code, amount, purchase_mode=mode,
+                    subscription_id=subscription_id, target_slot_number=slot, **special_discount_fields(pricing),
+                )
         if order['status'] == 'cancelled':
             await callback.answer('Эта оплата отменена. Выберите тариф заново.', show_alert=True)
             return

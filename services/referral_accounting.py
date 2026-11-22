@@ -243,7 +243,7 @@ async def settle_subscription(conn, payment):
 
 async def reserve_balance_purchase(user_id, request_key, tariff_code, amount,
                                    purchase_mode='new', subscription_id=None, target_slot_number=None,
-                                   *, validate_selection=False):
+                                   *, validate_selection=False, special_discount_id=None):
     """Reserve once under the same user lock used by cash withdrawal requests."""
     amount = money(amount)
     if not request_key or len(request_key) > 100:
@@ -307,11 +307,13 @@ async def reserve_balance_purchase(user_id, request_key, tariff_code, amount,
         if subscription_id and not await conn.fetchval('''SELECT id FROM subscriptions
             WHERE id=$1 AND tg_id=$2 AND is_visible AND is_renewable''', subscription_id, user_id):
             raise ValueError('Подписка недоступна для оплаты.')
+        if special_discount_id is not None:
+            await db.validate_special_discount_checkout(conn, user_id, special_discount_id, tariff_code, purchase_mode, amount)
         invoice_id = f'referral-balance-{uuid4().hex}'
         await conn.execute('''INSERT INTO payments(tg_id,tariff_code,amount,provider,invoice_id,
-            payment_kind,payment_target,subscription_id,target_slot_number)
-            VALUES($1,$2,$3,$4,$5,'subscription',$6,$7,$8)''', user_id, tariff_code, amount,
-            WALLET_PROVIDER, invoice_id, purchase_mode, subscription_id, target_slot_number)
+            payment_kind,payment_target,subscription_id,target_slot_number,special_discount_id)
+            VALUES($1,$2,$3,$4,$5,'subscription',$6,$7,$8,$9)''', user_id, tariff_code, amount,
+            WALLET_PROVIDER, invoice_id, purchase_mode, subscription_id, target_slot_number, special_discount_id)
         return dict(await conn.fetchrow('''INSERT INTO referral_wallet_reservations
             (user_id,request_key,invoice_id,tariff_code,amount,purchase_mode,subscription_id,target_slot_number)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *''', user_id, request_key, invoice_id,

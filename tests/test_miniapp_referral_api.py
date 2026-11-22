@@ -81,7 +81,8 @@ class NativeReferralAPITests(unittest.IsolatedAsyncioTestCase):
             'status': 'pending', 'amount': '160.00', 'summary': None})
         self.reserve.assert_awaited_once_with(123, body['request_key'], 'regular_1m', Decimal('160'),
             purchase_mode='new', subscription_id=None, validate_selection=True)
-        self.price.assert_awaited_once_with(200, product_type='subscription', code='regular_1m', plan_kind='regular')
+        self.price.assert_awaited_once_with(200, product_type='subscription', code='regular_1m',
+                                          plan_kind='regular', tg_id=123, payment_target='new')
         self.reconcile.assert_awaited_once_with(self.bot, 'wallet-one', expected_tg_id=123)
 
     async def test_price_changed_before_hold(self):

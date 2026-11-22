@@ -142,8 +142,10 @@ async def reserve(tg_id, invoice_id, tariff):
             INSERT INTO payment_subscription_activations (invoice_id, subscription_id, expires_at)
             VALUES ($1, $2, $3)
         """, invoice_id, sub["id"], expires_at)
+        # Record confirmed payment even when provisioning has to be retried.
         await conn.execute("""
-            UPDATE payments SET subscription_id = $2, target_slot_number = $3, updated_at = now()
+            UPDATE payments SET subscription_id = $2, target_slot_number = $3, updated_at = now(),
+                paid_at = COALESCE(paid_at, now() AT TIME ZONE 'UTC')
             WHERE invoice_id = $1
         """, invoice_id, sub["id"], index)
         # Hide only unissued duplicates of the exact same placeholder. Keep
@@ -187,4 +189,8 @@ async def complete(tg_id, invoice_id, subscription, uuid, username, squad, traff
         # left behind by a crash after the payment is marked paid.
         from services.referral_accounting import settle_subscription
         await settle_subscription(conn, payment)
-        await conn.execute("UPDATE payments SET status = 'paid', updated_at = now() WHERE invoice_id = $1", invoice_id)
+        await conn.execute("""
+            UPDATE payments SET status = 'paid', updated_at = now(),
+                paid_at = COALESCE(paid_at, now() AT TIME ZONE 'UTC')
+            WHERE invoice_id = $1
+        """, invoice_id)

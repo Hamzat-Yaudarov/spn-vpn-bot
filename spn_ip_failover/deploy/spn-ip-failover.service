@@ -1,0 +1,24 @@
+[Unit]
+Description=Way SPN IPv4 failover controller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=spn-failover
+Group=spn-failover
+WorkingDirectory=/opt/wayspn
+StateDirectory=spn-ip-failover
+StateDirectoryMode=0700
+UMask=0077
+LoadCredential=rotation:/etc/spn-ip-failover/credentials
+ExecStart=/bin/sh /opt/wayspn/spn_ip_failover/deploy/run-controller.sh --config /etc/spn-ip-failover/rotation.json --state /var/lib/spn-ip-failover run --apply --watch
+Restart=on-failure
+RestartSec=20s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,69 @@
+{
+  "remnawave": {
+    "url": "https://panel.example.invalid",
+    "token_env": "REMNAWAVE_API_TOKEN"
+  },
+  "dns_token_env": "CLOUDFLARE_API_TOKEN",
+  "max_attempts": 10,
+  "max_ips_per_server": 10,
+  "fail_rounds": 3,
+  "recover_rounds": 2,
+  "interval_seconds": 120,
+  "verify_seconds": 900,
+  "retire_seconds": 3600,
+  "probes": [
+    {
+      "name": "ru-home",
+      "region": "ru",
+      "command": ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "spn-probe-ru-home", "cd /opt/wayspn && python3 -m spn_ip_failover.worker --config /etc/spn-probe/routes.json"]
+    },
+    {
+      "name": "ru-other-isp",
+      "region": "ru",
+      "command": ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "spn-probe-ru-other", "cd /opt/wayspn && python3 -m spn_ip_failover.worker --config /etc/spn-probe/routes.json"]
+    },
+    {
+      "name": "eu-control",
+      "region": "outside",
+      "command": ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "spn-probe-eu", "cd /opt/wayspn && python3 -m spn_ip_failover.worker --config /etc/spn-probe/routes.json"]
+    }
+  ],
+  "providers": {
+    "provider-pilot": {
+      "check": ["/opt/wayspn/hooks/check"],
+      "inventory": ["/opt/wayspn/hooks/inventory"],
+      "allocate": ["/opt/wayspn/hooks/allocate"],
+      "prepare": ["/opt/wayspn/hooks/prepare"],
+      "activate": ["/opt/wayspn/hooks/activate"],
+      "release": ["/opt/wayspn/hooks/release"]
+    }
+  },
+  "servers": [
+    {
+      "id": "vpn-pilot",
+      "provider": "provider-pilot",
+      "server_id": "replace-with-provider-vps-id",
+      "initial_ip": "192.0.2.10",
+      "initial_allocation_id": "replace-with-provider-allocation-id",
+      "release_initial": false,
+      "node_uuid": "00000000-0000-4000-8000-000000000001",
+      "hosts": [
+        {
+          "key": "vpn-pilot-grpc",
+          "uuid": "00000000-0000-4000-8000-000000000002",
+          "inbound_uuid": "00000000-0000-4000-8000-000000000003",
+          "name": "vpn.example.invalid",
+          "port": 443,
+          "manage_visibility": true
+        }
+      ],
+      "dns": [
+        {
+          "zone_id": "00000000000000000000000000000001",
+          "record_id": "00000000000000000000000000000002",
+          "name": "vpn.example.invalid"
+        }
+      ]
+    }
+  ]
+}

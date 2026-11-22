@@ -1,0 +1,25 @@
+#!/usr/bin/expect -f
+set timeout 180
+stty -echo
+send_user "VPS password (hidden): "
+expect_user {
+    -re {([^\r\n]+)[\r\n]+} {set password $expect_out(1,string)}
+    timeout {stty echo; send_user "Input timeout\n"; exit 2}
+    eof {stty echo; exit 2}
+}
+stty echo
+send_user "\n"
+log_user 0
+spawn ssh -M -S /private/tmp/spn-vk-fi120.sock -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o ServerAliveInterval=15 root@83.219.97.120 {printf 'SPN_VK_FI120_AUTHENTICATED\n'; sleep 1800}
+expect {
+    -re {root@83\.219\.97\.120's password:} {send -- "$password\r"; unset password}
+    timeout {unset password; send_user "SSH prompt timeout\n"; exit 3}
+    eof {unset password; send_user "SSH ended before authentication\n"; exit 4}
+}
+expect {
+    "SPN_VK_FI120_AUTHENTICATED" {send_user "SSH authenticated with existing pinned key\n"}
+    timeout {send_user "SSH authentication timeout\n"; exit 5}
+    eof {send_user "SSH authentication ended\n"; exit 6}
+}
+set timeout -1
+expect eof

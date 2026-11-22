@@ -57,9 +57,42 @@ def calculate_discounted_price(
     return result
 
 
-async def current_price(base_price, *, product_type: str, code: str, plan_kind: str | None = None) -> dict:
+def calculate_subscription_price(tariff, code, discounts, special_discounts, payment_target) -> dict:
+    base_price = tariff["price"]
+    product = {"product_type": "subscription", "code": code, "plan_kind": tariff["kind"]}
+    pricing = calculate_discounted_price(base_price, discounts, **product)
+    applicable = [
+        {"id": campaign["id"], "name": campaign["name"], "value": campaign["percent"],
+         "discount_type": "percent", "target_type": "subscription"}
+        for campaign in special_discounts
+        if campaign["payment_target"] in ("any", payment_target)
+        and (not campaign["tariff_codes"] or code in campaign["tariff_codes"])
+    ]
+    special = calculate_discounted_price(base_price, applicable, **product)
+    if special["price"] < pricing["price"]:
+        return {**special, "special_discount_id": special["discount"]["id"]}
+    return pricing
+
+
+def subscription_catalog_price(tariff, code, discounts, special_discounts) -> dict:
+    purchase = calculate_subscription_price(tariff, code, discounts, special_discounts, "new")
+    renewal = calculate_subscription_price(tariff, code, discounts, special_discounts, "renew")
+    if renewal != purchase:
+        return {**purchase, "renewal": renewal}
+    return purchase
+
+
+async def current_price(
+    base_price, *, product_type: str, code: str, plan_kind: str | None = None,
+    tg_id: int | None = None, payment_target: str = "new",
+) -> dict:
     import database as db
     discounts = await db.get_active_discounts()
+    if product_type == "subscription" and tg_id is not None:
+        return calculate_subscription_price(
+            {"price": base_price, "kind": plan_kind}, code, discounts,
+            await db.get_eligible_special_discounts(tg_id), payment_target,
+        )
     return calculate_discounted_price(
         base_price,
         discounts,

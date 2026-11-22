@@ -1,0 +1,43 @@
+{
+  "brand": "WAY SPN",
+  "campaign": "КОНКУРС",
+  "bot": "@WaySPN_robot",
+  "join": "Участвовать",
+  "joinDescription": ["Откройте бота и нажмите", "«Участвовать» в посте конкурса"],
+  "rules": [
+    {"title": "45 дней подписки", "detail": ["Столько или больше должно", "остаться на момент окончания"]},
+    {"title": "1 друг с оплатой", "detail": ["Друг по вашей ссылке оплачивает", "любой тариф за время конкурса"]}
+  ],
+  "prizes": [
+    {"place": "1", "prize": "20 000 ₽", "cash": true},
+    {"place": "2", "prize": "10 000 ₽", "cash": true},
+    {"place": "3", "prize": "5 000 ₽", "cash": true},
+    {"place": "4", "prize": "365 дней", "cash": false},
+    {"place": "5", "prize": "180 дней", "cash": false},
+    {"place": "6", "prize": "90 дней", "cash": false},
+    {"place": "7–10", "prize": "по 30 дней", "cash": false}
+  ],
+  "prizeNote": ["Если победитель не выполнил условия,", "его приз не переразыгрывается."],
+  "drawNote": ["Места разыгрываются случайно", "среди всех, кто вступил в конкурс."],
+  "closeDate": null,
+  "variants": [
+    {
+      "id": "first-prize",
+      "palette": "gold",
+      "intro": "За первое место",
+      "headline": "20 000",
+      "headlineUnit": "рублей",
+      "tagline": "Всего 10 призовых мест",
+      "coverLabel": "01"
+    },
+    {
+      "id": "with-a-friend",
+      "palette": "mint",
+      "intro": "Позовите друга",
+      "headline": "Вместе",
+      "headlineUnit": "на связи",
+      "tagline": "Деньги и подписки среди призов",
+      "coverLabel": "КОНКУРС WAY SPN"
+    }
+  ]
+}

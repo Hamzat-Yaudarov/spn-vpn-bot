@@ -22,6 +22,7 @@ async def create_cryptobot_invoice(
     tg_id: int,
     *,
     return_url: str | None = None,
+    expires_in: int | None = None,
 ) -> dict | None:
     """
     Создать счёт для оплаты через CryptoBot с retry логикой
@@ -59,6 +60,8 @@ async def create_cryptobot_invoice(
             "paid_btn_url": paid_btn_url,
             "accepted_assets": "USDT,TON,BTC"
         }
+        if expires_in is not None:
+            payload["expires_in"] = expires_in
 
         timeout = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
 

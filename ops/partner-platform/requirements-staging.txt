@@ -1,0 +1,8 @@
+# Standalone franchise runtime only; Python 3.11+ (asyncio.timeout required).
+# Compatibility bounds, not a frozen lockfile. No main-SPN aiogram or dotenv.
+aiohttp>=3.8.5,<4
+asyncpg>=0.28.0,<1
+fastapi>=0.95.0,<1
+uvicorn>=0.21.0,<1
+cryptography>=46.0.3,<47
+Pillow>=13.0.0,<14

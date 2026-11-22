@@ -7,6 +7,7 @@ import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,7 +28,7 @@ from config import (
     WEB_COOKIE_SECURE,
     WEB_SESSION_DAYS,
 )
-from services.discounts import calculate_discounted_price
+from services.discounts import calculate_discounted_price, current_price, subscription_catalog_price
 from services.device_addons import available_device_addon_packages, current_device_limit, effective_device_limit
 from services.payment_summary import build_payment_success_summary
 from services.payment_reconciliation import reconcile_payment
@@ -37,6 +38,12 @@ from services.subscription_deletion import (
     SubscriptionBusyError,
     SubscriptionNotFoundError,
     delete_subscription_everywhere,
+)
+from services.subscription_checkout import (
+    SpecialDiscountCheckoutError,
+    ensure_checkout_price,
+    special_discount_fields,
+    subscription_checkout,
 )
 from services.subscription_sync import reconcile_subscription_expiry
 from services.web_auth import (
@@ -75,6 +82,7 @@ class SubscriptionPaymentBody(BaseModel):
     tariff_code: str
     payment_target: str = "new"
     subscription_id: int | None = None
+    expected_price: Decimal | None = None
 
 
 class TrafficPaymentBody(BaseModel):
@@ -206,7 +214,7 @@ async def _serialize_subscription(subscription) -> dict:
     }
 
 
-def _catalog(discounts) -> dict:
+def _catalog(discounts, special_discounts=()) -> dict:
     def tariff_items(source):
         return [
             {
@@ -215,9 +223,7 @@ def _catalog(discounts) -> dict:
                 "days": tariff["days"],
                 "kind": tariff["kind"],
                 "base_gb": tariff.get("base_gb"),
-                **calculate_discounted_price(
-                    tariff["price"], discounts, product_type="subscription", code=code, plan_kind=tariff["kind"]
-                ),
+                **subscription_catalog_price(tariff, code, discounts, special_discounts),
             }
             for code, tariff in source.items()
         ]
@@ -302,8 +308,12 @@ async def website_config():
 
 
 @router.get("/site/api/catalog")
-async def website_catalog():
-    return _catalog(await db.get_active_discounts())
+async def website_catalog(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    token = request.cookies.get(SESSION_COOKIE)
+    account = await db.get_web_account_by_session(hash_session_token(token)) if token else None
+    special_discounts = await db.get_eligible_special_discounts(int(account["service_user_id"])) if account else ()
+    return _catalog(await db.get_active_discounts(), special_discounts)
 
 
 @router.post("/site/api/track")
@@ -415,7 +425,7 @@ async def website_subscription_payment(body: SubscriptionPaymentBody, account=De
         raise HTTPException(status_code=400, detail="Некорректный тариф")
 
     target_slot_number = None
-    subscription_id = body.subscription_id
+    subscription_id = body.subscription_id if body.payment_target == "renew" else None
     if body.payment_target == "renew":
         if not subscription_id:
             raise HTTPException(status_code=400, detail="Выберите подписку для продления")
@@ -428,32 +438,32 @@ async def website_subscription_payment(body: SubscriptionPaymentBody, account=De
         if target_slot_number is None:
             raise HTTPException(status_code=400, detail=f"Достигнут лимит: максимум {db.MAX_SUBSCRIPTIONS_PER_USER} подписок этого типа")
 
-    discounts = await db.get_active_discounts()
-    amount = calculate_discounted_price(
-        tariff["price"], discounts, product_type="subscription", code=body.tariff_code, plan_kind=tariff["kind"]
-    )["price"]
-    payment = await create_yookassa_payment(
-        None,
-        amount,
-        body.tariff_code,
-        service_user_id,
-        return_url=f"{PUBLIC_SITE_URL}/account?payment=return",
-    )
-    invoice_id = payment.get("id") if payment else None
-    pay_url = (payment.get("confirmation") or {}).get("confirmation_url") if payment else None
-    if not invoice_id or not pay_url:
-        raise HTTPException(status_code=502, detail="Не удалось создать платёж. Попробуйте позже")
+    price = await current_price(tariff["price"], product_type="subscription", code=body.tariff_code,
+                                plan_kind=tariff["kind"], tg_id=service_user_id, payment_target=body.payment_target)
+    try:
+        async with subscription_checkout(service_user_id, body.tariff_code, body.payment_target,
+                                         subscription_id, "yookassa", price) as pending:
+            amount = price["price"]
+            ensure_checkout_price(amount, body.expected_price)
+            if pending:
+                invoice_id, pay_url = pending
+            else:
+                payment = await create_yookassa_payment(
+                    None, amount, body.tariff_code, service_user_id,
+                    return_url=f"{PUBLIC_SITE_URL}/account?payment=return",
+                )
+                invoice_id = payment.get("id") if payment else None
+                pay_url = ((payment or {}).get("confirmation") or {}).get("confirmation_url")
+                if not invoice_id or not pay_url:
+                    raise HTTPException(status_code=502, detail="Не удалось создать платёж. Попробуйте позже")
 
-    await db.create_payment(
-        service_user_id,
-        body.tariff_code,
-        amount,
-        "yookassa",
-        invoice_id,
-        subscription_id=subscription_id,
-        payment_target=body.payment_target,
-        target_slot_number=target_slot_number,
-    )
+                await db.create_payment(
+                    service_user_id, body.tariff_code, amount, "yookassa", invoice_id,
+                    subscription_id=subscription_id, payment_target=body.payment_target,
+                    target_slot_number=target_slot_number, **special_discount_fields(price),
+                )
+    except SpecialDiscountCheckoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"invoice_id": invoice_id, "pay_url": pay_url}
 
 

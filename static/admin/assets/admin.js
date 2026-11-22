@@ -1,5 +1,5 @@
 const state = { section: "dashboard", usersOffset: 0, usersSearch: "", usersTotal: 0, pageSize: 50 };
-const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки", withdrawals: "Выплаты", referrals: "Рефералы" };
+const titles = { dashboard: "Обзор", users: "Пользователи", promos: "Промокоды", links: "Ссылки", discounts: "Скидки", "special-discounts": "Спец. скидки", withdrawals: "Выплаты", referrals: "Рефералы" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[ch]));
 const money = (value) => `${Number(value || 0).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} ₽`;
@@ -57,6 +57,7 @@ function switchSection(section) {
   if (section === "promos") loadPromos();
   if (section === "links") loadLinks();
   if (section === "discounts") loadDiscounts();
+  if (section === "special-discounts") loadSpecialDiscounts();
   if (section === "withdrawals") loadWithdrawals();
   if (section === "referrals") loadReferrals();
 }
@@ -138,6 +139,135 @@ $("discountForm").addEventListener("submit", async (e) => { e.preventDefault(); 
 function discountTarget(d) { return ({ all:"Всё", subscription:"Все подписки", regular:"Обычные", bypass:"Антиглушилка", tariff:`Тариф ${d.target_code || ""}`, traffic:"Все пакеты ГБ", traffic_package:`Пакет ${d.target_code || ""}` })[d.target_type] || d.target_type; }
 async function loadDiscounts() { try { const d = await api("/discounts"); $("discountsTable").innerHTML = d.items.length ? `<table><thead><tr><th>Название</th><th>Скидка</th><th>Цель</th><th>Период</th><th>Статус</th><th></th></tr></thead><tbody>${d.items.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${x.discount_type === "percent" ? `${Number(x.value)}%` : money(x.value)}</td><td>${esc(discountTarget(x))}</td><td>${date(x.starts_at, true)} — ${date(x.ends_at, true)}</td><td><span class="badge ${x.active ? "" : "off"}">${x.active ? "Включена" : "Выключена"}</span></td><td><div class="actions"><button class="button small" data-discount="${x.id}" data-active="${!x.active}">${x.active ? "Выключить" : "Включить"}</button><button class="button small danger" data-delete-discount="${x.id}">Удалить</button></div></td></tr>`).join("")}</tbody></table>` : `<div class="empty">Скидок пока нет</div>`; } catch (error) { toast(error.message, true); } }
 $("discountsTable").addEventListener("click", async (e) => { const toggle = e.target.closest("[data-discount]"); const del = e.target.closest("[data-delete-discount]"); try { if (toggle) await api(`/discounts/${toggle.dataset.discount}/toggle`, { method:"POST", body:JSON.stringify({ active:toggle.dataset.active === "true" }) }); if (del) { if (!confirm("Удалить эту скидку?")) return; await api(`/discounts/${del.dataset.deleteDiscount}`, { method:"DELETE" }); } if (toggle || del) loadDiscounts(); } catch (error) { toast(error.message, true); } });
+
+const specialDiscountForm = $("specialDiscountForm");
+const specialDiscountAudiences = { all: "Новые и старые", new: "Новые", existing: "Старые" };
+const specialDiscountPayments = { any: "Покупка или продление", new: "Покупка", renew: "Продление" };
+let specialDiscountItems = [];
+let specialDiscountEditing = null;
+
+function setSpecialDiscountForm(campaign = null) {
+  const fields = specialDiscountForm.elements;
+  specialDiscountEditing = campaign;
+  fields.name.value = campaign?.name ?? "";
+  fields.percent.value = campaign?.percent ?? "";
+  fields.audience.value = campaign?.audience ?? "all";
+  fields.payment_target.value = campaign?.payment_target ?? "any";
+  fields.inactive_days.value = campaign?.inactive_days ?? "";
+  fields.starts_at.value = campaign ? localInput(new Date(campaign.starts_at)) : "";
+  fields.starts_at.required = Boolean(campaign);
+  fields.ends_at.value = campaign?.ends_at ? localInput(new Date(campaign.ends_at)) : "";
+  fields.active.checked = campaign?.active ?? true;
+  specialDiscountForm.querySelectorAll('[name="tariff_codes"]').forEach((input) => {
+    input.checked = campaign?.tariff_codes.includes(input.value) ?? false;
+  });
+  $("specialDiscountStartLabel").textContent = campaign ? "Начало" : "Начало (пусто — при сохранении)";
+  $("saveSpecialDiscount").textContent = campaign ? "Сохранить акцию" : "Создать акцию";
+  $("cancelSpecialDiscountEdit").classList.toggle("hidden", !campaign);
+}
+
+function specialDiscountDate(fields, name) {
+  const value = fields.get(name);
+  if (!value) return null;
+  const previous = specialDiscountEditing?.[name];
+  if (previous && value === localInput(new Date(previous))) return previous;
+  return new Date(value).toISOString();
+}
+
+function specialDiscountStatus(campaign, now) {
+  if (!campaign.active) return "Выключена";
+  if (new Date(campaign.starts_at).getTime() > now) return "Запланирована";
+  if (campaign.ends_at && new Date(campaign.ends_at).getTime() <= now) return "Завершена";
+  return "Действует";
+}
+
+async function loadSpecialDiscounts() {
+  try {
+    const { items, tariffs } = await api("/special-discounts");
+    specialDiscountItems = items;
+    const choices = $("specialDiscountTariffChoices");
+    const selectedTariffs = new FormData(specialDiscountForm).getAll("tariff_codes");
+    choices.innerHTML = tariffs.map(({ code, title }) => `<label class="campaign-checkbox">
+      <input type="checkbox" name="tariff_codes" value="${esc(code)}" ${selectedTariffs.includes(code) ? "checked" : ""} /> ${esc(title)}
+    </label>`).join("");
+    const tariffTitles = Object.fromEntries(tariffs.map(({ code, title }) => [code, title]));
+    const now = Date.now();
+    $("specialDiscountsTable").innerHTML = items.length ? `<table>
+      <thead><tr><th>Акция</th><th>Условия</th><th>Период</th><th>Статус</th><th>Управление</th></tr></thead>
+      <tbody>${items.map((campaign) => {
+        const tariffNames = campaign.tariff_codes.map((code) => tariffTitles[code] || code);
+        const inactivity = campaign.inactive_days === null ? "" : `<br>Без активной подписки от ${Number(campaign.inactive_days)} дн.`;
+        return `<tr>
+          <td><b>${esc(campaign.name)}</b><br>${Number(campaign.percent).toLocaleString("ru-RU")}%</td>
+          <td>${specialDiscountAudiences[campaign.audience]} · ${specialDiscountPayments[campaign.payment_target]}<br>${esc(tariffNames.join(", ") || "Все тарифы")}${inactivity}</td>
+          <td>${date(campaign.starts_at, true)}<br>${campaign.ends_at ? `до ${date(campaign.ends_at, true)}` : "Без окончания"}</td>
+          <td><span class="badge ${campaign.active ? "" : "off"}">${specialDiscountStatus(campaign, now)}</span></td>
+          <td><div class="actions">
+            <button class="button small" data-campaign-edit="${campaign.id}">Изменить</button>
+            <button class="button small" data-campaign-toggle="${campaign.id}" data-active="${!campaign.active}">${campaign.active ? "Выключить" : "Включить"}</button>
+          </div></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>` : '<div class="empty">Акций пока нет</div>';
+  } catch (error) { toast(error.message, true); }
+}
+
+$("cancelSpecialDiscountEdit").addEventListener("click", () => setSpecialDiscountForm());
+setSpecialDiscountForm();
+
+specialDiscountForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const fields = new FormData(specialDiscountForm);
+  const payload = {
+    name: fields.get("name"),
+    percent: fields.get("percent"),
+    audience: fields.get("audience"),
+    payment_target: fields.get("payment_target"),
+    inactive_days: fields.get("inactive_days") ? Number(fields.get("inactive_days")) : null,
+    tariff_codes: fields.getAll("tariff_codes"),
+    starts_at: specialDiscountDate(fields, "starts_at"),
+    ends_at: specialDiscountDate(fields, "ends_at"),
+    active: fields.has("active"),
+  };
+  const editing = specialDiscountEditing;
+  const submit = $("saveSpecialDiscount");
+  submit.disabled = true;
+  try {
+    await api(editing ? `/special-discounts/${editing.id}` : "/special-discounts", {
+      method: editing ? "PUT" : "POST",
+      body: JSON.stringify(payload),
+    });
+    toast(editing ? "Акция сохранена" : "Акция создана");
+    setSpecialDiscountForm();
+    await loadSpecialDiscounts();
+  } catch (error) { toast(error.message, true); }
+  finally { submit.disabled = false; }
+});
+
+$("specialDiscountsTable").addEventListener("click", async (event) => {
+  const edit = event.target.closest("[data-campaign-edit]");
+  if (edit) {
+    const campaign = specialDiscountItems.find((item) => String(item.id) === edit.dataset.campaignEdit);
+    if (campaign) {
+      setSpecialDiscountForm(campaign);
+      specialDiscountForm.elements.name.focus();
+    }
+    return;
+  }
+  const toggle = event.target.closest("[data-campaign-toggle]");
+  if (!toggle) return;
+  const active = toggle.dataset.active === "true";
+  toggle.disabled = true;
+  try {
+    await api(`/special-discounts/${toggle.dataset.campaignToggle}/toggle`, {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    });
+    if (String(specialDiscountEditing?.id) === toggle.dataset.campaignToggle) specialDiscountForm.elements.active.checked = active;
+    await loadSpecialDiscounts();
+  } catch (error) { toast(error.message, true); }
+  finally { toggle.disabled = false; }
+});
 
 let withdrawalOffset = 0;
 const payoutStatus = { pending: "На рассмотрении", completed: "Выплачено", rejected: "Отклонено" };

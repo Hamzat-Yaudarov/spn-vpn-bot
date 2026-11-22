@@ -1,0 +1,40 @@
+# Separate staging example, not a change to SPN's current virtual hosts.
+# Replace placeholders and validate certificates/DNS manually after consent.
+# Unknown Host is not a tenant; never pass arbitrary X-Forwarded-Host upstream.
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate /etc/nginx/staging-reject/fullchain.pem;
+    ssl_certificate_key /etc/nginx/staging-reject/privkey.pem;
+    return 444;
+}
+
+server {
+    listen 443 ssl;
+    server_name manager.partners.example.com ~^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\.partners\.example\.com$;
+    ssl_certificate /etc/nginx/partner-staging/fullchain.pem;
+    ssl_certificate_key /etc/nginx/partner-staging/privkey.pem;
+    # 512 KiB logo as base64 + JSON; each API still enforces its smaller bound.
+    client_max_body_size 768k;
+    # Sensitive bearer capabilities, initData and webhook URLs must not leak
+    # into access/error logs, analytics, referers, tracing or error reports.
+    access_log off;
+    error_log /dev/null emerg;
+
+    location / {
+        proxy_pass http://127.0.0.1:8966;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 30s;
+        proxy_buffering off;
+        proxy_cache off;
+        add_header Referrer-Policy no-referrer always;
+    }
+}

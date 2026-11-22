@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Way SPN — Управление</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/admin/assets/admin.css?v=20260625-01" />
+    <link rel="stylesheet" href="/admin/assets/admin.css?v=20261122-special-discounts" />
   </head>
   <body>
     <section id="accessView" class="login-view">
@@ -26,6 +26,7 @@
           <button class="nav-item" data-section="promos">Промокоды</button>
           <button class="nav-item" data-section="links">Ссылки</button>
           <button class="nav-item" data-section="discounts">Скидки</button>
+          <button class="nav-item" data-section="special-discounts">Спец. скидки</button>
           <button class="nav-item" data-section="withdrawals">Выплаты</button>
           <button class="nav-item" data-section="referrals">Рефералы</button>
         </nav>
@@ -80,6 +81,29 @@
           </form>
           <div class="panel table-panel"><div id="discountsTable" class="table-wrap"></div></div>
         </section>
+        <section id="section-special-discounts" class="section">
+          <div class="section-head"><div><p class="muted">Для зарегистрированных с начала акции скидка действует на первую оплату подписки за всё время. Для зарегистрированных раньше — на первую покупку или продление с начала акции. Даты указаны в часовом поясе устройства.</p></div></div>
+          <form id="specialDiscountForm" class="panel form-grid discount-form">
+            <label class="span-2">Название<input name="name" minlength="2" maxlength="120" placeholder="Возвращение в Way SPN" required /></label>
+            <label>Скидка, %<input name="percent" type="number" min="0.01" max="99.99" step="0.01" required /></label>
+            <label>Аудитория<select name="audience"><option value="all">Новые и старые</option><option value="new">Новые</option><option value="existing">Старые</option></select></label>
+            <label>Тип оплаты<select name="payment_target"><option value="any">Покупка или продление</option><option value="new">Только покупка</option><option value="renew">Только продление</option></select></label>
+            <label>Минимум дней без активной подписки<input name="inactive_days" type="number" min="0" max="36500" step="1" placeholder="Любая активность" /></label>
+            <fieldset class="span-2 campaign-options">
+              <legend>Тарифы</legend>
+              <p class="muted">Если ничего не выбрано, акция действует на все тарифы.</p>
+              <div id="specialDiscountTariffChoices" class="actions"></div>
+            </fieldset>
+            <label><span id="specialDiscountStartLabel">Начало (пусто — при сохранении)</span><input name="starts_at" type="datetime-local" /></label>
+            <label>Окончание (необязательно)<input name="ends_at" type="datetime-local" /></label>
+            <label class="campaign-checkbox"><input name="active" type="checkbox" checked /> Включена</label>
+            <div class="actions span-2">
+              <button id="saveSpecialDiscount" class="button primary" type="submit">Создать акцию</button>
+              <button id="cancelSpecialDiscountEdit" class="button hidden" type="button">Отменить правку</button>
+            </div>
+          </form>
+          <div class="panel table-panel"><div id="specialDiscountsTable" class="table-wrap"></div></div>
+        </section>
         <section id="section-withdrawals" class="section">
           <div class="section-head"><div><h2>Заявки на вывод</h2><p class="muted">Переводы выполняются вручную. Перед реальным переводом обновите список и проверьте предупреждения. Показанный баланс — снимок, не гарантия: он может измениться; окончательное решение повторно проверяется под блокировкой. «Выплачено» — только после реального перевода. При отклонении резерв возвращается на баланс.</p></div></div>
           <div class="actions"><select id="withdrawalStatus"><option value="pending">На рассмотрении</option><option value="completed">Выплаченные</option><option value="rejected">Отклонённые</option><option value="all">Все</option></select><button class="button" id="refreshWithdrawals">Обновить</button></div>
@@ -106,6 +130,6 @@
     <dialog id="userDialog" class="dialog"><div class="dialog-head"><div><p class="eyebrow">Пользователь</p><h2 id="dialogTitle"></h2></div><button id="closeDialog" class="icon-button">×</button></div><div id="userDetails"></div></dialog>
     <dialog id="refundDialog" class="dialog" aria-labelledby="refundDialogTitle"><div class="dialog-head"><div><p class="eyebrow">Шаг 2 — подтверждение</p><h2 id="refundDialogTitle">Записать выполненный возврат</h2></div><button id="closeRefundDialog" class="icon-button" aria-label="Отменить подтверждение возврата">×</button></div><div class="details-body"><div id="refundReviewDetails" style="overflow-wrap:anywhere"></div><p class="muted">Эта операция НЕ переводит деньги. Она фиксирует уже выполненный возврат и корректирует связанные начисления. Данные повторно проверяются при записи.</p><label style="flex-direction:row;align-items:flex-start"><input id="refundActualTransfer" type="checkbox" style="width:20px;height:20px;flex-shrink:0;padding:0;margin:0" /> Я проверил счёт, сумму и подтверждение перевода. Деньги уже реально возвращены клиенту.</label><div class="actions"><button id="confirmRefund" class="button danger" disabled>Учесть выполненный возврат</button><button id="cancelRefund" class="button">Отмена</button></div></div></dialog>
     <div id="toast" class="toast"></div>
-    <script src="/admin/assets/admin.js?v=20261011-referral-growth"></script>
+    <script src="/admin/assets/admin.js?v=20261122-special-discounts"></script>
   </body>
 </html>

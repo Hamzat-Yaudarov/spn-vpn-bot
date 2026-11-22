@@ -1,10 +1,16 @@
 import html
 import logging
-from aiogram import Router, Bot
+import re
+from aiogram import Router, Bot, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from config import ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL, SUPPORT_URL, NEWS_CHANNEL_USERNAME
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo,
+)
+from config import (
+    ADMIN_ID, ADMIN_PANEL_URL, MINIAPP_URL, TELEGRAPH_AGREEMENT_URL,
+    SUPPORT_URL, NEWS_CHANNEL_USERNAME, PARTNER_MANAGER_BOT_USERNAME,
+)
 from states import UserStates
 import database as db
 from services.image_handler import send_text_with_photo
@@ -12,6 +18,7 @@ from services.notification_delivery import clear_telegram_delivery_blocked
 from services.mobile_auth import claim_challenge
 from services.custom_emoji import custom_emoji_button, semantic_button
 from services.referral_program import ENTRY_INTENTS
+from handlers import contest
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +57,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     start_payload = args[1].strip() if len(args) > 1 else None
     normalized_payload = start_payload.lower() if start_payload else None
     is_mobile_auth = bool(start_payload and start_payload.startswith("app_"))
+    is_contest_entry = contest.is_start_payload(start_payload)
     referrer_id = None
     partner_id = None
     tracking_code = None
@@ -64,7 +72,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     )
 
     if len(args) > 1:
-        if is_mobile_auth:
+        if is_mobile_auth or is_contest_entry:
             pass
         elif normalized_payload in ENTRY_INTENTS:
             pass
@@ -131,6 +139,9 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
 
     if normalized_payload in ENTRY_INTENTS:
         await db.set_referral_entry_intent(tg_id, normalized_payload)
+
+    if is_contest_entry:
+        await contest.process_start_payload(message, start_payload)
 
     mobile_challenge = None
     if is_mobile_auth:
@@ -206,6 +217,37 @@ async def send_news_channel_offer(bot: Bot, chat_id: int, *, retry: bool = False
     await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
+def partner_manager_url() -> str | None:
+    """Link to the separately configured white-label manager, never legacy partners."""
+    username = PARTNER_MANAGER_BOT_USERNAME.removeprefix("@")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
+        return None
+    return f"https://t.me/{username}?start=spn"
+
+
+def _can_access_franchise(user_id: int | None) -> bool:
+    """Keep the franchise entry owner-only until the public rollout."""
+    return (
+        type(ADMIN_ID) is int
+        and ADMIN_ID > 0
+        and type(user_id) is int
+        and user_id == ADMIN_ID
+    )
+
+
+@router.callback_query(F.data == "franchise_unavailable")
+async def franchise_unavailable(callback: CallbackQuery):
+    """An unconfigured entry must not point at an invented bot or old programme."""
+    user_id = getattr(getattr(callback, "from_user", None), "id", None)
+    if not _can_access_franchise(user_id):
+        await callback.answer("Недоступно.", show_alert=True)
+        return
+    await callback.answer(
+        "Запуск своего VPN пока готовится. Вход появится здесь, когда управляющий бот будет подключён.",
+        show_alert=True,
+    )
+
+
 def build_main_menu(user_id: int | None = None, *, welcome: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     """Единый короткий главный экран для /start и callback-возврата."""
     support_url = SUPPORT_URL or "https://t.me/wayspn_support"
@@ -221,10 +263,19 @@ def build_main_menu(user_id: int | None = None, *, welcome: bool = False) -> tup
         [custom_emoji_button("Купить подписку", emoji_key="buy", fallback_emoji="🛒", callback_data="buy_subscription", style="success")],
         [custom_emoji_button("Мои подписки", emoji_key="subscriptions", fallback_emoji="🔑", callback_data="my_subscriptions", style="primary")],
         [InlineKeyboardButton(text="💰 Заработать", callback_data="referral", style="success")],
+    ]
+    if _can_access_franchise(user_id):
+        manager_url = partner_manager_url()
+        rows.append([InlineKeyboardButton(
+            text="🚀 Создать свой VPN",
+            **({"url": manager_url} if manager_url else {"callback_data": "franchise_unavailable"}),
+            style="primary",
+        )])
+    rows.extend([
         [custom_emoji_button("Как подключиться", emoji_key="connect", fallback_emoji="📲", callback_data="how_to_connect", style="primary")],
         [custom_emoji_button("Помощь", emoji_key="support", fallback_emoji="🆘", url=support_url, style="primary"),
          custom_emoji_button("Новости", emoji_key="news", fallback_emoji="📢", url=news_channel_url(), style="primary")],
-    ]
+    ])
     if user_id is not None and user_id == ADMIN_ID:
         rows.append([custom_emoji_button(
             "Админ-панель", emoji_key="settings", fallback_emoji="🛠",

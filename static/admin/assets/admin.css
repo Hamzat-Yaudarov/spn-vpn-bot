@@ -65,6 +65,11 @@ tbody tr:hover { background:rgba(255,255,255,.025); }
 .form-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; align-items:end; margin-bottom:16px; padding:18px; }
 .span-2 { grid-column:span 2; }
 .discount-form { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.campaign-options { min-width:0; margin:0; padding:0; border:0; }
+.campaign-options legend { color:#dbe2e9; font-size:13px; font-weight:750; }
+.campaign-options .muted { margin-bottom:7px; font-size:12px; }
+.campaign-checkbox { display:flex; align-items:center; gap:6px; min-height:45px; }
+.campaign-checkbox input { width:18px; min-height:18px; margin:0; }
 .dialog { width:min(860px,calc(100% - 28px)); max-height:88vh; overflow:auto; border:1px solid var(--line); border-radius:24px; padding:0; color:var(--text); background:#10161e; box-shadow:var(--shadow); }
 .dialog::backdrop { background:rgba(0,0,0,.66); backdrop-filter:blur(6px); }
 .dialog-head { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; gap:20px; padding:20px 22px; border-bottom:1px solid var(--line); background:rgba(16,22,30,.96); }

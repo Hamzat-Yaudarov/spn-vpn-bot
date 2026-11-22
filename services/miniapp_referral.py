@@ -7,6 +7,7 @@ import database as db
 from config import TARIFFS
 from services import referral_accounting as accounting, referral_store as store
 from services.discounts import current_price
+from services.subscription_checkout import SpecialDiscountCheckoutError, special_discount_fields, subscription_checkout
 from services.payment_reconciliation import reconcile_payment
 from services.payment_summary import build_payment_success_summary
 from services.referral_program import parse_amount, validate_details
@@ -126,20 +127,26 @@ async def create_purchase(user_id, body, bot):
             raise ValueError('Неизвестный тариф.')
         if bot is None:
             raise ActionError(503, 'temporarily_unavailable', 'Оплата пока недоступна. Попробуйте позже.')
-        price = await current_price(tariff['price'], product_type='subscription',
-                                    code=tariff_code, plan_kind=tariff['kind'])
-        amount = accounting.money(price['price'])
-        if amount != expected:
-            # A simultaneous retry may have committed the original quote
-            # while this request waited for the catalogue. Prefer that order.
-            saved = await accounting.get_balance_purchase(user_id, key)
-            if saved:
-                _same_purchase(saved, tariff_code, mode, sid, expected)
-                return await _purchase_response(user_id, key, saved, bot)
-            raise ActionError(409, 'price_changed', 'Стоимость изменилась. Проверьте новую сумму перед оплатой.',
-                              amount=amount_text(amount))
-        order = await accounting.reserve_balance_purchase(user_id, key, tariff_code, amount,
-            purchase_mode=mode, subscription_id=sid, validate_selection=True)
+        price = await current_price(tariff['price'], product_type='subscription', code=tariff_code,
+                                    plan_kind=tariff['kind'], tg_id=user_id, payment_target=mode)
+        try:
+            async with subscription_checkout(user_id, tariff_code, mode, sid, accounting.WALLET_PROVIDER, price):
+                amount = accounting.money(price['price'])
+                if amount != expected:
+                    # A simultaneous retry may have committed the original quote.
+                    order = await accounting.get_balance_purchase(user_id, key)
+                    if not order:
+                        raise ActionError(409, 'price_changed', 'Стоимость изменилась. Проверьте новую сумму перед оплатой.',
+                                          amount=amount_text(amount))
+                    _same_purchase(order, tariff_code, mode, sid, expected)
+                else:
+                    order = await accounting.reserve_balance_purchase(user_id, key, tariff_code, amount,
+                        purchase_mode=mode, subscription_id=sid, validate_selection=True, **special_discount_fields(price))
+        except SpecialDiscountCheckoutError as exc:
+            order = await accounting.get_balance_purchase(user_id, key)
+            if not order:
+                raise ActionError(409, 'discount_checkout', str(exc)) from exc
+            _same_purchase(order, tariff_code, mode, sid, expected)
     return await _purchase_response(user_id, key, order, bot)
 
 

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
     remnawave_uuid UUID,
     remnawave_username TEXT,
     subscription_until TIMESTAMP,
+    last_deleted_subscription_ended_at TIMESTAMP,
     squad_uuid UUID,
     referrer_id BIGINT,
     referral_entry_intent TEXT,
@@ -189,6 +190,21 @@ CREATE TABLE IF NOT EXISTS referral_withdrawals (
     FOREIGN KEY (referrer_id) REFERENCES users(tg_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS special_discounts (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    percent NUMERIC NOT NULL CHECK (percent > 0 AND percent < 100),
+    audience TEXT NOT NULL CHECK (audience IN ('all', 'new', 'existing')),
+    tariff_codes TEXT[] NOT NULL DEFAULT '{}',
+    payment_target TEXT NOT NULL DEFAULT 'any' CHECK (payment_target IN ('any', 'new', 'renew')),
+    inactive_days INTEGER CHECK (inactive_days >= 0),
+    starts_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP CHECK (ends_at > starts_at),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC'),
+    updated_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id BIGSERIAL PRIMARY KEY,
     tg_id BIGINT NOT NULL,
@@ -206,6 +222,8 @@ CREATE TABLE IF NOT EXISTS payments (
     tracking_code TEXT,
     refund_requested_at TIMESTAMP,
     refund_status TEXT,
+    special_discount_id BIGINT REFERENCES special_discounts(id),
+    paid_at TIMESTAMP,
     status TEXT DEFAULT 'pending'
 );
 
@@ -494,6 +512,11 @@ CREATE INDEX IF NOT EXISTS idx_payments_tracking_paid_purchases
     ON payments(tracking_code, tg_id)
     WHERE status = 'paid' AND refund_requested_at IS NULL AND amount > 0;
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_special_discount_pending_user
+    ON payments (tg_id) WHERE special_discount_id IS NOT NULL AND status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_special_discount_redemption
+    ON payments (tg_id, special_discount_id)
+    WHERE special_discount_id IS NOT NULL AND status IN ('pending', 'paid');
 
 CREATE INDEX IF NOT EXISTS idx_promo_codes_code ON promo_codes(code);
 CREATE INDEX IF NOT EXISTS idx_discounts_active_period ON discounts(active, starts_at, ends_at);

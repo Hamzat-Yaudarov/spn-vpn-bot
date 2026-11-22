@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -134,6 +135,18 @@ class DiscountBody(BaseModel):
     target_code: str | None = Field(default=None, max_length=64)
     starts_at: datetime
     ends_at: datetime
+
+
+class SpecialDiscountBody(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    percent: Decimal = Field(gt=0, lt=100, decimal_places=2)
+    audience: Literal["all", "new", "existing"] = "all"
+    tariff_codes: list[str] = Field(default_factory=list, max_length=len(TARIFFS))
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    active: StrictBool = True
+    inactive_days: int | None = Field(default=None, ge=0, le=36500)
+    payment_target: Literal["any", "new", "renew"] = "any"
 
 
 async def require_admin(request: Request):
@@ -413,4 +426,65 @@ async def admin_toggle_discount(discount_id: int, body: ToggleBody, _: int = Dep
 async def admin_delete_discount(discount_id: int, _: int = Depends(require_admin)):
     if not await db.delete_discount(discount_id):
         raise HTTPException(status_code=404, detail="Скидка не найдена")
+    return {"ok": True}
+
+
+def _special_discount_fields(body: SpecialDiscountBody, *, allow_implicit_start: bool = False) -> dict:
+    name = body.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Укажите название акции от двух символов")
+    if any(code not in TARIFFS for code in body.tariff_codes):
+        raise HTTPException(status_code=400, detail="Указан неизвестный тариф")
+    if body.starts_at is None and not allow_implicit_start:
+        raise HTTPException(status_code=400, detail="Укажите дату начала акции")
+    starts_at = _utc_naive(body.starts_at or datetime.now(timezone.utc))
+    ends_at = _utc_naive(body.ends_at) if body.ends_at is not None else None
+    if ends_at is not None and ends_at <= starts_at:
+        raise HTTPException(status_code=400, detail="Дата окончания должна быть позже даты начала")
+    return {
+        **body.model_dump(),
+        "name": name,
+        "tariff_codes": list(dict.fromkeys(body.tariff_codes)),
+        "starts_at": starts_at,
+        "ends_at": ends_at,
+    }
+
+
+def _special_discount_json(row) -> dict:
+    data = _plain(row)
+    for key in ("starts_at", "ends_at"):
+        if data[key] is not None:
+            data[key] = _utc_naive(data[key]).replace(tzinfo=timezone.utc)
+    return data
+
+
+@router.get("/admin/api/special-discounts")
+async def admin_special_discounts(_: int = Depends(require_admin)):
+    return {
+        "items": [_special_discount_json(row) for row in await db.list_special_discounts()],
+        "tariffs": [{"code": code, "title": tariff["title"]} for code, tariff in TARIFFS.items()],
+    }
+
+
+@router.post("/admin/api/special-discounts")
+async def admin_create_special_discount(body: SpecialDiscountBody, admin_id: int = Depends(require_admin)):
+    campaign = await db.create_special_discount(**_special_discount_fields(body, allow_implicit_start=True))
+    logger.info("Web admin created special discount: actor=%s campaign=%s", admin_id, campaign["id"])
+    return {"ok": True, "item": _special_discount_json(campaign)}
+
+
+@router.put("/admin/api/special-discounts/{campaign_id}")
+async def admin_update_special_discount(campaign_id: int, body: SpecialDiscountBody, admin_id: int = Depends(require_admin)):
+    campaign = await db.update_special_discount(campaign_id=campaign_id, **_special_discount_fields(body))
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Акция не найдена")
+    logger.info("Web admin updated special discount: actor=%s campaign=%s", admin_id, campaign_id)
+    return {"ok": True, "item": _special_discount_json(campaign)}
+
+
+@router.post("/admin/api/special-discounts/{campaign_id}/toggle")
+async def admin_toggle_special_discount(campaign_id: int, body: ToggleBody, admin_id: int = Depends(require_admin)):
+    if not await db.set_special_discount_active(campaign_id=campaign_id, active=body.active):
+        raise HTTPException(status_code=404, detail="Акция не найдена")
+    logger.info("Web admin changed special discount status: actor=%s campaign=%s active=%s", admin_id, campaign_id, body.active)
     return {"ok": True}
